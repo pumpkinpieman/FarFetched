@@ -1,0 +1,15 @@
+# hosts-entry.txt — add this line to the HOSTS file of every machine you browse
+# the tool FROM (your laptop/desktop — not necessarily TheBank itself).
+#
+# Replace 192.168.1.50 with TheBank's actual LAN IP.
+# If you browse from TheBank locally, use 127.0.0.1 instead.
+#
+# Hosts file location:
+#   Linux / macOS : /etc/hosts          (sudo edit)
+#   Windows       : C:\Windows\System32\drivers\etc\hosts   (edit as Administrator)
+#
+# After saving, the hostname resolves immediately (flush DNS if not:
+#   macOS:  sudo dscacheutil -flushcache
+#   Windows: ipconfig /flushdns ).
+
+192.168.1.50    fetcher.thebank
