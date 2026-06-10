@@ -24,3 +24,13 @@ private/
 config.php
 *.log
 _new/
+
+private/
+*.zip
+*.db
+*.db-wal
+*.db-shm
+*token*
+config.php
+*.log
+_new/
