@@ -1,0 +1,29 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Printables Fetcher logo">
+  <defs>
+    <linearGradient id="clay" x1="40" y1="32" x2="216" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E08A66"/>
+      <stop offset="1" stop-color="#C2613F"/>
+    </linearGradient>
+    <linearGradient id="plate" x1="128" y1="64" x2="128" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FBF4EE"/>
+      <stop offset="1" stop-color="#F0E3DA"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#clay)"/>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="#000" opacity="0.04"/>
+
+  <!-- print-layer plates: widest at top, narrowing as they descend (a build in progress) -->
+  <g fill="url(#plate)">
+    <rect x="78"  y="70"  width="100" height="20" rx="6"/>
+    <rect x="86"  y="100" width="84"  height="20" rx="6" opacity="0.92"/>
+    <rect x="96"  y="130" width="64"  height="20" rx="6" opacity="0.84"/>
+  </g>
+
+  <!-- arrowhead: the layers resolve downward (the "download / fetch") -->
+  <path d="M128 198 L92 156 H116 V150 H140 V156 H164 Z" fill="#FBF4EE"/>
+
+  <!-- baseline plate the print sits on -->
+  <rect x="84" y="206" width="88" height="12" rx="6" fill="#FBF4EE" opacity="0.55"/>
+</svg>

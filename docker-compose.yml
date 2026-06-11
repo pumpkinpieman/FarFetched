@@ -1,0 +1,17 @@
+services:
+  fetcher:
+    build: .
+    image: printables-fetcher:latest
+    container_name: printables-fetcher
+    restart: unless-stopped
+    ports:
+      - "8088:80"          # browse at http://localhost:8088/
+    environment:
+      FETCHER_DOWNLOAD_DIR: /downloads
+      FETCHER_DOWNLOAD_DELAY: "120"   # seconds between files; raise to be gentler
+    volumes:
+      - fetcher_private:/var/www/html/private          # token, db, logs (persistent)
+      - /mnt/user/Downloads/models:/downloads          # <- host path you keep files in
+
+volumes:
+  fetcher_private:

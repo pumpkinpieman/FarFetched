@@ -1,0 +1,16 @@
+# hosts-entry.txt — add this line to the HOSTS file of every machine you browse
+# the tool FROM (your laptop/desktop, or Local itself).
+#
+# Default maps the hostname to 127.0.0.1 (loopback) for browsing on Local
+# itself. To browse from another machine on the LAN, replace 127.0.0.1
+# with Local's actual LAN IP.
+#
+# Hosts file location:
+#   Linux / macOS : /etc/hosts          (sudo edit)
+#   Windows       : C:\Windows\System32\drivers\etc\hosts   (edit as Administrator)
+#
+# After saving, the hostname resolves immediately (flush DNS if not:
+#   macOS:  sudo dscacheutil -flushcache
+#   Windows: ipconfig /flushdns ).
+
+127.0.0.1    localhost.fetcher
