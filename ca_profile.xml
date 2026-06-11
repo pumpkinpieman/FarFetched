@@ -1,10 +1,9 @@
-<?xml version="1.0"?>
-<Profile>
-  <Author>pumpkinpieman</Author>
-  <Language>en_US</Language>
-  <Repository>https://github.com/pumpkinpieman/FarFetched</Repository>
-  <Support>https://github.com/pumpkinpieman/FarFetched/issues</Support>
-  <Project>https://github.com/pumpkinpieman/FarFetched</Project>
+<?xml version="1.0" encoding="utf-8"?>
+<Maintainer>
   <Icon>https://raw.githubusercontent.com/pumpkinpieman/FarFetched/main/assets/icon.png</Icon>
-  <Description>Self-hosted tools by pumpkinpieman. Home of FarFetched — a paced browser and downloader for free 3D models from Printables, with a local library organizer and paste-once session auth.</Description>
-</Profile>
+  <Profile>
+    Self-hosted tools by pumpkinpieman. Home of FarFetched — a paced browser and downloader for free 3D models from Printables, with a local library organizer and paste-once session auth. Open an issue on GitHub for support or feature requests.
+  </Profile>
+  <WebPage>https://github.com/pumpkinpieman/FarFetched</WebPage>
+  <Support>https://github.com/pumpkinpieman/FarFetched/issues</Support>
+</Maintainer>
