@@ -113,18 +113,18 @@ $badge = static function (string $s): string {
     </div>
 
     <table>
-      <thead><tr><th>Model</th><th>Creator</th><th>Type</th><th>Status</th><th>Attempts</th><th>Detail</th></tr></thead>
+      <thead><tr><th>Model</th><th>Model ID</th><th>Creator</th><th>Type</th><th>Status</th><th>Attempts</th></tr></thead>
       <tbody>
         <?php if ($rows === []): ?>
           <tr><td colspan="6" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>
         <?php else: foreach ($rows as $r): ?>
           <tr>
             <td><?= e($r['name'] !== '' ? $r['name'] : $r['model_id']) ?></td>
+            <td class="muted"><?= e($r['model_id']) ?></td>
             <td class="muted"><?= e($r['creator']) ?></td>
             <td><?= e($r['file_type']) ?></td>
             <td><span class="tag" style="background:<?= $badge($r['status']) ?>"><?= e($r['status']) ?></span></td>
             <td><?= (int) $r['attempts'] ?></td>
-            <td><?= $r['last_error'] !== '' ? '<span class="err">'.e($r['last_error']).'</span>' : ($r['saved_path'] !== '' ? '<span class="muted">'.e($r['saved_path']).'</span>' : '') ?></td>
           </tr>
         <?php endforeach; endif; ?>
       </tbody>

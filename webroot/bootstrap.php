@@ -299,6 +299,35 @@ function model_thumb(string $source, string $modelFolder, string $modelPath): ?s
     return is_file($cache) ? $cache : null;
 }
 
+/**
+ * Safely extract a ZIP into $targetDir, guarding against zip-slip (entries
+ * escaping the target via absolute paths or ..). Returns true on success.
+ * Used by the worker for pack downloads. LOCAL filesystem only.
+ */
+function extract_zip_safe(string $zipPath, string $targetDir): bool
+{
+    if (!is_file($zipPath)) {
+        return false;
+    }
+    if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true)) {
+        return false;
+    }
+    $za = new ZipArchive();
+    if ($za->open($zipPath) !== true) {
+        return false;
+    }
+    for ($i = 0; $i < $za->numFiles; $i++) {
+        $entry = $za->getNameIndex($i);
+        if ($entry === false || $entry === '' || $entry[0] === '/' || strpos($entry, '..') !== false) {
+            $za->close();
+            return false; // unsafe path — refuse the whole archive
+        }
+    }
+    $ok = $za->extractTo($targetDir);
+    $za->close();
+    return $ok;
+}
+
 // ---- Config accessors -----------------------------------------------------
 function get_token(): string
 {
@@ -326,6 +355,7 @@ function cfg_defaults(): array
         'max_attempts'   => (int) (getenv('FETCHER_MAX_ATTEMPTS') ?: 3),
         'batch_cap'      => (int) (getenv('FETCHER_BATCH_CAP') ?: 2000),
         'paused'         => false,
+        'keep_zip'       => true,
     ];
 }
 
@@ -370,6 +400,9 @@ function cfg_save(array $patch): bool
     }
     if (isset($patch['paused'])) {
         $current['paused'] = (bool) $patch['paused'];
+    }
+    if (array_key_exists('keep_zip', $patch)) {
+        $current['keep_zip'] = (bool) $patch['keep_zip'];
     }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";

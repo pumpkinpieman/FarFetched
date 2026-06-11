@@ -223,6 +223,121 @@ final class PrintablesService
     }
 
     /**
+     * Minimal model info (name + slug) for naming folders on paste-ID jobs.
+     * Auth-free in practice (the print query resolves without a bearer).
+     *
+     * @return array{name:string,slug:string}
+     */
+    public function getModelInfo(string $modelId): array
+    {
+        $this->lastError = '';
+        $query = <<<'GQL'
+        query ModelInfo($id: ID!) {
+          model: print(id: $id) { id name slug }
+        }
+        GQL;
+        $data = $this->gql($query, ['id' => $modelId]);
+        $m = $data['model'] ?? [];
+        return [
+            'name' => (string) ($m['name'] ?? ''),
+            'slug' => (string) ($m['slug'] ?? ''),
+        ];
+    }
+
+    /**
+     * Fetch the download packs for a model. Each model exposes one or more
+     * "packs" (whole-model ZIPs): typically a MODEL_FILES pack (the "ALL MODEL
+     * FILES" button) and an OTHER_FILES pack. Returns the list as-is.
+     *
+     * @return array<int,array{id:string,fileType:string,fileSize:int,name:string}>
+     */
+    public function getModelPacks(string $modelId): array
+    {
+        $this->lastError = '';
+        $query = <<<'GQL'
+        query ModelPacks($id: ID!) {
+          model: print(id: $id) {
+            id
+            downloadPacks { id name fileSize fileType }
+          }
+        }
+        GQL;
+
+        $data = $this->gql($query, ['id' => $modelId]);
+        if ($data === null) {
+            return [];
+        }
+        $packs = $data['model']['downloadPacks'] ?? [];
+        $out = [];
+        foreach ($packs as $p) {
+            $out[] = [
+                'id'       => (string) ($p['id'] ?? ''),
+                'name'     => (string) ($p['name'] ?? ''),
+                'fileSize' => (int) ($p['fileSize'] ?? 0),
+                'fileType' => (string) ($p['fileType'] ?? ''),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Resolve the signed ZIP URL for a model's pack. Prefers the MODEL_FILES
+     * pack (the printable model files) unless $packType says otherwise.
+     * Reuses getDownloadLink with fileType "pack". Returns '' if none.
+     */
+    public function getPackLink(string $modelId, string $packType = 'MODEL_FILES'): string
+    {
+        $this->lastError = '';
+        $packs = $this->getModelPacks($modelId);
+        if ($packs === []) {
+            if ($this->lastError === '') {
+                $this->lastError = 'No download packs for this model.';
+            }
+            return '';
+        }
+
+        // Pick the requested pack type, else fall back to the first pack.
+        $packId = '';
+        foreach ($packs as $p) {
+            if ($p['fileType'] === $packType) {
+                $packId = $p['id'];
+                break;
+            }
+        }
+        if ($packId === '') {
+            $packId = $packs[0]['id'];
+        }
+
+        // Same getDownloadLink mutation, but fileType "pack" and id = pack id.
+        $mutation = <<<'GQL'
+        mutation GetDownloadLink($id: ID!, $modelId: ID!, $fileType: DownloadFileTypeEnum!, $source: DownloadSourceEnum!) {
+          getDownloadLink(id: $id, printId: $modelId, fileType: $fileType, source: $source) {
+            ok
+            output { link ttl }
+            errors { field messages }
+          }
+        }
+        GQL;
+
+        $data = $this->gql($mutation, [
+            'id'       => $packId,
+            'modelId'  => $modelId,
+            'fileType' => 'pack',
+            'source'   => 'model_detail',
+        ]);
+        if ($data === null) {
+            return '';
+        }
+        $node = $data['getDownloadLink'] ?? null;
+        $link = $node['output']['link'] ?? '';
+        if (empty($node['ok']) || $link === '') {
+            $this->lastError = 'Pack link refused by API.';
+            return '';
+        }
+        return (string) $link;
+    }
+
+    /**
      * Stream a (signed) URL to disk. Returns true on success.
      * Uses the auth header too — harmless on a presigned URL, required if not.
      */

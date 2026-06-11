@@ -100,6 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'download_delay' => (int) ($_POST['download_delay'] ?? 120),
             'max_attempts'   => (int) ($_POST['max_attempts'] ?? 3),
             'batch_cap'      => (int) ($_POST['batch_cap'] ?? 2000),
+            'keep_zip'       => isset($_POST['keep_zip']),
         ]);
         $notice = $ok
             ? ['type' => 'ok', 'text' => 'Worker settings saved — applied on the next worker run.']
@@ -233,6 +234,12 @@ $csrf = csrf_token();
         <label for="batch_cap" style="margin-top:14px;">Max models per “Download Selected”</label>
         <input type="text" id="batch_cap" name="batch_cap" value="<?= (int) $conf['batch_cap'] ?>" style="width:120px">
         <p class="hint">Safety cap on a single submit. 1–10000.</p>
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" name="keep_zip" value="1" <?= cfg('keep_zip') === true ? 'checked' : '' ?> style="width:auto;">
+          Keep .zip files after extracting (whole-model downloads)
+        </label>
+        <p class="hint">When a model is downloaded as a ZIP, it's extracted into the model folder. Leave checked to keep the original .zip too; uncheck to delete it after extraction.</p>
 
         <div class="row"><button class="btn-primary" name="action" value="save_config">Save Worker Settings</button></div>
       </form>

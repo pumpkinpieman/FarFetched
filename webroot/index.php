@@ -39,7 +39,7 @@ if (!array_key_exists($active, CATEGORIES)) {
 }
 $title = $isRawId ? ('Category ' . $active) : CATEGORIES[$active];
 $fileType = strtoupper($_GET['type'] ?? 'STL');
-if (!in_array($fileType, ['STL', '3MF'], true)) {
+if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
     $fileType = 'STL';
 }
 
@@ -83,6 +83,11 @@ $csrf = csrf_token();
   .btn-primary{background:var(--clay);color:#fff;} .btn-primary:hover{background:var(--clay-deep);} .btn-primary:disabled{background:#D8C9C0;cursor:not-allowed;}
   .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line);} .btn-ghost:hover{border-color:var(--clay);color:var(--clay-deep);}
   .banner{background:#FBF1D9;color:#8A6D1F;border:1px solid #ECD9A6;padding:11px 14px;border-radius:9px;font-size:14px;margin-bottom:18px;}
+  .pastebar{background:var(--card,#fff);border:1px solid var(--line,#E5E2D8);border-radius:12px;padding:14px 16px;margin-bottom:18px;}
+  .pastebar-label{font-size:13px;color:var(--muted,#6B6862);margin-bottom:8px;}
+  .pastebar-row{display:flex;gap:8px;}
+  .pastebar-row input{flex:1;padding:9px 12px;border:1px solid var(--line,#E5E2D8);border-radius:8px;font:inherit;font-size:14px;}
+  .pastebar-status{font-size:13px;color:var(--muted,#6B6862);margin-top:8px;min-height:18px;}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;position:relative;transition:border-color .15s,box-shadow .15s;cursor:pointer;user-select:none;}
   .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.25);}
@@ -127,6 +132,7 @@ $csrf = csrf_token();
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
           <option value="STL" <?= $fileType==='STL'?'selected':'' ?>>STL</option>
           <option value="3MF" <?= $fileType==='3MF'?'selected':'' ?>>3MF</option>
+          <option value="PACK" <?= $fileType==='PACK'?'selected':'' ?>>Whole model (ZIP)</option>
         </select>
         <span class="selcount" id="selcount">0 selected</span>
         <button class="btn-ghost" id="selectAll">Select all on page</button>
@@ -135,6 +141,15 @@ $csrf = csrf_token();
     </div>
 
     <?php if ($banner): ?><div class="banner"><?= e($banner) ?></div><?php endif; ?>
+
+    <div class="pastebar">
+      <div class="pastebar-label">No token? Paste a Printables model URL or ID — downloads the whole model as a ZIP (no login needed):</div>
+      <div class="pastebar-row">
+        <input type="text" id="pasteId" placeholder="https://www.printables.com/model/1743150-… or just 1743150">
+        <button class="btn-primary" id="pasteGo">Queue ZIP</button>
+      </div>
+      <div class="pastebar-status" id="pasteStatus"></div>
+    </div>
 
     <div class="grid" id="grid">
       <?php foreach ($models as $m): ?>
@@ -171,8 +186,8 @@ $csrf = csrf_token();
   const loadMoreBtn = document.getElementById('loadMore');
   const loadStatus = document.getElementById('loadStatus');
 
-  const selectedCards = () => [...grid.querySelectorAll('.card.sel')];
-  function refresh(){ const n = selectedCards().length; countEl.textContent = n+' selected'; dlBtn.disabled = n===0; }
+  const selectedCards = () => grid ? [...grid.querySelectorAll('.card.sel')] : [];
+  function refresh(){ const n = selectedCards().length; if (countEl) countEl.textContent = n+' selected'; if (dlBtn) dlBtn.disabled = n===0; }
 
   // Build a card DOM node from a model object (same markup as the PHP render).
   function makeCard(m){
@@ -194,9 +209,9 @@ $csrf = csrf_token();
   }
 
   // Show the Load more button only if there's a next page.
-  if (nextCursor) loadMoreBtn.style.display = 'inline-block';
+  if (loadMoreBtn && nextCursor) loadMoreBtn.style.display = 'inline-block';
 
-  loadMoreBtn.addEventListener('click', async () => {
+  if (loadMoreBtn) loadMoreBtn.addEventListener('click', async () => {
     loadMoreBtn.disabled = true;
     loadStatus.textContent = 'Loading…';
     try {
@@ -222,14 +237,14 @@ $csrf = csrf_token();
     }
   });
 
-  grid.addEventListener('change', e => {
+  if (grid) grid.addEventListener('change', e => {
     if (!e.target.classList.contains('pick')) return;
     e.target.closest('.card').classList.toggle('sel', e.target.checked);
     refresh();
   });
 
   // Click anywhere on a card (image, title, blank space) to toggle selection.
-  grid.addEventListener('click', e => {
+  if (grid) grid.addEventListener('click', e => {
     // Let the checkbox handle its own clicks (avoids double-toggle).
     if (e.target.classList.contains('pick')) return;
     const card = e.target.closest('.card');
@@ -239,13 +254,13 @@ $csrf = csrf_token();
     card.classList.toggle('sel', box.checked);
     refresh();
   });
-  selAllBtn.addEventListener('click', () => {
+  if (selAllBtn) selAllBtn.addEventListener('click', () => {
     const boxes = grid.querySelectorAll('.pick');
     const on = [...boxes].some(b => !b.checked);
     boxes.forEach(b => { b.checked = on; b.closest('.card').classList.toggle('sel', on); });
     refresh();
   });
-  dlBtn.addEventListener('click', async () => {
+  if (dlBtn) dlBtn.addEventListener('click', async () => {
     const models = selectedCards().map(c => ({
       id: c.dataset.id, slug: c.dataset.slug, name: c.dataset.name, creator: c.dataset.creator
     }));
@@ -268,6 +283,51 @@ $csrf = csrf_token();
       dlBtn.disabled = false; dlBtn.textContent = 'Download Selected';
     }
   });
+
+  // ---- No-token paste-ID/URL → queue a PACK job -----------------------------
+  const pasteInput = document.getElementById('pasteId');
+  const pasteGo = document.getElementById('pasteGo');
+  const pasteStatus = document.getElementById('pasteStatus');
+
+  function extractModelId(s){
+    s = (s || '').trim();
+    if (!s) return '';
+    // Bare numeric id
+    if (/^\d+$/.test(s)) return s;
+    // URL like printables.com/model/1743150-slug or /model/1743150
+    const m = s.match(/\/model\/(\d+)/);
+    if (m) return m[1];
+    // Last resort: first run of digits
+    const d = s.match(/(\d{3,})/);
+    return d ? d[1] : '';
+  }
+
+  if (pasteGo) pasteGo.addEventListener('click', async () => {
+    const id = extractModelId(pasteInput.value);
+    if (!id) { pasteStatus.textContent = 'Could not find a model ID in that input.'; return; }
+    pasteGo.disabled = true;
+    pasteStatus.textContent = 'Queueing model ' + id + '…';
+    try {
+      const res = await fetch('enqueue.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csrf: CSRF, fileType: 'PACK', models: [{ id: id, slug: '', name: '', creator: '' }] })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        pasteStatus.textContent = data.queued > 0
+          ? ('Queued model ' + id + ' as ZIP. The worker will download it shortly.')
+          : ('Model ' + id + ' was already queued.');
+        pasteInput.value = '';
+      } else {
+        pasteStatus.textContent = 'Queue failed: ' + (data.error || 'unknown');
+      }
+    } catch (err) {
+      pasteStatus.textContent = 'Network error: ' + err.message;
+    }
+    pasteGo.disabled = false;
+  });
+
 </script>
 </body>
 </html>

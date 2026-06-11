@@ -30,15 +30,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'extra
         $notice = ['type' => $fail ? 'err' : 'ok',
                    'text' => "Extracted $ok zip(s)" . ($fail ? ", $fail failed: $msg" : '.')];
     }
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'rethumb') {
-    if (!csrf_ok()) {
-        $notice = ['type' => 'err', 'text' => 'Session expired — reload.'];
-    } else {
-        $tdir = THUMBS_DIR . '/' . $src;
-        $n = 0;
-        foreach (glob($tdir . '/*.png') ?: [] as $f) { @unlink($f); $n++; }
-        $notice = ['type' => 'ok', 'text' => "Cleared $n cached thumbnail(s) — they regenerate on next view."];
-    }
 }
 
 /**
@@ -93,6 +84,15 @@ $models = list_models($path);
 $pendingZips = array_filter($models, static fn($m) => $m['kind'] === 'zip');
 $csrf = csrf_token();
 $label = ucfirst($src);
+
+/** Stable background gradient derived from the model name (no image needed). */
+function tile_style(string $name): string
+{
+    $h = crc32($name);
+    $hue = $h % 360;
+    $hue2 = ($hue + 24) % 360;
+    return "background:linear-gradient(150deg,hsl({$hue},42%,46%),hsl({$hue2},44%,32%));";
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -117,8 +117,8 @@ $label = ucfirst($src);
   .cardgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;}
   .card.zip{opacity:.7;}
-  .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;}
-  .thumb img{width:100%;height:100%;object-fit:cover;}
+  .thumb{aspect-ratio:1;display:flex;align-items:center;justify-content:center;padding:16px;}
+  .tiletext{color:#fff;font-family:ui-serif,Georgia,serif;font-weight:600;font-size:17px;line-height:1.25;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.28);overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;}
   .meta{padding:12px 14px;}
   .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;}
   .msub{font-size:12px;color:var(--muted);}
@@ -141,11 +141,6 @@ $label = ucfirst($src);
     <h1><?= e($label) ?> Library</h1>
     <div class="sub">Local files in <code><?= e($path) ?></code> — read-only browser, nothing leaves this machine.</div>
 
-    <form method="post" style="margin-bottom:16px;">
-      <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-      <button name="action" value="rethumb" style="background:transparent;color:var(--muted);border:1px solid var(--line);">Regenerate thumbnails</button>
-    </form>
-
     <?php if ($notice): ?><div class="notice <?= $notice['type'] === 'ok' ? 'ok' : 'err' ?>"><?= e($notice['text']) ?></div><?php endif; ?>
 
     <?php if ($pendingZips): ?>
@@ -164,30 +159,28 @@ $label = ucfirst($src);
       <div class="cardgrid">
         <?php foreach ($models as $m):
           if ($m['kind'] === 'zip'):
+            $disp = clean_model_name(preg_replace('/\.zip$/i', '', $m['name']));
         ?>
           <div class="card zip">
-            <div class="thumb"><span>pending zip</span></div>
+            <div class="thumb" style="<?= e(tile_style($disp)) ?>">
+              <span class="tiletext"><?= e($disp) ?></span>
+            </div>
             <div class="meta">
-              <div class="mname"><?= e(clean_model_name(preg_replace('/\.zip$/i', '', $m['name']))) ?></div>
+              <div class="mname"><?= e($disp) ?></div>
               <div class="msub"><?= e(human_size((int) $m['size'])) ?> · not extracted</div>
             </div>
           </div>
         <?php else:
             $mp = $path . '/' . $m['name'];
             $types = model_file_types($mp);
-            $hasPdf = in_array('PDF', $types, true);
+            $disp = clean_model_name($m['name']);
         ?>
           <div class="card">
-            <div class="thumb">
-              <?php if ($hasPdf): ?>
-                <img src="thumb.php?src=<?= e(urlencode($src)) ?>&model=<?= e(urlencode($m['name'])) ?>" alt="" loading="lazy"
-                     onerror="this.parentNode.innerHTML='<span>no preview</span>'">
-              <?php else: ?>
-                <span>no preview</span>
-              <?php endif; ?>
+            <div class="thumb" style="<?= e(tile_style($disp)) ?>">
+              <span class="tiletext"><?= e($disp) ?></span>
             </div>
             <div class="meta">
-              <div class="mname"><?= e(clean_model_name($m['name'])) ?></div>
+              <div class="mname"><?= e($disp) ?></div>
               <div class="msub"><?= (int) $m['files'] ?> files · <?= e(human_size((int) $m['size'])) ?></div>
               <div class="badges">
                 <?php foreach ($types as $t): ?><span class="badge"><?= e($t) ?></span><?php endforeach; ?>

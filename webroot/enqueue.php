@@ -48,7 +48,7 @@ if (empty($_SESSION['csrf']) || !hash_equals((string) $_SESSION['csrf'], $csrf))
 }
 
 $fileType = strtoupper(trim((string) ($in['fileType'] ?? 'STL')));
-if (!in_array($fileType, ['STL', '3MF'], true)) {
+if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
     $fileType = 'STL';
 }
 

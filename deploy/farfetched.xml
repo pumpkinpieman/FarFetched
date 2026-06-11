@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>FarFetched</Name>
+  <Repository>printables-fetcher:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/pumpkinpieman/FarFetched</Project>
+  <Overview>FarFetched — a self-hosted browser and paced downloader for free 3D models from Printables, plus a local library organizer for files you have already downloaded from other sources. Browse by category, queue models, and a background worker saves them to disk at a polite pace. Open the WebUI and set your Printables token under Settings.</Overview>
+  <Category>Tools: HomeAutomation: Other:</Category>
+  <WebUI>http://[IP]:[PORT:8088]/home.php</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/pumpkinpieman/FarFetched/main/assets/logo.svg</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI Port" Target="80" Default="8088" Mode="tcp" Description="Host port for the FarFetched web interface" Type="Port" Display="always" Required="true" Mask="false">8088</Config>
+  <Config Name="Downloads (models)" Target="/downloads" Default="/mnt/user/Downloads/models" Mode="rw" Description="Host folder where downloaded models are saved (per-source subfolders: printables/, stlflix/, ...)" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/Downloads/models</Config>
+  <Config Name="App Data (token, db, logs)" Target="/var/www/html/private" Default="/mnt/user/appdata/farfetched/private" Mode="rw" Description="Persistent storage for the Printables token, the SQLite queue, and logs. Keep this stable across updates." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/farfetched/private</Config>
+  <Config Name="Download Dir (in container)" Target="FETCHER_DOWNLOAD_DIR" Default="/downloads" Description="Where the worker writes inside the container. Leave as /downloads." Type="Variable" Display="advanced" Required="true" Mask="false">/downloads</Config>
+  <Config Name="Pace (seconds between files)" Target="FETCHER_DOWNLOAD_DELAY" Default="120" Description="Seconds the worker waits between file downloads. 120 is polite; lower at your own risk." Type="Variable" Display="always" Required="false" Mask="false">120</Config>
+</Container>

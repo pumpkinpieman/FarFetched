@@ -4,7 +4,7 @@ declare(strict_types=1);
 /**
  * worker.php — paced, resumable download worker. CLI ONLY.
  *
- * Run from cron on TheBank every 5 minutes (see deploy/crontab for the exact
+ * Run from cron on Local every 5 minutes (see deploy/crontab for the exact
  * schedule line; it runs worker.php and appends output to private/worker.log).
  *
  * Behavior:
@@ -112,6 +112,78 @@ while (true) {
         ->execute([':id' => $jobId]);
 
     logln("Job #$jobId  model=$modelId  type=$fileTy  ($slug)");
+
+    // ---- PACK mode: one whole-model ZIP instead of the per-file loop --------
+    if (strtoupper($fileTy) === 'PACK') {
+        try {
+            // Paste-ID jobs arrive with no slug — resolve a sensible folder name.
+            if ($slug === '' || $slug === $modelId) {
+                $info = $svc->getModelInfo($modelId);
+                if ($info['slug'] !== '') {
+                    $slug = $info['slug'];
+                } elseif ($info['name'] !== '') {
+                    $slug = $info['name'];
+                }
+            }
+
+            $link = $svc->getPackLink($modelId, 'MODEL_FILES');
+
+            // Dead token halts the run (pack resolution needs auth); requeue.
+            if ($svc->lastError !== '' && str_contains($svc->lastError, 'rejected')) {
+                $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
+                logln('  Token rejected — halting run. Re-auth in Settings.');
+                break;
+            }
+            if ($link === '') {
+                $msg = $svc->lastError !== '' ? $svc->lastError : 'No pack available.';
+                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logln('  Skipped: ' . $msg);
+                pace();
+                continue;
+            }
+
+            $destDir = rtrim($baseDir, '/') . '/' . safe_segment($slug);
+            if (!is_dir($destDir)) {
+                @mkdir($destDir, 0775, true);
+            }
+            $dest = $destDir . '/' . safe_segment($slug) . '_model_files.zip';
+
+            if (is_file($dest)) {
+                logln('  Exists, skip: ' . basename($dest));
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                continue; // no network, no pace
+            }
+
+            if ($svc->downloadToFile($link, $dest)) {
+                logln('  Saved pack: ' . $dest);
+
+                // Extract the zip into the model folder (zip-slip guarded).
+                if (extract_zip_safe($dest, $destDir)) {
+                    logln('  Extracted into: ' . $destDir);
+                    // Honor "Keep .zip files?" — delete the archive if unchecked.
+                    if (cfg('keep_zip') !== true) {
+                        @unlink($dest);
+                        logln('  Removed zip (keep_zip off).');
+                    }
+                    $finalPath = $destDir;
+                } else {
+                    // Extraction failed — keep the zip regardless so nothing is lost.
+                    logln('  Extract failed; zip kept at ' . $dest);
+                    $finalPath = $dest;
+                }
+
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $finalPath, ':id' => $jobId]);
+            } else {
+                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
+                logln('  Pack download failed: ' . $svc->lastError);
+            }
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  Pack error: ' . $e->getMessage());
+        }
+        pace();
+        continue;
+    }
 
     try {
         $files = $svc->getModelFiles($modelId, $fileTy);
