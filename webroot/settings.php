@@ -8,14 +8,17 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/PrintablesService.php';
 csrf_token(); // ensures session + token
 
-// ---- Token validation (reverse-engineered `me` field — verify live) ------
-function validate_token(string $token): array
+// ---- Account validation (mints via refresh, then confirms identity) -------
+function validate_account(): array
 {
-    if ($token === '') {
-        return ['ok' => false, 'msg' => 'No token stored.'];
+    $svc = new PrintablesService();
+    if (!$svc->ensureFreshToken()) {
+        return ['ok' => false, 'msg' => $svc->lastError !== '' ? $svc->lastError : 'No refresh token stored.'];
     }
+    // Confirm identity with a small `me` query using the freshly-minted token.
     $ch = curl_init('https://api.printables.com/graphql/');
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -23,27 +26,25 @@ function validate_token(string $token): array
         CURLOPT_TIMEOUT        => 20,
         CURLOPT_HTTPHEADER     => [
             'Content-Type: application/json',
-            'Authorization: Bearer ' . $token,
+            'Authorization: Bearer ' . get_token(),
             'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/116 Safari/537.36',
         ],
         CURLOPT_POSTFIELDS => json_encode(['query' => '{ me { id publicUsername } }']),
     ]);
     $body   = curl_exec($ch);
     $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err    = curl_error($ch);
     curl_close($ch);
 
-    if ($body === false) {
-        return ['ok' => false, 'msg' => 'Network error: ' . $err];
-    }
     $user = json_decode((string) $body, true)['data']['me'] ?? null;
+    $ts   = token_status();
     if ($status === 200 && !empty($user['id'])) {
-        return ['ok' => true, 'msg' => 'Authenticated as ' . ($user['publicUsername'] ?? $user['id'])];
+        return ['ok' => true, 'msg' => 'Authenticated as ' . ($user['publicUsername'] ?? $user['id'])
+            . ' — access valid ' . human_duration((int) ($ts['seconds'] ?? 0)) . '.'];
     }
     if ($status === 401 || $status === 403) {
-        return ['ok' => false, 'msg' => 'Token rejected (expired or invalid). Grab a fresh one.'];
+        return ['ok' => false, 'msg' => 'Refreshed, but the access token was rejected (HTTP ' . $status . ').'];
     }
-    return ['ok' => false, 'msg' => 'Unexpected response (HTTP ' . $status . '). Verify the query field.'];
+    return ['ok' => false, 'msg' => 'Refreshed; identity check returned HTTP ' . $status . '.'];
 }
 
 // ---- Download-dir validation + creation -----------------------------------
@@ -78,20 +79,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     if (!csrf_ok()) {
         $notice = ['type' => 'err', 'text' => 'Session expired — reload and retry.'];
-    } elseif ($action === 'save_token') {
-        $t = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['token'] ?? ''))) ?? '';
-        if ($t === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste a token first.'];
-        } elseif (store_write(TOKEN_STORE, $t)) {
-            $notice = ['type' => 'ok', 'text' => 'Token saved.'];
+    } elseif ($action === 'save_refresh') {
+        $rt = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['refresh_token'] ?? ''))) ?? '';
+        $rt = preg_replace('/^auth\.refresh_token=/', '', $rt) ?? $rt; // tolerate cookie-pair paste
+        if ($rt === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your refresh token first.'];
+        } elseif (jwt_claims($rt) === null) {
+            $notice = ['type' => 'err', 'text' => 'That does not look like a refresh token (not a JWT).'];
+        } elseif (!set_refresh_token($rt)) {
+            $notice = ['type' => 'err', 'text' => 'Could not write the refresh-token store — check permissions.'];
         } else {
-            $notice = ['type' => 'err', 'text' => 'Could not write token store — check permissions.'];
+            // Immediately mint an access token to prove it works end-to-end.
+            $v = validate_account();
+            $notice = $v['ok']
+                ? ['type' => 'ok', 'text' => 'Connected. ' . $v['msg']]
+                : ['type' => 'err', 'text' => 'Saved, but the first refresh failed: ' . $v['msg']];
         }
     } elseif ($action === 'validate_token') {
-        $validation = validate_token(get_token());
+        $validation = validate_account();
     } elseif ($action === 'clear_token') {
-        if (is_file(TOKEN_STORE)) { @unlink(TOKEN_STORE); }
-        $notice = ['type' => 'ok', 'text' => 'Token cleared.'];
+        foreach ([TOKEN_STORE, REFRESH_STORE] as $f) {
+            if (is_file($f)) { @unlink($f); }
+        }
+        $notice = ['type' => 'ok', 'text' => 'Tokens cleared.'];
     } elseif ($action === 'save_dir') {
         $r = apply_download_dir((string) ($_POST['dir'] ?? ''));
         $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
@@ -116,6 +126,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $token  = get_token();
 $hasTok = $token !== '';
 $masked = $hasTok ? substr($token, 0, 6) . str_repeat('•', 14) . substr($token, -4) : '';
+$tstat  = token_status();           // access token: ['state','exp','seconds']
+$rtok   = get_refresh_token();
+$hasRefresh = $rtok !== '';
+$rstat  = refresh_token_status();   // refresh token status
+$logRows = ff_log_tail(40);         // recent event-log lines, oldest-first
 $dirStored = store_read(PATH_STORE);
 $dirIsSet  = $dirStored !== '';
 $dirShown  = $dirIsSet ? $dirStored : DEFAULT_DOWNLOAD_DIR;
@@ -176,24 +191,51 @@ $csrf = csrf_token();
 
     <div class="panel">
       <h2>Printables Authentication</h2>
-      <div class="status"><span class="dot <?= $hasTok?'on':'off' ?>"></span><?= $hasTok?'Token stored':'No token stored' ?></div>
-      <?php if ($hasTok): ?>
-        <label>Current token (masked)</label>
-        <div class="masked"><?= e($masked) ?></div>
+      <div class="status"><span class="dot <?= $hasRefresh?'on':'off' ?>"></span><?= $hasRefresh?'Refresh token stored — session self-renews':'No refresh token — paste once below' ?></div>
+      <?php if ($hasRefresh):
+        $rmap = [
+          'valid'    => ['on',   'Refresh token valid — ' . human_duration((int) $rstat['seconds']) . ' left'],
+          'expiring' => ['warn', 'Refresh token expires in ' . human_duration((int) $rstat['seconds']) . ' — open the app to renew'],
+          'expired'  => ['off',  'Refresh token EXPIRED — paste a fresh one'],
+          'unknown'  => ['warn', 'Refresh token stored (expiry unreadable)'],
+        ][$rstat['state']] ?? ['warn', '—'];
+        $amap = [
+          'valid'    => ['on',   'Access token active — ' . human_duration((int) $tstat['seconds']) . ' left'],
+          'expiring' => ['warn', 'Access token expiring — auto-renews next use'],
+          'expired'  => ['warn', 'Access token expired — auto-renews next use'],
+          'none'     => ['warn', 'No access token yet — minted on first use'],
+          'unknown'  => ['warn', 'Access token state unknown'],
+        ][$tstat['state']] ?? ['warn', '—'];
+      ?>
+        <div class="status" style="font-size:13px;color:var(--muted);margin-top:-8px;"><span class="dot <?= $rmap[0] ?>"></span><?= e($rmap[1]) ?></div>
+        <div class="status" style="font-size:13px;color:var(--muted);margin-top:-10px;"><span class="dot <?= $amap[0] ?>"></span><?= e($amap[1]) ?></div>
         <form method="post" class="row">
           <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-          <button class="btn-primary" name="action" value="validate_token">Validate</button>
-          <button class="btn-ghost" name="action" value="clear_token" onclick="return confirm('Remove the stored token?');">Clear</button>
+          <button class="btn-primary" name="action" value="validate_token">Validate now</button>
+          <button class="btn-ghost" name="action" value="clear_token" onclick="return confirm('Remove the stored tokens?');">Clear</button>
         </form>
         <hr>
       <?php endif; ?>
       <form method="post">
         <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-        <label for="token"><?= $hasTok?'Replace token':'Paste token' ?></label>
-        <textarea id="token" name="token" placeholder="eyJ… (the Bearer value from a graphql request)"></textarea>
-        <div class="row"><button class="btn-primary" name="action" value="save_token">Save Token</button></div>
-        <p class="hint">printables.com → DevTools → <strong>Network</strong> → any <code>graphql</code> request → copy the <code>Authorization</code> value. A leading <code>Bearer&nbsp;</code> is stripped.</p>
+        <label for="refresh_token"><?= $hasRefresh?'Replace refresh token':'Paste refresh token (once)' ?></label>
+        <textarea id="refresh_token" name="refresh_token" placeholder="eyJ… (auth.refresh_token cookie value)"></textarea>
+        <div class="row"><button class="btn-primary" name="action" value="save_refresh">Save &amp; Connect</button></div>
+        <p class="hint">printables.com → DevTools → <strong>Storage</strong> → Cookies → <code>printables.com</code> → copy the value of <code>auth.refresh_token</code>. The app renews your session automatically; expect to re-paste only ~monthly.</p>
       </form>
+    </div>
+
+    <div class="panel">
+      <h2>Recent activity</h2>
+      <?php if ($logRows === []): ?>
+        <div class="status"><span class="dot on"></span>No errors or warnings logged.</div>
+      <?php else: ?>
+        <div class="status"><span class="dot warn"></span>Last <?= count($logRows) ?> event(s) — newest at the bottom.</div>
+        <pre style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:0;max-height:260px;overflow:auto;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;"><?php
+          foreach ($logRows as $row) { echo e($row) . "\n"; }
+        ?></pre>
+        <p class="hint">Auth failures, refused links, and skips land here. The full log lives at <code>private/farfetched.log</code>.</p>
+      <?php endif; ?>
     </div>
 
     <div class="panel">

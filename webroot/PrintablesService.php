@@ -30,6 +30,7 @@ require_once __DIR__ . '/bootstrap.php';
 final class PrintablesService
 {
     private const API = 'https://api.printables.com/graphql/';
+    private const REFRESH_URL = 'https://www.printables.com/auth/refresh';
     private const UA  = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                       . 'AppleWebKit/537.36 Chrome/116 Safari/537.36';
 
@@ -54,17 +55,150 @@ final class PrintablesService
     ];
 
     private string $token;
+    private string $refreshToken;
     public string $lastError = '';
     public ?string $lastCursor = null;
 
     public function __construct(?string $token = null)
     {
         $this->token = $token ?? get_token();
+        $this->refreshToken = get_refresh_token();
     }
 
     public function isAuthed(): bool
     {
-        return $this->token !== '';
+        // Authed if we can produce a working access token: either one is already
+        // stored, or we hold a refresh token we can mint a fresh one from.
+        return $this->token !== '' || $this->refreshToken !== '';
+    }
+
+    /**
+     * Guarantee a usable access token before an authed call. Cheap when the
+     * current token is still comfortably valid (just an exp check); otherwise
+     * mints a new one from the refresh token. Returns false only when we have
+     * no way to authenticate (no valid access token and no refresh token).
+     */
+    public function ensureFreshToken(): bool
+    {
+        $s = token_status();
+        if ($s['state'] === 'valid' && (int) ($s['seconds'] ?? 0) > 60) {
+            return true; // plenty of life left
+        }
+        if ($this->refreshToken === '') {
+            // Only a (stale) access token and nothing to renew with.
+            if ($this->token !== '' && $s['state'] !== 'expired') {
+                return true; // unknown-exp but present; let the call try
+            }
+            $this->lastError = 'No refresh token stored — paste it once in Settings.';
+            return false;
+        }
+        return $this->refreshAccessToken();
+    }
+
+    /**
+     * POST /auth/refresh with the refresh-token cookie (no body, no CSRF).
+     * Stores the new access token AND the rotated refresh token from the
+     * response Set-Cookie headers. Serialized via a lock so the worker and a
+     * concurrent web request can't clobber the rotating token.
+     */
+    private function refreshAccessToken(): bool
+    {
+        $lock = @fopen(REFRESH_LOCK, 'c');
+        if ($lock !== false) {
+            @flock($lock, LOCK_EX);
+            // Another process may have refreshed while we waited for the lock.
+            clearstatcache();
+            $reload = get_token();
+            if ($reload !== '' && $reload !== $this->token) {
+                $this->token = $reload;
+                $s = token_status();
+                if ($s['state'] === 'valid' && (int) ($s['seconds'] ?? 0) > 60) {
+                    $this->releaseLock($lock);
+                    return true;
+                }
+            }
+            $storedRefresh = get_refresh_token();
+            if ($storedRefresh !== '') {
+                $this->refreshToken = $storedRefresh; // may have rotated
+            }
+        }
+
+        $ch = curl_init(self::REFRESH_URL);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => '',          // empty body, like the browser
+            CURLOPT_HEADER         => true,        // need Set-Cookie from response
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_HTTPHEADER     => [
+                'Cookie: auth.refresh_token=' . $this->refreshToken,
+                'Origin: https://www.printables.com',
+                'ngsw-bypass: true',
+                'Content-Length: 0',
+                'User-Agent: ' . self::UA,
+            ],
+        ]);
+        $resp   = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $hsize  = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        $cerr   = curl_error($ch);
+        curl_close($ch);
+
+        if ($resp === false) {
+            $this->lastError = 'Token refresh network error: ' . $cerr;
+            ff_log('error', $this->lastError);
+            $this->releaseLock($lock);
+            return false;
+        }
+        if ($status !== 200) {
+            // 401/403 → refresh token itself is dead/expired; user must re-paste.
+            $this->lastError = ($status === 401 || $status === 403)
+                ? 'Refresh token rejected (expired) — paste a fresh one in Settings.'
+                : 'Token refresh failed (HTTP ' . $status . ').';
+            ff_log('error', $this->lastError);
+            $this->releaseLock($lock);
+            return false;
+        }
+
+        $headers   = substr((string) $resp, 0, $hsize);
+        $newAccess = $this->parseSetCookie($headers, 'auth.access_token');
+        $newRefresh = $this->parseSetCookie($headers, 'auth.refresh_token');
+
+        if ($newAccess === null || $newAccess === '') {
+            $this->lastError = 'Refresh succeeded but no access token in response.';
+            ff_log('error', $this->lastError);
+            $this->releaseLock($lock);
+            return false;
+        }
+
+        set_token($newAccess);
+        $this->token = $newAccess;
+        if ($newRefresh !== null && $newRefresh !== '') {
+            set_refresh_token($newRefresh);          // CRITICAL: token rotates
+            $this->refreshToken = $newRefresh;
+        }
+
+        $s = token_status();
+        ff_log('info', 'Token refreshed — access valid ' . human_duration((int) ($s['seconds'] ?? 0)) . '.');
+        $this->releaseLock($lock);
+        return true;
+    }
+
+    /** @param resource|false $lock */
+    private function releaseLock($lock): void
+    {
+        if ($lock !== false) {
+            @flock($lock, LOCK_UN);
+            @fclose($lock);
+        }
+    }
+
+    /** Pull a cookie value out of raw Set-Cookie response headers. */
+    private function parseSetCookie(string $headers, string $name): ?string
+    {
+        $pattern = '/^set-cookie:\s*' . preg_quote($name, '/') . '=([^;\r\n]*)/im';
+        return preg_match($pattern, $headers, $m) ? $m[1] : null;
     }
 
     /** @return array<int,array{id:string,slug:string,name:string,creator:string,thumb:string}> */
@@ -156,7 +290,7 @@ final class PrintablesService
           print(id: $id) {
             id
             stls { id name fileSize }
-            gcodes { id name }
+            otherFiles { id name fileSize }
           }
         }
         GQL;
@@ -166,23 +300,66 @@ final class PrintablesService
             return [];
         }
 
-        // STL list lives under `stls`; 3MF often appears among model files too.
-        // Adjust the source field once the live shape is confirmed.
-        $src = $data['print']['stls'] ?? [];
-        if (!is_array($src)) {
+        // Printables splits a model's files across several lists. .stl files
+        // live in `stls`; .3mf files may live in `stls` OR `otherFiles`
+        // depending on how the creator uploaded them. Rather than assume a
+        // list, scan BOTH and match by extension, tagging each hit with the
+        // download enum of the list it came from (stls->stl, otherFiles->other),
+        // which getDownloadLink needs to request the right signed URL.
+        $upper   = strtoupper($fileType);
+        $wantExt = ($upper === '3MF') ? '3mf' : 'stl';
+
+        $stls   = $data['print']['stls'] ?? [];
+        $others = $data['print']['otherFiles'] ?? [];
+        if (!is_array($stls) || !is_array($others)) {
             $this->lastError = 'Unexpected files shape — verify the print() query.';
             return [];
         }
 
-        $out = [];
-        foreach ($src as $f) {
-            $out[] = [
-                'id'   => (string) ($f['id'] ?? ''),
-                'name' => (string) ($f['name'] ?? 'file'),
-                'type' => $fileType,
-            ];
+        $out      = [];
+        $stlCount = 0;
+        foreach ([['list' => $stls, 'dl' => 'stl'], ['list' => $others, 'dl' => 'other']] as $grp) {
+            foreach ($grp['list'] as $f) {
+                $name = (string) ($f['name'] ?? 'file');
+                $ext  = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+                if ($ext === 'stl') {
+                    $stlCount++;
+                }
+                if ($ext !== $wantExt) {
+                    continue;
+                }
+                $out[] = [
+                    'id'   => (string) ($f['id'] ?? ''),
+                    'name' => $name,
+                    'type' => $fileType,
+                    'dl'   => $grp['dl'],   // download enum for this file's source list
+                ];
+            }
+        }
+
+        // Helpful skip reason when a 3MF was requested but the model has none.
+        if ($out === [] && $upper === '3MF') {
+            $this->lastError = $stlCount > 0
+                ? "No .3mf files on this model (it has {$stlCount} STL file(s)). Pick STL or use Queue ZIP."
+                : 'No .3mf files on this model. Use Queue ZIP for the whole-model pack.';
         }
         return $out;
+    }
+
+    /**
+     * Map a UI file-type label to Printables' DownloadFileTypeEnum value.
+     * Confirmed valid enum values are lowercase: stl, other, gcode, sla.
+     * Printables has NO "3mf" enum — .3mf files download as "other".
+     */
+    private function apiFileType(string $uiType): string
+    {
+        switch (strtoupper($uiType)) {
+            case '3MF':   return 'other';
+            case 'GCODE': return 'gcode';
+            case 'SLA':   return 'sla';
+            case 'STL':
+            default:      return 'stl';
+        }
     }
 
     /**
@@ -190,7 +367,7 @@ final class PrintablesService
      * Mutation shape sighted in community CLI tooling; confirm enum values
      * for $fileType (e.g. STL / BINARY_STL / 3MF) and $source against live.
      */
-    public function getDownloadLink(string $fileId, string $modelId, string $fileType = 'STL'): string
+    public function getDownloadLink(string $fileId, string $modelId, string $fileType = 'STL', ?string $apiType = null): string
     {
         $this->lastError = '';
         $mutation = <<<'GQL'
@@ -206,7 +383,7 @@ final class PrintablesService
         $data = $this->gql($mutation, [
             'id'       => $fileId,
             'modelId'  => $modelId,
-            'fileType' => strtolower($fileType),  // DownloadFileTypeEnum is lowercase: stl, 3mf
+            'fileType' => $apiType ?? $this->apiFileType($fileType),  // per-file enum (stl/other) or STL->stl, 3MF->other
             'source'   => 'model_detail',
         ]);
         if ($data === null) {
@@ -393,6 +570,12 @@ final class PrintablesService
     /** @return array<string,mixed>|null */
     private function gql(string $query, array $variables): ?array
     {
+        // Self-renew the access token if it's expired/expiring (no-op if valid).
+        if (!$this->ensureFreshToken()) {
+            $this->lastError = $this->lastError !== '' ? $this->lastError : 'Not authenticated.';
+            return null;
+        }
+
         $ch = curl_init(self::API);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,

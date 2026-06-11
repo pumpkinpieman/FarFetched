@@ -1,11 +1,11 @@
 services:
   fetcher:
     build: .
-    image: printables-fetcher:latest
-    container_name: printables-fetcher
+    image: farfetched:latest
+    container_name: farfetched
     restart: unless-stopped
     ports:
-      - "8088:80"          # browse at http://<thebank-ip>:8088/
+      - "32450:80"          # browse at http://localhost:32450/
     environment:
       FETCHER_DOWNLOAD_DIR: /downloads
       FETCHER_DOWNLOAD_DELAY: "120"   # seconds between files; raise to be gentler

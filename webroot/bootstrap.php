@@ -22,6 +22,8 @@ define('APP_ROOT',    __DIR__);
 define('PRIVATE_DIR', dirname(__DIR__) . '/private');
 define('DB_PATH',     PRIVATE_DIR . '/fetcher.db');
 define('TOKEN_STORE', PRIVATE_DIR . '/printables_token.php');
+define('REFRESH_STORE', PRIVATE_DIR . '/printables_refresh.php');
+define('REFRESH_LOCK', PRIVATE_DIR . '/refresh.lock');
 define('PATH_STORE',  PRIVATE_DIR . '/download_dir.php');
 define('CONFIG_STORE', PRIVATE_DIR . '/config.php');
 define('THUMBS_DIR',  PRIVATE_DIR . '/thumbs');
@@ -334,6 +336,23 @@ function get_token(): string
     return store_read(TOKEN_STORE);
 }
 
+/** App-managed access token: written by the refresh routine, never pasted. */
+function set_token(string $value): bool
+{
+    return store_write(TOKEN_STORE, $value);
+}
+
+/** The paste-once refresh token (long-lived, rotates on every refresh). */
+function get_refresh_token(): string
+{
+    return store_read(REFRESH_STORE);
+}
+
+function set_refresh_token(string $value): bool
+{
+    return store_write(REFRESH_STORE, $value);
+}
+
 function get_download_dir(): string
 {
     $v = store_read(PATH_STORE);
@@ -502,4 +521,112 @@ function csrf_ok(): bool
     }
     return isset($_POST['csrf'], $_SESSION['csrf'])
         && hash_equals((string) $_SESSION['csrf'], (string) $_POST['csrf']);
+}
+
+// ---- Event log (errors/warnings the user can see) -------------------------
+// A curated, human-readable log of the things that actually matter — auth
+// failures, refused links, skips — so a silent stall becomes a visible line.
+// Separate from worker.log (which is raw stdout). Rotates at ~512 KB.
+define('ERROR_LOG', PRIVATE_DIR . '/farfetched.log');
+
+function ff_log(string $level, string $msg): void
+{
+    $line = '[' . date('Y-m-d H:i:s') . '] '
+        . strtoupper($level) . ' '
+        . str_replace(["\r", "\n"], ' ', $msg) . "\n";
+    if (is_file(ERROR_LOG) && (int) @filesize(ERROR_LOG) > 512 * 1024) {
+        @rename(ERROR_LOG, ERROR_LOG . '.1'); // single-generation rotation
+    }
+    @file_put_contents(ERROR_LOG, $line, FILE_APPEND | LOCK_EX);
+}
+
+/** Last $lines log entries, oldest-first. */
+function ff_log_tail(int $lines = 50): array
+{
+    if (!is_file(ERROR_LOG)) {
+        return [];
+    }
+    $all = @file(ERROR_LOG, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    return array_slice($all, -max(1, $lines));
+}
+
+// ---- Token expiry (read the JWT's own exp claim) --------------------------
+/**
+ * Decode a JWT payload (the middle segment) without verifying the signature —
+ * we only need the public claims (exp), not to trust them for auth.
+ * Returns null if the token isn't a well-formed JWT.
+ */
+function jwt_claims(string $jwt): ?array
+{
+    $parts = explode('.', trim($jwt));
+    if (count($parts) < 2) {
+        return null;
+    }
+    $payload = strtr($parts[1], '-_', '+/');
+    if ($pad = strlen($payload) % 4) {
+        $payload .= str_repeat('=', 4 - $pad);
+    }
+    $json = base64_decode($payload, true);
+    if ($json === false) {
+        return null;
+    }
+    $data = json_decode($json, true);
+    return is_array($data) ? $data : null;
+}
+
+/**
+ * Status of the currently stored token, derived from its own exp claim.
+ * state: none | unknown | valid | expiring (<5 min) | expired
+ *
+ * @return array{state:string,exp:?int,seconds:?int}
+ */
+function token_status(): array
+{
+    $tok = get_token();
+    if ($tok === '') {
+        return ['state' => 'none', 'exp' => null, 'seconds' => null];
+    }
+    $claims = jwt_claims($tok);
+    $exp = isset($claims['exp']) ? (int) $claims['exp'] : null;
+    if ($exp === null) {
+        return ['state' => 'unknown', 'exp' => null, 'seconds' => null];
+    }
+    $secs = $exp - time();
+    $state = $secs <= 0 ? 'expired' : ($secs <= 300 ? 'expiring' : 'valid');
+    return ['state' => $state, 'exp' => $exp, 'seconds' => $secs];
+}
+
+/**
+ * Status of the stored refresh token (the paste-once secret). Same shape as
+ * token_status; 'expiring' threshold is 1 day since it's a 30-day token.
+ *
+ * @return array{state:string,exp:?int,seconds:?int}
+ */
+function refresh_token_status(): array
+{
+    $rt = get_refresh_token();
+    if ($rt === '') {
+        return ['state' => 'none', 'exp' => null, 'seconds' => null];
+    }
+    $claims = jwt_claims($rt);
+    $exp = isset($claims['exp']) ? (int) $claims['exp'] : null;
+    if ($exp === null) {
+        return ['state' => 'unknown', 'exp' => null, 'seconds' => null];
+    }
+    $secs = $exp - time();
+    $state = $secs <= 0 ? 'expired' : ($secs <= 86400 ? 'expiring' : 'valid');
+    return ['state' => $state, 'exp' => $exp, 'seconds' => $secs];
+}
+
+/** Human "42 min" / "3 h 5 min" / "12 s" from a seconds count. */
+function human_duration(int $secs): string
+{
+    $secs = abs($secs);
+    if ($secs < 60) {
+        return $secs . ' s';
+    }
+    if ($secs < 3600) {
+        return intdiv($secs, 60) . ' min';
+    }
+    return intdiv($secs, 3600) . ' h ' . intdiv($secs % 3600, 60) . ' min';
 }

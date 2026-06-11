@@ -3,9 +3,8 @@ FROM php:8.3-apache
 
 # --- PHP extensions: pdo_sqlite (queue) + curl is built-in via libcurl ---
 RUN apt-get update \
- && apt-get install -y --no-install-recommends cron ca-certificates libsqlite3-dev libzip-dev poppler-utils libjpeg-dev libpng-dev \
- && docker-php-ext-configure gd --with-jpeg \
- && docker-php-ext-install pdo_sqlite zip gd \
+ && apt-get install -y --no-install-recommends cron ca-certificates libsqlite3-dev libzip-dev \
+ && docker-php-ext-install pdo_sqlite zip \
  && a2enmod rewrite headers \
  && rm -rf /var/lib/apt/lists/*
 

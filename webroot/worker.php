@@ -39,6 +39,13 @@ function logln(string $m): void
     fwrite(STDOUT, '[' . date('Y-m-d H:i:s') . '] ' . $m . "\n");
 }
 
+/** Log a line to stdout AND the curated event log the UI surfaces. */
+function logerr(string $level, string $m): void
+{
+    logln($m);
+    ff_log($level, $m);
+}
+
 // ---- Single-instance lock -------------------------------------------------
 $lock = fopen(LOCK_FILE, 'c');
 if ($lock === false) {
@@ -52,9 +59,18 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
 
 $svc = new PrintablesService();
 if (!$svc->isAuthed()) {
-    logln('No token configured — set one in Settings. Exiting.');
+    logerr('error', 'No refresh token configured — paste it once in Settings. Exiting.');
     exit(0);
 }
+
+// Proactively ensure a fresh access token before processing. With a stored
+// refresh token this self-renews; logs the outcome either way.
+if (!$svc->ensureFreshToken()) {
+    logerr('error', 'Could not obtain a valid token: ' . $svc->lastError . ' Exiting.');
+    exit(0);
+}
+$ts = token_status();
+logln('Token OK — access valid ' . human_duration((int) ($ts['seconds'] ?? 0)) . '.');
 
 if (cfg('paused') === true) {
     logln('Downloads paused via Settings — exiting without processing.');
@@ -131,13 +147,13 @@ while (true) {
             // Dead token halts the run (pack resolution needs auth); requeue.
             if ($svc->lastError !== '' && str_contains($svc->lastError, 'rejected')) {
                 $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
-                logln('  Token rejected — halting run. Re-auth in Settings.');
+                logerr('error', '  Token rejected — halting run. Re-auth in Settings.');
                 break;
             }
             if ($link === '') {
                 $msg = $svc->lastError !== '' ? $svc->lastError : 'No pack available.';
                 $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logln('  Skipped: ' . $msg);
+                logerr('warn', '  Skipped: ' . $msg);
                 pace();
                 continue;
             }
@@ -191,14 +207,14 @@ while (true) {
         // Dead token: stop the whole run so the user re-auths; requeue this job.
         if ($svc->lastError !== '' && str_contains($svc->lastError, 'rejected')) {
             $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
-            logln('  Token rejected — halting run. Re-auth in Settings.');
+            logerr('error', '  Token rejected — halting run. Re-auth in Settings.');
             break;
         }
 
         if ($files === []) {
             $msg = $svc->lastError !== '' ? $svc->lastError : 'No matching files on model.';
             $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-            logln('  Skipped: ' . $msg);
+            logerr('warn', '  Skipped: ' . $msg);
             continue;
         }
 
@@ -207,9 +223,9 @@ while (true) {
         $lastPath  = '';
 
         foreach ($files as $i => $f) {
-            $link = $svc->getDownloadLink($f['id'], $modelId, $fileTy);
+            $link = $svc->getDownloadLink($f['id'], $modelId, $fileTy, $f['dl'] ?? null);
             if ($link === '') {
-                logln('  Link refused for file ' . $f['id'] . ': ' . $svc->lastError);
+                logerr('error', '  Link refused for file ' . $f['id'] . ': ' . $svc->lastError);
                 pace();
                 continue;
             }
@@ -231,8 +247,22 @@ while (true) {
                 logln('  Saved: ' . $dest);
                 $savedAny = true;
                 $lastPath = $dest;
+            } elseif (preg_match('/\b(401|403)\b/', $svc->lastError)) {
+                // A 401/403 here means the signed download URL expired (it has
+                // its own short TTL) or the access token lapsed mid-run. Re-mint
+                // the link once — getDownloadLink() routes through gql(), which
+                // refreshes the access token too — then retry. Cheap recovery.
+                logln('  Signed URL stale (' . trim($svc->lastError) . ') — re-minting and retrying.');
+                $link2 = $svc->getDownloadLink($f['id'], $modelId, $fileTy, $f['dl'] ?? null);
+                if ($link2 !== '' && $svc->downloadToFile($link2, $dest)) {
+                    logln('  Saved (after re-mint): ' . $dest);
+                    $savedAny = true;
+                    $lastPath = $dest;
+                } else {
+                    logerr('error', '  Download failed after re-mint: ' . $svc->lastError);
+                }
             } else {
-                logln('  Download failed: ' . $svc->lastError);
+                logerr('error', '  Download failed: ' . $svc->lastError);
             }
 
             // Pace between every network fetch (skip after the final file).
