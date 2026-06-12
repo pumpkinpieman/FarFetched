@@ -84,6 +84,7 @@ $badge = static function (string $s): string {
     <nav>
       <a href="index.php">Browse Models</a>
       <a href="jobs.php" class="active">Queue</a>
+      <a href="viewer.php">3D Viewer</a>
       <a href="settings.php">Settings</a>
     </nav>
   </aside>

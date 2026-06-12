@@ -89,7 +89,7 @@ final class PrintablesService
             if ($this->token !== '' && $s['state'] !== 'expired') {
                 return true; // unknown-exp but present; let the call try
             }
-            $this->lastError = 'No refresh token stored — paste it once in Settings.';
+            $this->lastError = 'Token expired — paste a fresh token in Settings.';
             return false;
         }
         return $this->refreshAccessToken();

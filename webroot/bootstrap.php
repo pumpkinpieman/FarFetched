@@ -331,6 +331,17 @@ function extract_zip_safe(string $zipPath, string $targetDir): bool
 }
 
 // ---- Config accessors -----------------------------------------------------
+/** The token's self-declared type: 'access', 'refresh', or null if unknown. */
+function jwt_token_type(string $jwt): ?string
+{
+    $claims = jwt_claims($jwt);
+    if ($claims === null || !isset($claims['type'])) {
+        return null;
+    }
+    $t = strtolower((string) $claims['type']);
+    return in_array($t, ['access', 'refresh'], true) ? $t : null;
+}
+
 function get_token(): string
 {
     return store_read(TOKEN_STORE);
@@ -582,7 +593,12 @@ function jwt_claims(string $jwt): ?array
  */
 function token_status(): array
 {
-    $tok = get_token();
+    return token_status_for(get_token());
+}
+
+/** Status of an arbitrary access-token JWT string. */
+function token_status_for(string $tok): array
+{
     if ($tok === '') {
         return ['state' => 'none', 'exp' => null, 'seconds' => null];
     }

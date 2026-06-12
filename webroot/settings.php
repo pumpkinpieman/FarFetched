@@ -80,20 +80,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_ok()) {
         $notice = ['type' => 'err', 'text' => 'Session expired — reload and retry.'];
     } elseif ($action === 'save_refresh') {
-        $rt = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['refresh_token'] ?? ''))) ?? '';
-        $rt = preg_replace('/^auth\.refresh_token=/', '', $rt) ?? $rt; // tolerate cookie-pair paste
-        if ($rt === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your refresh token first.'];
-        } elseif (jwt_claims($rt) === null) {
-            $notice = ['type' => 'err', 'text' => 'That does not look like a refresh token (not a JWT).'];
-        } elseif (!set_refresh_token($rt)) {
-            $notice = ['type' => 'err', 'text' => 'Could not write the refresh-token store — check permissions.'];
+        $tok = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['refresh_token'] ?? ''))) ?? '';
+        $tok = preg_replace('/^auth\.(refresh|access)_token=/', '', $tok) ?? $tok; // tolerate cookie-pair paste
+        if ($tok === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste a token first.'];
+        } elseif (jwt_claims($tok) === null) {
+            $notice = ['type' => 'err', 'text' => 'That does not look like a token (not a JWT).'];
         } else {
-            // Immediately mint an access token to prove it works end-to-end.
-            $v = validate_account();
-            $notice = $v['ok']
-                ? ['type' => 'ok', 'text' => 'Connected. ' . $v['msg']]
-                : ['type' => 'err', 'text' => 'Saved, but the first refresh failed: ' . $v['msg']];
+            // Auto-detect what they pasted. A refresh token self-renews; an
+            // access token is the short-lived fallback for accounts that don't
+            // expose a refresh token.
+            $type = jwt_token_type($tok);
+            if ($type === 'refresh') {
+                if (!set_refresh_token($tok)) {
+                    $notice = ['type' => 'err', 'text' => 'Could not write the token store — check permissions.'];
+                } else {
+                    if (is_file(TOKEN_STORE)) { @unlink(TOKEN_STORE); } // drop any stale access token
+                    $v = validate_account(); // mints a fresh access token to prove it works
+                    $notice = $v['ok']
+                        ? ['type' => 'ok', 'text' => 'Connected (auto-renewing). ' . $v['msg']]
+                        : ['type' => 'err', 'text' => 'Saved, but the first refresh failed: ' . $v['msg']];
+                }
+            } else {
+                // type === 'access' (or untyped): store directly as a one-shot
+                // access token. No refresh token, so it won't self-renew.
+                $ts = token_status_for($tok);
+                if ($ts['state'] === 'expired') {
+                    $notice = ['type' => 'err', 'text' => 'That access token is already expired — grab a fresh one from the cookie jar and paste it right away.'];
+                } elseif (!set_token($tok)) {
+                    $notice = ['type' => 'err', 'text' => 'Could not write the token store — check permissions.'];
+                } else {
+                    if (is_file(REFRESH_STORE)) { @unlink(REFRESH_STORE); } // access-only mode
+                    $v = validate_account();
+                    $life = human_duration((int) ($ts['seconds'] ?? 0));
+                    $notice = $v['ok']
+                        ? ['type' => 'ok', 'text' => 'Connected in access-token mode — valid ' . $life . '. This token can\'t self-renew; re-paste a fresh one when it expires. (Tip: paste an auth.refresh_token instead and you\'ll only re-paste ~monthly.)']
+                        : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $v['msg']];
+                }
+            }
         }
     } elseif ($action === 'validate_token') {
         $validation = validate_account();
@@ -179,6 +203,7 @@ $csrf = csrf_token();
     <nav>
       <a href="index.php">Browse Models</a>
       <a href="jobs.php">Queue</a>
+      <a href="viewer.php">3D Viewer</a>
       <a href="settings.php" class="active">Settings</a>
     </nav>
   </aside>
@@ -191,7 +216,14 @@ $csrf = csrf_token();
 
     <div class="panel">
       <h2>Printables Authentication</h2>
-      <div class="status"><span class="dot <?= $hasRefresh?'on':'off' ?>"></span><?= $hasRefresh?'Refresh token stored — session self-renews':'No refresh token — paste once below' ?></div>
+      <?php
+        $accessOnly = !$hasRefresh && $hasTok;
+        $statusDot  = ($hasRefresh || $accessOnly) ? 'on' : 'off';
+        $statusTxt  = $hasRefresh
+          ? 'Refresh token stored — session self-renews'
+          : ($accessOnly ? 'Access-token mode — works until it expires, then re-paste' : 'Not connected — paste a token below');
+      ?>
+      <div class="status"><span class="dot <?= $statusDot ?>"></span><?= e($statusTxt) ?></div>
       <?php if ($hasRefresh):
         $rmap = [
           'valid'    => ['on',   'Refresh token valid — ' . human_duration((int) $rstat['seconds']) . ' left'],
@@ -209,6 +241,17 @@ $csrf = csrf_token();
       ?>
         <div class="status" style="font-size:13px;color:var(--muted);margin-top:-8px;"><span class="dot <?= $rmap[0] ?>"></span><?= e($rmap[1]) ?></div>
         <div class="status" style="font-size:13px;color:var(--muted);margin-top:-10px;"><span class="dot <?= $amap[0] ?>"></span><?= e($amap[1]) ?></div>
+      <?php elseif ($accessOnly):
+        $amap = [
+          'valid'    => ['on',   'Access token valid — ' . human_duration((int) $tstat['seconds']) . ' left'],
+          'expiring' => ['warn', 'Access token expiring in ' . human_duration((int) $tstat['seconds']) . ' — re-paste soon'],
+          'expired'  => ['off',  'Access token EXPIRED — paste a fresh one'],
+          'unknown'  => ['warn', 'Access token stored (expiry unreadable)'],
+        ][$tstat['state']] ?? ['warn', '—'];
+      ?>
+        <div class="status" style="font-size:13px;color:var(--muted);margin-top:-8px;"><span class="dot <?= $amap[0] ?>"></span><?= e($amap[1]) ?></div>
+      <?php endif; ?>
+      <?php if ($hasRefresh || $accessOnly): ?>
         <form method="post" class="row">
           <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
           <button class="btn-primary" name="action" value="validate_token">Validate now</button>
@@ -218,10 +261,10 @@ $csrf = csrf_token();
       <?php endif; ?>
       <form method="post">
         <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-        <label for="refresh_token"><?= $hasRefresh?'Replace refresh token':'Paste refresh token (once)' ?></label>
-        <textarea id="refresh_token" name="refresh_token" placeholder="eyJ… (auth.refresh_token cookie value)"></textarea>
+        <label for="refresh_token"><?= ($hasRefresh || $accessOnly)?'Replace token':'Paste token' ?></label>
+        <textarea id="refresh_token" name="refresh_token" placeholder="eyJ… (auth.refresh_token — or auth.access_token if your account has no refresh token)"></textarea>
         <div class="row"><button class="btn-primary" name="action" value="save_refresh">Save &amp; Connect</button></div>
-        <p class="hint">printables.com → DevTools → <strong>Storage</strong> → Cookies → <code>printables.com</code> → copy the value of <code>auth.refresh_token</code>. The app renews your session automatically; expect to re-paste only ~monthly.</p>
+        <p class="hint">printables.com → DevTools → <strong>Application/Storage</strong> → Cookies → <code>printables.com</code>. Best: copy <code>auth.refresh_token</code> (self-renews, re-paste ~monthly). If your account doesn't have one (some SSO logins), copy <code>auth.access_token</code> instead — it works for about 2 hours, then paste a fresh one. The app auto-detects which you pasted.</p>
       </form>
     </div>
 

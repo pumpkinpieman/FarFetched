@@ -77,6 +77,7 @@ $meta = [
     <div class="links">
       <a href="index.php">Printables fetcher</a>
       <a href="jobs.php">Queue</a>
+      <a href="viewer.php">3D Viewer</a>
       <a href="settings.php">Settings</a>
     </div>
   </main>

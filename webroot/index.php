@@ -121,6 +121,7 @@ $csrf = csrf_token();
     <nav>
       <a href="home.php">← Sources</a>
       <a href="jobs.php">Queue</a>
+      <a href="viewer.php">3D Viewer</a>
       <a href="settings.php">Settings</a>
     </nav>
   </aside>
