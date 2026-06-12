@@ -94,6 +94,12 @@ $csrf = csrf_token();
   .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;}
   .thumb img{width:100%;height:100%;object-fit:cover;}
   .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
+  .msize{font-size:11px;color:var(--clay-deep);font-weight:600;margin-top:5px;} .msize:empty{display:none;}
+  .searchbar{display:flex;gap:8px;margin-bottom:18px;}
+  .searchbar input{flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:15px;background:var(--card);color:var(--ink);}
+  .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.15);}
+  .badge{position:absolute;top:10px;right:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#fff;}
+  .badge.paid{background:#C9912F;} .badge.club{background:#6E59C2;}
   .pick{position:absolute;top:10px;left:10px;width:22px;height:22px;cursor:pointer;accent-color:var(--clay);}
   @media (max-width:640px){aside{width:170px;}main{padding:20px 16px;}}
 </style>
@@ -128,7 +134,7 @@ $csrf = csrf_token();
 
   <main>
     <div class="topbar">
-      <h1><?= e($title) ?></h1>
+      <h1 id="pageTitle"><?= e($title) ?></h1>
       <div class="actions">
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
           <option value="STL" <?= $fileType==='STL'?'selected':'' ?>>STL</option>
@@ -139,6 +145,12 @@ $csrf = csrf_token();
         <button class="btn-ghost" id="selectAll">Select all on page</button>
         <button class="btn-primary" id="download" disabled>Download Selected</button>
       </div>
+    </div>
+
+    <div class="searchbar">
+      <input type="search" id="searchInput" placeholder="Search all of Printables — e.g. belt sander, toothpick, sanding block…" autocomplete="off">
+      <button class="btn-primary" id="searchGo">Search</button>
+      <button class="btn-ghost" id="searchClear" style="display:none;">Clear</button>
     </div>
 
     <?php if ($banner): ?><div class="banner"><?= e($banner) ?></div><?php endif; ?>
@@ -164,6 +176,7 @@ $csrf = csrf_token();
           <div class="meta">
             <div class="mname"><?= e($m['name']) ?></div>
             <div class="mcreator">by <?= e($m['creator']) ?></div>
+            <div class="msize"><?= !empty($m['size']) ? e(human_size((int) $m['size'])) : '' ?></div>
           </div>
         </div>
       <?php endforeach; ?>
@@ -173,6 +186,7 @@ $csrf = csrf_token();
       <button class="btn-ghost" id="loadMore" style="display:none;">Load more</button>
       <div id="loadStatus" style="font-size:13px;color:var(--muted);margin-top:8px;"></div>
     </div>
+    <div id="scrollSentinel" style="height:1px;"></div>
   </main>
 
 <script>
@@ -199,44 +213,116 @@ $csrf = csrf_token();
     const thumb = m.thumb
       ? '<img src="'+encodeURI(m.thumb)+'" alt="" loading="lazy">'
       : '<span>no preview</span>';
+    // Badge paid/club models so you know which may not be fetchable.
+    let badge = '';
+    if (m.club) badge = '<span class="badge club">Club</span>';
+    else if (m.price > 0) badge = '<span class="badge paid">Paid</span>';
     // textContent-safe insertion for name/creator
     card.innerHTML =
       '<input type="checkbox" class="pick" aria-label="Select model">' +
-      '<div class="thumb">'+thumb+'</div>' +
-      '<div class="meta"><div class="mname"></div><div class="mcreator"></div></div>';
+      '<div class="thumb">'+thumb+'</div>' + badge +
+      '<div class="meta"><div class="mname"></div><div class="mcreator"></div><div class="msize"></div></div>';
     card.querySelector('.mname').textContent = m.name;
     card.querySelector('.mcreator').textContent = 'by ' + m.creator;
+    card.querySelector('.msize').textContent = m.size ? fmtBytes(m.size) : '';
     return card;
   }
+  function fmtBytes(b){ if(!b) return ''; const u=['B','KB','MB','GB']; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return (i===0?Math.round(n):n.toFixed(1))+' '+u[i]; }
 
-  // Show the Load more button only if there's a next page.
-  if (loadMoreBtn && nextCursor) loadMoreBtn.style.display = 'inline-block';
+  // Paging state. mode 'browse' uses the opaque cursor; mode 'search' uses a
+  // numeric offset (searchPrints2). Same infinite-scroll mechanism for both.
+  let loading = false;
+  let mode = 'browse';
+  let searchQuery = '';
+  let searchNext = null;   // next offset to fetch, or null when exhausted
 
-  if (loadMoreBtn) loadMoreBtn.addEventListener('click', async () => {
-    loadMoreBtn.disabled = true;
+  function hasMore() { return mode === 'search' ? (searchNext !== null) : !!nextCursor; }
+
+  async function loadMore() {
+    if (loading || !hasMore()) return;
+    loading = true;
+    if (loadMoreBtn) loadMoreBtn.disabled = true;
     loadStatus.textContent = 'Loading…';
     try {
-      const url = 'browse_more.php?cat=' + encodeURIComponent(ACTIVE_CAT) +
-                  '&cursor=' + encodeURIComponent(nextCursor || '');
+      const url = (mode === 'search')
+        ? 'search_more.php?q=' + encodeURIComponent(searchQuery) +
+          '&offset=' + encodeURIComponent(searchNext) + '&paid=all'
+        : 'browse_more.php?cat=' + encodeURIComponent(ACTIVE_CAT) +
+          '&cursor=' + encodeURIComponent(nextCursor || '');
       const res = await fetch(url);
       const data = await res.json();
-      if (!data.ok) { loadStatus.textContent = 'Error: ' + (data.error || 'unknown'); loadMoreBtn.disabled = false; return; }
-
+      if (!data.ok) {
+        loadStatus.textContent = 'Error: ' + (data.error || 'unknown');
+        if (loadMoreBtn) loadMoreBtn.disabled = false;
+        loading = false;
+        return;
+      }
       for (const m of data.models) grid.appendChild(makeCard(m));
-      nextCursor = data.cursor;
 
-      if (nextCursor && data.models.length) {
-        loadMoreBtn.disabled = false;
+      if (mode === 'search') {
+        searchNext = data.nextOffset; // null when exhausted
+      } else {
+        nextCursor = (data.cursor && data.models.length) ? data.cursor : null;
+      }
+
+      if (hasMore()) {
+        if (loadMoreBtn) loadMoreBtn.disabled = false;
         loadStatus.textContent = '';
       } else {
-        loadMoreBtn.style.display = 'none';
-        loadStatus.textContent = 'No more models in this category.';
+        if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+        loadStatus.textContent = (mode === 'search')
+          ? ('That\u2019s all ' + (data.total || grid.querySelectorAll('.card').length) + ' results.')
+          : 'No more models in this category.';
       }
     } catch (err) {
       loadStatus.textContent = 'Network error: ' + err.message;
-      loadMoreBtn.disabled = false;
+      if (loadMoreBtn) loadMoreBtn.disabled = false;
     }
-  });
+    loading = false;
+  }
+
+  // Kick off a keyword search (or clear back to category browse if empty).
+  const searchInput = document.getElementById('searchInput');
+  const searchGo = document.getElementById('searchGo');
+  const searchClear = document.getElementById('searchClear');
+  const pageTitle = document.getElementById('pageTitle');
+
+  async function runSearch() {
+    const q = (searchInput.value || '').trim();
+    if (!q) { clearSearch(); return; }
+    mode = 'search';
+    searchQuery = q;
+    searchNext = 0;
+    nextCursor = null;
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = 'Search: ' + q;
+    if (searchClear) searchClear.style.display = 'inline-block';
+    refresh();
+    await loadMore(); // fetches offset 0
+  }
+  function clearSearch() {
+    // Return to the category browse the page loaded with.
+    location.href = '?cat=' + encodeURIComponent(ACTIVE_CAT) + '&type=' + encodeURIComponent(FILE_TYPE);
+  }
+  if (searchGo) searchGo.addEventListener('click', runSearch);
+  if (searchClear) searchClear.addEventListener('click', clearSearch);
+  if (searchInput) searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+
+  // Infinite scroll: auto-load when the sentinel near the page bottom appears.
+  const sentinel = document.getElementById('scrollSentinel');
+  let observer = null;
+  if ('IntersectionObserver' in window && sentinel) {
+    observer = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) loadMore();
+    }, { rootMargin: '600px 0px' }); // prefetch before the user hits the very bottom
+    observer.observe(sentinel);
+  } else if (loadMoreBtn && nextCursor) {
+    // Fallback for old browsers: show the manual button.
+    loadMoreBtn.style.display = 'inline-block';
+  }
+  // Button still works as a manual fallback if present.
+  if (loadMoreBtn) loadMoreBtn.addEventListener('click', loadMore);
 
   if (grid) grid.addEventListener('change', e => {
     if (!e.target.classList.contains('pick')) return;

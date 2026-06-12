@@ -198,17 +198,23 @@ foreach ($sources as $s) {
     }
 
     function frameObject(obj) {
+      // STL/3MF are authored Z-up (3D-printing convention); three.js is Y-up.
+      // Rotate so the model stands upright instead of lying on its back.
+      obj.rotation.x = -Math.PI / 2;
+      obj.updateMatrixWorld(true);
+
       const box = new THREE.Box3().setFromObject(obj);
       if (box.isEmpty()) return;
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
-      // Recenter the model on the origin (sitting on the grid).
-      obj.position.sub(center);
-      obj.position.y += size.y / 2;
-      // Fit the grid to the model footprint.
+
+      // Seat the model ON the grid: centered on x/z, base resting at y = 0.
+      obj.position.set(-center.x, -box.min.y, -center.z);
+
+      // Fit the camera to the model's size, looking at its mid-height.
       const maxDim = Math.max(size.x, size.y, size.z) || 1;
       const dist = maxDim / (2 * Math.tan((Math.PI * camera.fov) / 360));
-      camera.position.set(maxDim * 0.9, maxDim * 0.9, dist * 1.6);
+      camera.position.set(maxDim * 0.9, size.y * 0.6 + maxDim * 0.5, dist * 1.6);
       camera.near = maxDim / 100;
       camera.far = maxDim * 100;
       camera.updateProjectionMatrix();

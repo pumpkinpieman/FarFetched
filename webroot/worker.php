@@ -46,6 +46,39 @@ function logerr(string $level, string $m): void
     ff_log($level, $m);
 }
 
+/** Atomically write the worker's live status (read by jobs_status.php). */
+function write_worker_status(array $s): void
+{
+    $s['updated'] = microtime(true);
+    $tmp = WORKER_STATUS . '.tmp';
+    if (@file_put_contents($tmp, json_encode($s)) !== false) {
+        @rename($tmp, WORKER_STATUS);
+    }
+}
+
+/**
+ * Build a throttled progress callback for downloadToFile(). Writes at most a
+ * few times/sec so the status file isn't churned on every curl tick.
+ */
+function progress_writer(int $jobId, string $file): callable
+{
+    $last = 0.0;
+    return static function (int $total, int $now) use ($jobId, $file, &$last): void {
+        $t = microtime(true);
+        if ($now > 0 && $now < $total && ($t - $last) < 0.30) {
+            return; // throttle mid-transfer; always allow first/last ticks
+        }
+        $last = $t;
+        write_worker_status([
+            'phase'  => 'downloading',
+            'job_id' => $jobId,
+            'file'   => $file,
+            'bytes'  => $now,
+            'total'  => $total,
+        ]);
+    };
+}
+
 // ---- Single-instance lock -------------------------------------------------
 $lock = fopen(LOCK_FILE, 'c');
 if ($lock === false) {
@@ -88,6 +121,13 @@ if (!is_writable($baseDir)) {
 }
 
 $pdo = db();
+
+// Auto-unstick: any 'working' row at startup is orphaned (a prior worker died
+// mid-job). The single-instance lock guarantees no live worker owns it, so
+// requeue it for a clean retry.
+$unstuck = $pdo->exec("UPDATE download_jobs SET status='queued' WHERE status='working'");
+if ($unstuck) { logln("Requeued $unstuck orphaned 'working' job(s)."); }
+
 $startedAt = time();
 $processed = 0;
 
@@ -112,6 +152,7 @@ while (true) {
     }
 
     $jobId   = (int) $job['id'];
+    $GLOBALS['ACTIVE_JOB_ID'] = $jobId;
     $modelId = (string) $job['model_id'];
     $fileTy  = (string) $job['file_type'];
     $slug    = $job['slug'] !== '' ? $job['slug'] : $modelId;
@@ -154,6 +195,7 @@ while (true) {
                 $msg = $svc->lastError !== '' ? $svc->lastError : 'No pack available.';
                 $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
                 logerr('warn', '  Skipped: ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace();
                 continue;
             }
@@ -164,13 +206,13 @@ while (true) {
             }
             $dest = $destDir . '/' . safe_segment($slug) . '_model_files.zip';
 
-            if (is_file($dest)) {
+            if (!cfg('overwrite') && is_file($dest)) {
                 logln('  Exists, skip: ' . basename($dest));
                 $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
                 continue; // no network, no pace
             }
 
-            if ($svc->downloadToFile($link, $dest)) {
+            if ($svc->downloadToFile($link, $dest, progress_writer($jobId, basename($dest)))) {
                 logln('  Saved pack: ' . $dest);
 
                 // Extract the zip into the model folder (zip-slip guarded).
@@ -197,6 +239,7 @@ while (true) {
             $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
             logln('  Pack error: ' . $e->getMessage());
         }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
         pace();
         continue;
     }
@@ -236,14 +279,14 @@ while (true) {
             }
             $dest = $destDir . '/' . $fname;
 
-            if (is_file($dest)) {
+            if (!cfg('overwrite') && is_file($dest)) {
                 logln('  Exists, skip: ' . $fname);
                 $savedAny = true;
                 $lastPath = $dest;
                 continue; // no network, no pace
             }
 
-            if ($svc->downloadToFile($link, $dest)) {
+            if ($svc->downloadToFile($link, $dest, progress_writer($jobId, $fname))) {
                 logln('  Saved: ' . $dest);
                 $savedAny = true;
                 $lastPath = $dest;
@@ -254,7 +297,7 @@ while (true) {
                 // refreshes the access token too — then retry. Cheap recovery.
                 logln('  Signed URL stale (' . trim($svc->lastError) . ') — re-minting and retrying.');
                 $link2 = $svc->getDownloadLink($f['id'], $modelId, $fileTy, $f['dl'] ?? null);
-                if ($link2 !== '' && $svc->downloadToFile($link2, $dest)) {
+                if ($link2 !== '' && $svc->downloadToFile($link2, $dest, progress_writer($jobId, $fname))) {
                     logln('  Saved (after re-mint): ' . $dest);
                     $savedAny = true;
                     $lastPath = $dest;
@@ -286,16 +329,27 @@ while (true) {
     }
 
     $processed++;
+    // The job is finalized; clear the active marker so the between-jobs pace
+    // countdown isn't attributed to a now-finished row.
+    $GLOBALS['ACTIVE_JOB_ID'] = null;
     pace(); // pace between jobs too
 }
 
-flock($lock, LOCK_UN);
+write_worker_status(['phase' => 'idle']);
 fclose($lock);
 logln('Worker exit.');
 
 // ---- helpers --------------------------------------------------------------
 function pace(): void
 {
+    // Surface the deliberate delay as a countdown the queue UI can show, so the
+    // paced wait reads as "intentional", not "frozen".
+    write_worker_status([
+        'phase'   => 'waiting',
+        'job_id'  => $GLOBALS['ACTIVE_JOB_ID'] ?? null,
+        'next_at' => microtime(true) + DOWNLOAD_DELAY_SECONDS,
+        'delay'   => DOWNLOAD_DELAY_SECONDS,
+    ]);
     sleep(DOWNLOAD_DELAY_SECONDS);
 }
 

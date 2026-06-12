@@ -51,8 +51,6 @@ $badge = static function (string $s): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Queue · FarFetched</title>
-<?php $hasActive = ($counts['queued'] ?? 0) + ($counts['working'] ?? 0) > 0; ?>
-<?php if ($hasActive): ?><meta http-equiv="refresh" content="15"><?php endif; ?>
 <style>
   :root{--bg:#FAF9F5;--panel:#F0EEE6;--card:#FFFFFF;--ink:#2B2A28;--muted:#6B6862;--line:#E5E2D8;--clay:#D97757;--clay-deep:#C2613F;}
   *{box-sizing:border-box;margin:0;padding:0;}
@@ -76,6 +74,27 @@ $badge = static function (string $s): string {
   tr:last-child td{border-bottom:none;}
   .tag{display:inline-block;padding:2px 9px;border-radius:20px;color:#fff;font-size:11px;font-weight:600;text-transform:capitalize;}
   .err{color:#B23B3B;font-size:12px;} .muted{color:var(--muted);}
+  /* live progress */
+  .overall{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:20px;}
+  .overall .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;gap:12px;flex-wrap:wrap;}
+  .overall .label{font-size:14px;font-weight:600;}
+  .overall .live{font-size:13px;color:var(--clay-deep);}
+  .overall .live .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--clay);margin-right:6px;animation:pulse 1.2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.35;}50%{opacity:1;}}
+  .track{height:9px;border-radius:6px;background:var(--line);overflow:hidden;}
+  .fill{height:100%;background:linear-gradient(90deg,var(--clay),var(--clay-deep));width:0;transition:width .4s ease;}
+  .rowbar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;width:120px;margin-top:4px;}
+  .rowfill{height:100%;background:var(--clay);width:0;transition:width .25s ease;}
+  .rowfill.green{background:#3F7D5B;}
+  .pacefill{transition:width 1s linear;}
+  .rowbar.indet{position:relative;}
+  .rowbar.indet .rowfill{width:40%;transition:none;position:absolute;animation:indet 1.1s ease-in-out infinite;}
+  @keyframes indet{0%{left:-40%;}100%{left:100%;}}
+  .rowprog{font-size:11px;color:var(--muted);white-space:nowrap;}
+  .act{display:inline-flex;gap:6px;}
+  .act button{padding:5px 9px;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:7px;}
+  .act button:hover{border-color:var(--clay);color:var(--clay-deep);}
+  .act button.rm:hover{border-color:#B23B3B;color:#B23B3B;}
 </style>
 </head>
 <body>
@@ -91,6 +110,15 @@ $badge = static function (string $s): string {
   <main>
     <h1>Download Queue</h1>
     <?php if ($notice): ?><div class="notice"><?= e($notice) ?></div><?php endif; ?>
+
+    <?php $doneCount = (int)($counts['done'] ?? 0); $pct = $total > 0 ? (int)floor($doneCount / $total * 100) : 0; ?>
+    <div class="overall">
+      <div class="top">
+        <span class="label"><span id="ov-done"><?= $doneCount ?></span> of <span id="ov-total"><?= $total ?></span> done</span>
+        <span class="live" id="ov-live"></span>
+      </div>
+      <div class="track"><div class="fill" id="ov-fill" style="width:<?= $pct ?>%"></div></div>
+    </div>
 
     <div class="stats">
       <?php foreach (['queued','working','done','failed','skipped'] as $s): ?>
@@ -108,28 +136,192 @@ $badge = static function (string $s): string {
         <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
         <button class="btn-ghost" name="action" value="clear_done">Clear completed</button>
       </form>
-      <span class="muted" style="font-size:12px;">
-        <?= $hasActive ? 'Auto-refreshing every 15s while jobs are active.' : 'Idle.' ?>
-      </span>
+      <span class="muted" style="font-size:12px;">Live — updates automatically.</span>
     </div>
 
     <table>
-      <thead><tr><th>Model</th><th>Model ID</th><th>Creator</th><th>Type</th><th>Status</th><th>Attempts</th></tr></thead>
-      <tbody>
+      <thead><tr><th>Model</th><th>Model ID</th><th>Creator</th><th>Type</th><th>Status</th><th>Progress</th><th>Attempts</th><th>Actions</th></tr></thead>
+      <tbody id="qbody">
         <?php if ($rows === []): ?>
-          <tr><td colspan="6" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>
+          <tr><td colspan="8" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>
         <?php else: foreach ($rows as $r): ?>
-          <tr>
+          <tr data-job="<?= (int) $r['id'] ?>">
             <td><?= e($r['name'] !== '' ? $r['name'] : $r['model_id']) ?></td>
             <td class="muted"><?= e($r['model_id']) ?></td>
             <td class="muted"><?= e($r['creator']) ?></td>
             <td><?= e($r['file_type']) ?></td>
             <td><span class="tag" style="background:<?= $badge($r['status']) ?>"><?= e($r['status']) ?></span></td>
+            <td class="rowprog"></td>
             <td><?= (int) $r['attempts'] ?></td>
+            <td class="act">
+              <button data-act="restart" data-id="<?= (int) $r['id'] ?>">↻ Restart</button>
+              <button class="rm" data-act="delete" data-id="<?= (int) $r['id'] ?>">✕ Remove</button>
+            </td>
           </tr>
         <?php endforeach; endif; ?>
       </tbody>
     </table>
   </main>
+
+  <script>
+  (function () {
+    const CSRF = <?= json_encode($csrf) ?>;
+    const BADGE = { done:'#3F7D5B', working:'#C2613F', queued:'#6B6862', failed:'#B23B3B', skipped:'#C9912F', error:'#B23B3B' };
+    const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const fmtBytes = b => { if (!b) return ''; const u=['B','KB','MB','GB']; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+' '+u[i]; };
+    const fmtClock = s => { s=Math.max(0,s|0); const m=(s/60)|0, ss=s%60; return m+':'+String(ss).padStart(2,'0'); };
+
+    const body = document.getElementById('qbody');
+    const ovDone = document.getElementById('ov-done'), ovTotal = document.getElementById('ov-total');
+    const ovFill = document.getElementById('ov-fill'), ovLive = document.getElementById('ov-live');
+
+    let lastSig = '';            // skip DOM work when nothing changed
+    let countdown = null;        // {remaining, file} for local pace ticking
+    let active = null;
+    let jobsById = {};           // id -> job (so progress updates know row status)
+    let nextQueuedId = null;     // the job the worker will pick up next
+    let hasWorking = false;      // is any row actively being processed
+
+    function rowProgressHTML(job) {
+      if (!job || !active) return '';
+      const isWorkingRow = (job.status === 'working' && active.job_id === job.id);
+
+      if (active.phase === 'downloading' && isWorkingRow) {
+        const sized = active.total ? (fmtBytes(active.bytes) + ' / ' + fmtBytes(active.total)) : fmtBytes(active.bytes);
+        if (active.percent === null || !active.total) {
+          return '<div class="rowbar indet"><div class="rowfill green"></div></div>'
+               + '<span class="rowprog">downloading…' + (sized ? ' ' + esc(sized) : '') + '</span>';
+        }
+        return greenBar(active.percent) + '<span class="rowprog">' + active.percent + '% · ' + esc(sized) + '</span>';
+      }
+
+      if (active.phase === 'waiting') {
+        // The pacing wait, rendered as a green bar that fills as it counts down.
+        const pct = pacePct(active.remaining, active.delay);
+        if (isWorkingRow) {
+          return greenBar(pct, true) + '<span class="rowprog">next file in <span class="cd">' + fmtClock(active.remaining) + '</span></span>';
+        }
+        if (!hasWorking && job.status === 'queued' && job.id === nextQueuedId) {
+          return greenBar(pct, true) + '<span class="rowprog">starts in <span class="cd">' + fmtClock(active.remaining) + '</span></span>';
+        }
+      }
+      return '';
+    }
+
+    // A green fill bar. `pacing` tags it so the local 1s ticker can keep it moving.
+    function greenBar(pct, pacing) {
+      return '<div class="rowbar"><div class="rowfill green' + (pacing ? ' pacefill' : '') +
+             '" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></div></div>';
+    }
+    function pacePct(remaining, delay) {
+      return (delay > 0) ? (1 - remaining / delay) * 100 : 0;
+    }
+
+    function render(data) {
+      active = data.active && data.active.phase && data.active.phase !== 'idle' ? data.active : null;
+      jobsById = {};
+      data.jobs.forEach(j => { jobsById[j.id] = j; });
+      // Worker claims oldest queued first; find that next-up job for the countdown.
+      hasWorking = data.jobs.some(j => j.status === 'working');
+      nextQueuedId = null;
+      let minId = Infinity;
+      data.jobs.forEach(j => { if (j.status === 'queued' && j.id < minId) { minId = j.id; nextQueuedId = j.id; } });
+
+      // Overall bar
+      const total = data.counts.total, done = data.counts.done;
+      ovDone.textContent = done; ovTotal.textContent = total;
+      ovFill.style.width = (total > 0 ? Math.floor(done / total * 100) : 0) + '%';
+
+      // Live status line
+      if (active && active.phase === 'downloading') {
+        const sized = active.total ? (' · ' + fmtBytes(active.bytes) + ' / ' + fmtBytes(active.total)) : '';
+        ovLive.innerHTML = '<span class="dot"></span>Downloading ' + esc(active.file) +
+          (active.percent !== null ? ' — ' + active.percent + '%' : '') + sized;
+      } else if (active && active.phase === 'waiting') {
+        ovLive.innerHTML = '<span class="dot"></span>Pacing — next download in <span class="cd">' + fmtClock(active.remaining) + '</span>';
+      } else {
+        ovLive.textContent = (data.counts.by && (data.counts.by.queued || data.counts.by.working)) ? 'Worker idle — runs on the next cron tick.' : 'Idle.';
+      }
+
+      // Rows (re-render only when the row set/statuses change; progress handled separately)
+      const sig = JSON.stringify(data.jobs);
+      if (sig !== lastSig) {
+        lastSig = sig;
+        if (!data.jobs.length) {
+          body.innerHTML = '<tr><td colspan="8" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>';
+        } else {
+          body.innerHTML = data.jobs.map(j =>
+            '<tr data-job="' + j.id + '">' +
+            '<td>' + esc(j.name || j.model_id) + '</td>' +
+            '<td class="muted">' + esc(j.model_id) + '</td>' +
+            '<td class="muted">' + esc(j.creator) + '</td>' +
+            '<td>' + esc(j.file_type) + '</td>' +
+            '<td><span class="tag" style="background:' + (BADGE[j.status] || '#6B6862') + '">' + esc(j.status) + '</span></td>' +
+            '<td class="progcell">' + rowProgressHTML(j) + '</td>' +
+            '<td>' + j.attempts + '</td>' +
+            '<td class="act">' +
+              '<button data-act="restart" data-id="' + j.id + '">↻ Restart</button>' +
+              '<button class="rm" data-act="delete" data-id="' + j.id + '">✕ Remove</button>' +
+            '</td>' +
+            '</tr>'
+          ).join('');
+        }
+      } else {
+        // same rows — just refresh the active row's progress cell
+        document.querySelectorAll('#qbody tr').forEach(tr => {
+          const id = parseInt(tr.getAttribute('data-job'), 10);
+          const cell = tr.querySelector('.progcell');
+          if (cell) cell.innerHTML = rowProgressHTML(jobsById[id]);
+        });
+      }
+
+      countdown = (active && active.phase === 'waiting') ? { remaining: active.remaining, delay: active.delay || 0 } : null;
+    }
+
+    async function poll() {
+      try {
+        const r = await fetch('jobs_status.php', { cache: 'no-store' });
+        render(await r.json());
+      } catch (e) { /* transient; next tick retries */ }
+    }
+
+    // Local 1s tick: keep the countdown text AND the green pacing bar moving
+    // smoothly between server polls.
+    setInterval(() => {
+      if (!countdown) return;
+      countdown.remaining = Math.max(0, countdown.remaining - 1);
+      const txt = fmtClock(countdown.remaining);
+      const w = (countdown.delay > 0 ? (1 - countdown.remaining / countdown.delay) * 100 : 0);
+      document.querySelectorAll('.cd').forEach(el => el.textContent = txt);
+      document.querySelectorAll('.pacefill').forEach(el => el.style.width = Math.max(0, Math.min(100, w)) + '%');
+    }, 1000);
+
+    // Per-row actions (event-delegated so it survives live re-renders).
+    body.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('button[data-act]');
+      if (!btn) return;
+      const act = btn.getAttribute('data-act');
+      const id = btn.getAttribute('data-id');
+      if (act === 'delete' && !confirm('Remove this job from the queue?')) return;
+      btn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('action', act);
+        fd.append('id', id);
+        fd.append('csrf', CSRF);
+        const r = await fetch('job_action.php', { method: 'POST', body: fd });
+        const j = await r.json();
+        if (!j.ok) alert(j.msg || 'Action failed.');
+      } catch (e) {
+        alert('Action failed — reload and try again.');
+      }
+      lastSig = '';   // force a full re-render on the next poll
+      poll();
+    });
+
+    poll();
+    setInterval(poll, 1500);
+  })();
+  </script>
 </body>
 </html>

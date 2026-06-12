@@ -58,6 +58,7 @@ final class PrintablesService
     private string $refreshToken;
     public string $lastError = '';
     public ?string $lastCursor = null;
+    public int $lastTotalCount = 0;
 
     public function __construct(?string $token = null)
     {
@@ -221,28 +222,34 @@ final class PrintablesService
             $categoryId = self::CATEGORY_IDS[$categorySlug];
         }
 
-        // Verified against the live ModelList operation (cursor paging, no offset/printType).
-        $query = <<<'GQL'
-        query ModelList($limit: Int!, $cursor: String, $categoryId: ID, $ordering: String) {
-          morePrints(limit: $limit, cursor: $cursor, categoryId: $categoryId, ordering: $ordering) {
-            cursor
-            items {
-              id
-              slug
-              name
-              user { publicUsername }
-              image { filePath }
-            }
-          }
-        }
-        GQL;
+        // The list items are Print objects, so we can ask for their file sizes
+        // (stls/otherFiles -> fileSize, both confirmed-real fields). These nested
+        // fields are heavier and *might* be rejected on the list type; if so the
+        // whole query fails, so we retry WITHOUT them rather than break Browse.
+        $build = static function (string $itemFields): string {
+            return "query ModelList(\$limit: Int!, \$cursor: String, \$categoryId: ID, \$ordering: String) {
+              morePrints(limit: \$limit, cursor: \$cursor, categoryId: \$categoryId, ordering: \$ordering) {
+                cursor
+                items { $itemFields }
+              }
+            }";
+        };
+        $baseFields = 'id slug name user { publicUsername } image { filePath }';
+        $sizeFields = $baseFields . ' stls { fileSize } otherFiles { fileSize }';
 
-        $data = $this->gql($query, [
+        $vars = [
             'limit'      => max(1, min($limit, 100)),
             'cursor'     => $cursor,
             'categoryId' => $categoryId,
             'ordering'   => 'trending',
-        ]);
+        ];
+
+        // Attempt the rich (size-bearing) query first; fall back to plain on failure.
+        $data = $this->gql($build($sizeFields), $vars);
+        if ($data === null) {
+            $this->lastError = '';
+            $data = $this->gql($build($baseFields), $vars);
+        }
         if ($data === null) {
             return [];
         }
@@ -261,12 +268,106 @@ final class PrintablesService
             if ($thumb !== '' && !preg_match('#^https?://#', $thumb)) {
                 $thumb = 'https://media.printables.com/' . ltrim($thumb, '/'); // [S3] verify prefix
             }
+            // Sum file sizes when present (0 = unknown, e.g. plain-query fallback).
+            $size = 0;
+            foreach (['stls', 'otherFiles'] as $grp) {
+                if (!empty($it[$grp]) && is_array($it[$grp])) {
+                    foreach ($it[$grp] as $f) {
+                        $size += (int) ($f['fileSize'] ?? 0);
+                    }
+                }
+            }
             return [
                 'id'      => (string) ($it['id'] ?? ''),
                 'slug'    => (string) ($it['slug'] ?? ''),
                 'name'    => (string) ($it['name'] ?? 'Untitled'),
                 'creator' => (string) ($it['user']['publicUsername'] ?? 'unknown'),
                 'thumb'   => (string) $thumb,
+                'size'    => $size,
+            ];
+        }, $items);
+    }
+
+    /**
+     * Keyword search via the live SearchModels operation (searchPrints2).
+     * Offset-based paging: pass offset, walk it forward by $limit. Sets
+     * $this->lastTotalCount so callers can tell when the result set is exhausted.
+     *
+     * @param string $paid PaidEnum: 'all' | 'free' | 'paid'
+     * @return array<int,array{id:string,slug:string,name:string,creator:string,thumb:string,size:int,price:float,club:bool}>
+     */
+    public function searchByKeyword(string $query, int $limit = 36, int $offset = 0, string $paid = 'all'): array
+    {
+        $this->lastError = '';
+        $this->lastTotalCount = 0;
+        $query = trim($query);
+        if (!$this->isAuthed()) {
+            $this->lastError = 'No Printables token — set one in Settings.';
+            return [];
+        }
+        if ($query === '') {
+            return [];
+        }
+
+        // searchPrints2 items are PrintType, so file sizes (stls/otherFiles ->
+        // fileSize) may be available. Heavier, so retry without on failure.
+        $build = static function (string $itemFields): string {
+            return "query SearchModels(\$query: String!, \$limit: Int, \$cursor: Int, \$paid: PaidEnum, \$ordering: SearchChoicesEnum) {
+              result: searchPrints2(query: \$query, printType: print, limit: \$limit, offset: \$cursor, paid: \$paid, ordering: \$ordering) {
+                totalCount
+                items { $itemFields }
+              }
+            }";
+        };
+        $baseFields = 'id slug name image { filePath } user { publicUsername } price club: premium';
+        $sizeFields = $baseFields . ' stls { fileSize } otherFiles { fileSize }';
+
+        $vars = [
+            'query'    => $query,
+            'limit'    => max(1, min($limit, 100)),
+            'cursor'   => max(0, $offset),     // searchPrints2 'offset' arg
+            'paid'     => $paid,               // PaidEnum
+            'ordering' => null,                // null = Printables' default (relevance)
+        ];
+
+        $data = $this->gql($build($sizeFields), $vars);
+        if ($data === null) {
+            $this->lastError = '';
+            $data = $this->gql($build($baseFields), $vars);
+        }
+        if ($data === null) {
+            return [];
+        }
+
+        $items = $data['result']['items'] ?? null;
+        if (!is_array($items)) {
+            $this->lastError = 'Unexpected search response — verify searchPrints2 fields.';
+            return [];
+        }
+        $this->lastTotalCount = (int) ($data['result']['totalCount'] ?? 0);
+
+        return array_map(static function (array $it): array {
+            $thumb = $it['image']['filePath'] ?? '';
+            if ($thumb !== '' && !preg_match('#^https?://#', $thumb)) {
+                $thumb = 'https://media.printables.com/' . ltrim($thumb, '/');
+            }
+            $size = 0;
+            foreach (['stls', 'otherFiles'] as $grp) {
+                if (!empty($it[$grp]) && is_array($it[$grp])) {
+                    foreach ($it[$grp] as $f) {
+                        $size += (int) ($f['fileSize'] ?? 0);
+                    }
+                }
+            }
+            return [
+                'id'      => (string) ($it['id'] ?? ''),
+                'slug'    => (string) ($it['slug'] ?? ''),
+                'name'    => (string) ($it['name'] ?? 'Untitled'),
+                'creator' => (string) ($it['user']['publicUsername'] ?? 'unknown'),
+                'thumb'   => (string) $thumb,
+                'size'    => $size,
+                'price'   => (float) ($it['price'] ?? 0),
+                'club'    => (bool) ($it['club'] ?? false),
             ];
         }, $items);
     }
@@ -518,7 +619,7 @@ final class PrintablesService
      * Stream a (signed) URL to disk. Returns true on success.
      * Uses the auth header too — harmless on a presigned URL, required if not.
      */
-    public function downloadToFile(string $url, string $destPath): bool
+    public function downloadToFile(string $url, string $destPath, ?callable $onProgress = null): bool
     {
         $this->lastError = '';
         $dir = dirname($destPath);
@@ -547,6 +648,15 @@ final class PrintablesService
                 'User-Agent: ' . self::UA,
             ],
         ]);
+        // Live byte progress (used by the worker to drive the queue UI). curl
+        // calls this frequently; the callback itself throttles its writes.
+        if ($onProgress !== null) {
+            curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+            curl_setopt($ch, CURLOPT_XFERINFOFUNCTION, static function ($ch, $dlTotal, $dlNow, $ulTotal, $ulNow) use ($onProgress) {
+                $onProgress((int) $dlTotal, (int) $dlNow);
+                return 0; // returning non-zero would abort the transfer
+            });
+        }
         $ok     = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $cerr   = curl_error($ch);

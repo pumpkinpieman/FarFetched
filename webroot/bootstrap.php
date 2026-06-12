@@ -24,6 +24,7 @@ define('DB_PATH',     PRIVATE_DIR . '/fetcher.db');
 define('TOKEN_STORE', PRIVATE_DIR . '/printables_token.php');
 define('REFRESH_STORE', PRIVATE_DIR . '/printables_refresh.php');
 define('REFRESH_LOCK', PRIVATE_DIR . '/refresh.lock');
+define('WORKER_STATUS', PRIVATE_DIR . '/worker_status.json');
 define('PATH_STORE',  PRIVATE_DIR . '/download_dir.php');
 define('CONFIG_STORE', PRIVATE_DIR . '/config.php');
 define('THUMBS_DIR',  PRIVATE_DIR . '/thumbs');
@@ -353,6 +354,31 @@ function set_token(string $value): bool
     return store_write(TOKEN_STORE, $value);
 }
 
+/**
+ * Read the worker's live status JSON (download progress / pacing countdown).
+ * Returns null if missing, unreadable, or stale (worker not currently active).
+ */
+function read_worker_status(): ?array
+{
+    if (!is_file(WORKER_STATUS)) {
+        return null;
+    }
+    $raw = @file_get_contents(WORKER_STATUS);
+    if ($raw === false || $raw === '') {
+        return null;
+    }
+    $data = json_decode($raw, true);
+    if (!is_array($data)) {
+        return null;
+    }
+    // Stale guard: if the worker hasn't written in >12s it isn't actively
+    // running (between cron invocations), so report nothing live.
+    if (!isset($data['updated']) || (microtime(true) - (float) $data['updated']) > 12.0) {
+        return null;
+    }
+    return $data;
+}
+
 /** The paste-once refresh token (long-lived, rotates on every refresh). */
 function get_refresh_token(): string
 {
@@ -386,6 +412,7 @@ function cfg_defaults(): array
         'batch_cap'      => (int) (getenv('FETCHER_BATCH_CAP') ?: 2000),
         'paused'         => false,
         'keep_zip'       => true,
+        'overwrite'      => false,
     ];
 }
 
@@ -433,6 +460,9 @@ function cfg_save(array $patch): bool
     }
     if (array_key_exists('keep_zip', $patch)) {
         $current['keep_zip'] = (bool) $patch['keep_zip'];
+    }
+    if (array_key_exists('overwrite', $patch)) {
+        $current['overwrite'] = (bool) $patch['overwrite'];
     }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
