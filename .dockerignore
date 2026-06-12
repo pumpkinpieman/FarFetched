@@ -1,0 +1,9 @@
+# Keep the build context lean and secret-free.
+private/
+.git/
+.gitignore
+*.log
+*.db
+*.db-wal
+*.db-shm
+.DS_Store

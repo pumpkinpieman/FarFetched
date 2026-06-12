@@ -1,0 +1,19 @@
+# FarFetched — webroot protection (Apache 2.4)
+
+# Never serve the CLI worker over HTTP (it also self-guards on PHP_SAPI).
+<Files "worker.php">
+    Require all denied
+</Files>
+
+# Never serve the SQLite db or its WAL/SHM sidecars if they ever land here.
+<FilesMatch "\.(db|db-wal|db-shm|sqlite)$">
+    Require all denied
+</FilesMatch>
+
+# Block dotfiles (.htaccess itself, editor swap files, etc.)
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# No directory listings.
+Options -Indexes

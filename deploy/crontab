@@ -1,0 +1,6 @@
+# FarFetched — container crontab (installed for www-data).
+# Sources the env file written by entrypoint.sh so the worker sees
+# FETCHER_DOWNLOAD_DIR / FETCHER_DOWNLOAD_DELAY. Worker self-locks against
+# overlap and self-paces, so a 5-minute trigger is just a heartbeat.
+
+*/5 * * * * . /etc/fetcher.env; /usr/local/bin/php /var/www/html/webroot/worker.php >> /var/www/html/private/worker.log 2>&1
