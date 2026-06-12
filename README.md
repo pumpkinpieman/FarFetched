@@ -200,8 +200,3 @@ amber/not-writable, ensure the Apache/PHP process user can write there
 - Pace: `DOWNLOAD_DELAY_SECONDS` in `bootstrap.php` (default 120).
 - Retry cap: `MAX_ATTEMPTS` in `worker.php` (default 3).
 - Batch cap: 2000 models per submit (`enqueue.php`).
-
-## Confidence
-
-~99% on the local app (UI, DB, queue, worker, pacing, Apache/vhost, security).
-~70% on the live API calls until the `verify.php` seams are confirmed.
