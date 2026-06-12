@@ -135,6 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'max_attempts'   => (int) ($_POST['max_attempts'] ?? 3),
             'batch_cap'      => (int) ($_POST['batch_cap'] ?? 2000),
             'keep_zip'       => isset($_POST['keep_zip']),
+            'overwrite'      => isset($_POST['overwrite']),
         ]);
         $notice = $ok
             ? ['type' => 'ok', 'text' => 'Worker settings saved — applied on the next worker run.']
@@ -325,6 +326,12 @@ $csrf = csrf_token();
           Keep .zip files after extracting (whole-model downloads)
         </label>
         <p class="hint">When a model is downloaded as a ZIP, it's extracted into the model folder. Leave checked to keep the original .zip too; uncheck to delete it after extraction.</p>
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" name="overwrite" value="1" <?= cfg('overwrite') === true ? 'checked' : '' ?> style="width:auto;">
+          Force re-download (overwrite existing files)
+        </label>
+        <p class="hint">By default, a file already on disk is skipped — re-running a job won't re-download it. Turn this on to overwrite existing files instead. Useful if a download was corrupted or the source model was updated. Leave off to save bandwidth and respect pacing.</p>
 
         <div class="row"><button class="btn-primary" name="action" value="save_config">Save Worker Settings</button></div>
       </form>

@@ -21,7 +21,7 @@ fights, no `nobody:users` permission dance.
 
 ```bash
 # 1. clone
-git clone https://github.com/pumpkinpieman/farfetched.git
+git clone https://github.com/<you>/farfetched.git
 cd farfetched
 
 # 2. point the downloads volume at a real host folder
@@ -74,7 +74,7 @@ Before you push:
 ```bash
 git init && git add . && git commit -m "Initial commit: FarFetched"
 git branch -M main
-git remote add origin https://github.com/pumpkinpieman/farfetched.git
+git remote add origin https://github.com/<you>/farfetched.git
 git push -u origin main
 ```
 
