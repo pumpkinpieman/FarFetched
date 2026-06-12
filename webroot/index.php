@@ -73,7 +73,7 @@ $csrf = csrf_token();
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;cursor:pointer;}
   nav a:hover{background:#E8E5DA;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
   main{flex:1;padding:28px 32px;}
-  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:16px;flex-wrap:wrap;}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);padding:14px 0 12px;margin-bottom:10px;box-shadow:0 6px 14px -10px rgba(0,0,0,.18);}
   h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;}
   .actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
   .selcount{font-size:13px;color:var(--muted);}
