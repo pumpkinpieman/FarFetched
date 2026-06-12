@@ -1,8 +1,8 @@
 services:
   fetcher:
     build: .
-    image: printables-fetcher:latest
-    container_name: printables-fetcher
+    image: farfetched:latest
+    container_name: farfetched
     restart: unless-stopped
     ports:
       - "8088:80"          # browse at http://localhost:8088/
