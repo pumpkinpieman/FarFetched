@@ -165,7 +165,7 @@ $csrf = csrf_token();
     <div class="navlabel">MakerWorld Categories</div>
     <nav>
       <?php foreach (MW_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
-        <a href="<?= $cid === '' ? 'index.php?src=makerworld&browse=all' : '?src=makerworld&mwcat=' . e($cid) ?>"
+        <a href="<?= $cid === '' ? '?src=makerworld&browse=all' : '?src=makerworld&mwcat=' . e($cid) ?>"
            class="<?= ($mwBrowse && $cid === $mwCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
@@ -201,7 +201,7 @@ $csrf = csrf_token();
       <div class="actions">
         <div class="srcToggle" role="group" aria-label="Model source">
           <a href="?cat=<?= e($active) ?>&type=<?= e($fileType) ?>" class="srcBtn <?= $source==='printables'?'active':'' ?>">Printables</a>
-          <a href="src=makerworld&browse=all" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
+          <a href="?src=makerworld&browse=all" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
@@ -210,7 +210,10 @@ $csrf = csrf_token();
           <option value="PACK" <?= $fileType==='PACK'?'selected':'' ?>>Whole model (ZIP)</option>
         </select>
         <?php else: ?>
-        <span class="ftype-fixed" title="MakerWorld downloads are always the whole-model ZIP">Whole model (ZIP)</span>
+        <select id="fileType" onchange="location.href='?src=makerworld&browse=all&type='+this.value">
+          <option value="STL" <?= $fileType==='STL'?'selected':'' ?>>STL</option>
+          <option value="3MF" <?= $fileType==='3MF'?'selected':'' ?>>3MF</option>
+        </select>
         <?php endif; ?>
         <span class="selcount" id="selcount">0 selected</span>
         <button class="btn-ghost" id="selectAll">Select all on page</button>
@@ -491,8 +494,7 @@ $csrf = csrf_token();
   }
   function clearSearch() {
     if (SOURCE === 'makerworld') {
-      // No category browse for MakerWorld — just reset to the empty prompt.
-      location.href = '?src=makerworld';
+      location.href = '?src=makerworld&browse=all';
       return;
     }
     // Return to the category browse the page loaded with.
