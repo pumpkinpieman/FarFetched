@@ -165,7 +165,7 @@ $csrf = csrf_token();
     <div class="navlabel">MakerWorld Categories</div>
     <nav>
       <?php foreach (MW_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
-        <a href="<?= $cid === '' ? '?src=makerworld&browse=all' : '?src=makerworld&mwcat=' . e($cid) ?>"
+        <a href="<?= $cid === '' ? 'index.php?src=makerworld&browse=all' : '?src=makerworld&mwcat=' . e($cid) ?>"
            class="<?= ($mwBrowse && $cid === $mwCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>

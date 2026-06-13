@@ -19,7 +19,7 @@ foreach ($sources as $s) {
 // each linking to its own Browse view. Other discovered folders show as library.
 $fetchSources = [
     'printables' => ['label' => 'Printables', 'desc' => 'Browse & download free models from printables.com',     'href' => 'index.php'],
-    'makerworld' => ['label' => 'MakerWorld', 'desc' => 'Browse & download whole-model ZIPs from makerworld.com', 'href' => 'index.php?src=makerworld'],
+    'makerworld' => ['label' => 'MakerWorld', 'desc' => 'Browse & download whole-model ZIPs from makerworld.com', 'href' => 'index.php?src=makerworld&browse=all'],
 ];
 
 // Library labels for known non-fetch folders.
