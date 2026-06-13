@@ -77,8 +77,30 @@ if ($ws !== null) {
     }
 }
 
+// Estimated time to drain the queue at the configured pace. Each queued job
+// incurs one pace gap for its source; transfer time is unpredictable so it's
+// excluded (and labelled as such in the UI).
+$pbDelay = defined('DOWNLOAD_DELAY_SECONDS')   ? (int) DOWNLOAD_DELAY_SECONDS   : 45;
+$mwDelay = defined('MAKERWORLD_DELAY_SECONDS') ? (int) MAKERWORLD_DELAY_SECONDS : $pbDelay;
+$eta = 0;
+try {
+    foreach ($pdo->query("SELECT source, COUNT(*) c FROM download_jobs WHERE status='queued' GROUP BY source") as $r) {
+        $d = ((string) ($r['source'] ?? '') === 'makerworld') ? $mwDelay : $pbDelay;
+        $eta += (int) $r['c'] * $d;
+    }
+} catch (\Throwable $e) {
+    // pre-migration row without source column — fall back to a flat estimate
+    $eta = (int) ($by['queued'] ?? 0) * $pbDelay;
+}
+if ($active && ($active['phase'] ?? '') === 'waiting') {
+    $eta += (int) ($active['remaining'] ?? 0);
+}
+
 echo json_encode([
-    'counts' => ['total' => $total, 'done' => $done, 'by' => $by],
-    'active' => $active,
-    'jobs'   => $jobs,
+    'counts'      => ['total' => $total, 'done' => $done, 'by' => $by],
+    'active'      => $active,
+    'jobs'        => $jobs,
+    'feed'        => worker_feed_tail(20),
+    'eta_seconds' => $eta,
+    'pace'        => ['printables' => $pbDelay, 'makerworld' => $mwDelay],
 ]);

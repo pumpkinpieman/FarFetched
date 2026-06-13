@@ -38,6 +38,7 @@ const MAX_RUN_SECONDS = 6 * 3600; // safety ceiling per invocation
 function logln(string $m): void
 {
     fwrite(STDOUT, '[' . date('Y-m-d H:i:s') . '] ' . $m . "\n");
+    worker_feed_append($m); // mirror to the UI activity feed (chef's pass)
 }
 
 /** Log a line to stdout AND the curated event log the UI surfaces. */

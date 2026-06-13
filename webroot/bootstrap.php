@@ -657,6 +657,37 @@ function ff_log_tail(int $lines = 50): array
     return array_slice($all, -max(1, $lines));
 }
 
+// ---- Worker activity feed ("chef's pass") --------------------------------
+// The verbose, human-readable narration the worker emits as it runs (job start,
+// saved/extracted, pacing, re-mints, skips). Distinct from the cron stdout
+// redirect (worker.log) and the curated error log — this one the UI owns, so
+// the Queue's activity strip always has data regardless of cron configuration.
+define('WORKER_FEED', PRIVATE_DIR . '/worker-feed.log');
+
+function worker_feed_append(string $msg): void
+{
+    $line = '[' . date('H:i:s') . '] ' . str_replace(["\r", "\n"], ' ', $msg) . "\n";
+    if (is_file(WORKER_FEED) && (int) @filesize(WORKER_FEED) > 256 * 1024) {
+        @rename(WORKER_FEED, WORKER_FEED . '.1'); // single-generation rotation
+    }
+    @file_put_contents(WORKER_FEED, $line, FILE_APPEND | LOCK_EX);
+}
+
+/** Last $lines feed entries, oldest-first. */
+function worker_feed_tail(int $lines = 20): array
+{
+    foreach ([WORKER_FEED, WORKER_FEED . '.1'] as $f) {
+        // Prefer the live file; fall back to the rotated one if live is empty.
+        if (is_file($f)) {
+            $all = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+            if ($all) {
+                return array_slice($all, -max(1, $lines));
+            }
+        }
+    }
+    return [];
+}
+
 // ---- Token expiry (read the JWT's own exp claim) --------------------------
 /**
  * Decode a JWT payload (the middle segment) without verifying the signature —

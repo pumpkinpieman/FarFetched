@@ -161,6 +161,15 @@ $badge = static function (string $s): string {
         <?php endforeach; endif; ?>
       </tbody>
     </table>
+
+    <!-- Chef's pass: passive, read-only worker activity feed. -->
+    <section id="chefpass" style="margin-top:22px;border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);">
+        <strong style="font-size:13px;letter-spacing:.02em;">Worker activity</strong>
+        <span id="cp-summary" style="font-size:12px;color:var(--muted);"></span>
+      </div>
+      <pre id="cp-log" style="margin:0;padding:12px 16px;max-height:220px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;color:var(--ink);white-space:pre-wrap;word-break:break-word;">Waiting for worker activity…</pre>
+    </section>
   </main>
 
   <script>
@@ -276,6 +285,31 @@ $badge = static function (string $s): string {
       }
 
       countdown = (active && active.phase === 'waiting') ? { remaining: active.remaining, delay: active.delay || 0 } : null;
+
+      renderChefPass(data);
+    }
+
+    function renderChefPass(data) {
+      const log = document.getElementById('cp-log');
+      const sum = document.getElementById('cp-summary');
+      if (log) {
+        const lines = Array.isArray(data.feed) ? data.feed : [];
+        if (lines.length) {
+          const stick = (log.scrollTop + log.clientHeight >= log.scrollHeight - 24); // autoscroll only if near bottom
+          log.textContent = lines.join('\n');
+          if (stick) log.scrollTop = log.scrollHeight;
+        }
+      }
+      if (sum) {
+        const by = data.counts.by || {};
+        const q = by.queued || 0, w = by.working || 0;
+        const parts = [];
+        parts.push(q + ' queued' + (w ? ' · ' + w + ' working' : ''));
+        if (data.eta_seconds > 0) parts.push('~' + fmtClock(data.eta_seconds) + ' to drain');
+        if (data.pace) parts.push('pace ' + data.pace.makerworld + 's MW / ' + data.pace.printables + 's PB');
+        parts.push('transfer time excluded');
+        sum.textContent = parts.join('  ·  ');
+      }
     }
 
     async function poll() {
