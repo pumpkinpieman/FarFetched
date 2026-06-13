@@ -30,9 +30,11 @@ if (!in_array($source, ['printables', 'makerworld'], true)) {
 }
 $showNsfw = ($_GET['nsfw'] ?? '') === '1';
 $mwCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['mwcat'] ?? '')) ?? '';
+$mwBrowse = ($_GET['browse'] ?? '') === '1';
 
-// A keyword is required, EXCEPT for MakerWorld category browse (keyword empty + category).
-if ($q === '' && !($source === 'makerworld' && $mwCat !== '')) {
+// A keyword is required, EXCEPT for MakerWorld browse (All Models / category),
+// where an empty keyword returns MakerWorld's popular list.
+if ($q === '' && !($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))) {
     echo json_encode(['ok' => false, 'error' => 'Empty search.']);
     exit;
 }

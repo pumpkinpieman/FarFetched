@@ -78,9 +78,16 @@ if ($source === 'makerworld') {
     $models        = [];
     $initialCursor = null;
     $mwReady       = (string) cfg('makerworld_token') !== '';
-    $banner        = $mwReady
-        ? 'MakerWorld — type a keyword above to search. Whole-model ZIPs download with your saved token.'
-        : 'MakerWorld — search works now; add your MakerWorld token in Settings to download.';
+    // While browsing a category/All Models the grid populates via JS, so the
+    // "type a keyword" prompt would be misleading — only show it on the bare
+    // MakerWorld landing (no browse intent).
+    if ($mwBrowse) {
+        $banner = null;
+    } else {
+        $banner = $mwReady
+            ? 'MakerWorld — pick a category on the left, or type a keyword above to search.'
+            : 'MakerWorld — search & browse work now; add your MakerWorld token in Settings to download.';
+    }
 } else {
     $svc    = new PrintablesService();
     $models = $svc->isAuthed() ? $svc->searchModels($active) : [];
@@ -319,6 +326,13 @@ $csrf = csrf_token();
   const MW_CAT = <?= json_encode($mwCat) ?>;
   const MW_BROWSE = <?= json_encode($mwBrowse) ?>;
   let mwCatActive = '';    // current MakerWorld category id while browsing
+  // Interim category browse: keyword term per category (true taxonomy filtering
+  // needs the confirmed category param — see notes). All Models = empty = popular.
+  const MW_TERMS = {
+    '900':'3d printer','100':'art','500':'education','200':'fashion',
+    '300':'hobby','400':'household','600':'miniature','1000':'cosplay',
+    '700':'tool','800':'toys games','2000':'generative'
+  };
 
   function hasMore() { return mode === 'search' ? (searchNext !== null) : !!nextCursor; }
 
@@ -332,7 +346,8 @@ $csrf = csrf_token();
         ? 'search_more.php?q=' + encodeURIComponent(searchQuery) +
           '&offset=' + encodeURIComponent(searchNext) + '&paid=all' +
           '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
-          (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '')
+          (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
+          (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '')
         : 'browse_more.php?cat=' + encodeURIComponent(ACTIVE_CAT) +
           '&cursor=' + encodeURIComponent(nextCursor || '');
       const res = await fetch(url);
@@ -389,16 +404,18 @@ $csrf = csrf_token();
     await loadMore(); // fetches offset 0
   }
 
-  // MakerWorld category browse: keyword-less, filtered by category id.
+  // MakerWorld category browse. All Models (no id) = popular browse (empty
+  // keyword). A category = keyword search of its term (reliable + differentiated).
   async function browseCategory(catId, label) {
-    mwCatActive = catId || '';
+    mwCatActive = '';
     mode = 'search';             // reuses the offset-paged search pipeline
-    searchQuery = '';
+    searchQuery = catId ? (MW_TERMS[catId] || (label || '')) : '';
     searchNext = 0;
     nextCursor = null;
     grid.innerHTML = '';
     if (loadMoreBtn) loadMoreBtn.style.display = 'none';
     if (pageTitle) pageTitle.textContent = label || 'All Models';
+    if (searchClear) searchClear.style.display = 'inline-block';
     refresh();
     await loadMore();
   }
