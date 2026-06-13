@@ -136,10 +136,10 @@ $csrf = csrf_token();
   .pastebar-row input{flex:1;padding:9px 12px;border:1px solid var(--line,#E5E2D8);border-radius:8px;font:inherit;font-size:14px;}
   .pastebar-status{font-size:13px;color:var(--muted,#6B6862);margin-top:8px;min-height:18px;}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;position:relative;transition:border-color .15s,box-shadow .15s;cursor:pointer;user-select:none;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:visible;position:relative;transition:border-color .15s,box-shadow .15s;cursor:pointer;user-select:none;}
   .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.25);}
-  .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;}
-  .thumb img{width:100%;height:100%;object-fit:cover;}
+  .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;border-radius:14px 14px 0 0;overflow:hidden;}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
   .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
   .msize{font-size:11px;color:var(--clay-deep);font-weight:600;margin-top:5px;} .msize:empty{display:none;}
   .searchbar{display:flex;gap:8px;margin-bottom:18px;align-items:center;}
@@ -153,7 +153,7 @@ $csrf = csrf_token();
   .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.15);}
   .badge{position:absolute;top:10px;right:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#fff;}
   .badge.paid{background:#C9912F;} .badge.club{background:#6E59C2;}
-  .pick{position:absolute;top:10px;left:10px;width:22px;height:22px;cursor:pointer;accent-color:var(--clay);}
+  .pick{position:absolute;top:10px;left:10px;width:22px;height:22px;cursor:pointer;accent-color:var(--clay);z-index:4;}
   @media (max-width:640px){aside{width:170px;}main{padding:20px 16px;}}
 </style>
 </head>
@@ -163,9 +163,9 @@ $csrf = csrf_token();
 
     <?php if ($source === 'makerworld'): ?>
     <div class="navlabel">MakerWorld Categories</div>
-    <nav>
+    <nav id="mwCatNav">
       <?php foreach (MW_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
-        <a href="<?= $cid === '' ? '?src=makerworld&browse=all' : '?src=makerworld&mwcat=' . e($cid) ?>"
+        <a href="#" data-mwcat="<?= e($cid) ?>" data-mwlabel="<?= e($label) ?>"
            class="<?= ($mwBrowse && $cid === $mwCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
@@ -547,6 +547,19 @@ $csrf = csrf_token();
   if (SOURCE === 'makerworld' && MW_BROWSE) {
     const lbl = (document.querySelector('aside nav a.active') || {}).textContent || 'All Models';
     browseCategory(MW_CAT, lbl);
+  }
+
+  // MW category nav — intercept clicks so the page never reloads (preserves selStore).
+  const mwCatNav = document.getElementById('mwCatNav');
+  if (mwCatNav) {
+    mwCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-mwlabel]');
+      if (!link) return;
+      e.preventDefault();
+      mwCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browseCategory(link.dataset.mwcat, link.dataset.mwlabel);
+    });
   }
 
   if (grid) grid.addEventListener('change', e => {
