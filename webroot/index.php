@@ -298,22 +298,81 @@ $csrf = csrf_token();
     card.className = 'card';
     card.dataset.id = m.id; card.dataset.slug = m.slug;
     card.dataset.name = m.name; card.dataset.creator = m.creator;
-    const thumb = m.thumb
-      ? '<img src="'+encodeURI(m.thumb)+'" alt="" loading="lazy">'
+
+    // Gallery: prefer images[]; fall back to the single thumb. Slider arrows show
+    // on hover only when there's more than one image.
+    const imgs = (Array.isArray(m.images) && m.images.length)
+      ? m.images
+      : (m.thumb ? [m.thumb] : []);
+    const multi = imgs.length > 1;
+
+    const thumb = imgs.length
+      ? '<img class="thumb-img" src="'+encodeURI(imgs[0])+'" alt="" loading="lazy">'
       : '<span>no preview</span>';
+
     // Badge paid/club models so you know which may not be fetchable.
     let badge = '';
     if (m.club) badge = '<span class="badge club">Club</span>';
     else if (m.price > 0) badge = '<span class="badge paid">Paid</span>';
+
     // textContent-safe insertion for name/creator
     card.innerHTML =
       '<input type="checkbox" class="pick" aria-label="Select model">' +
-      '<div class="thumb">'+thumb+'</div>' + badge +
+      '<div class="thumb" style="position:relative;">'+thumb+'</div>' + badge +
       '<div class="meta"><div class="mname"></div><div class="mcreator"></div><div class="msize"></div></div>';
     card.querySelector('.mname').textContent = m.name;
     card.querySelector('.mcreator').textContent = 'by ' + m.creator;
     card.querySelector('.msize').textContent = m.size ? fmtBytes(m.size) : '';
+
+    if (multi) attachSlider(card, imgs);
     return card;
+  }
+
+  // Hover image slider. Arrows appear only on mouse hover; navigating swaps the
+  // <img> src (lazy — neighbor images are fetched on first hover, not upfront).
+  function attachSlider(card, imgs){
+    const wrap = card.querySelector('.thumb');
+    const img  = card.querySelector('.thumb-img');
+    if (!wrap || !img) return;
+    let idx = 0, preloaded = false;
+
+    const arrowCss =
+      'position:absolute;top:50%;transform:translateY(-50%);width:28px;height:28px;' +
+      'border:none;border-radius:50%;background:rgba(0,0,0,.45);color:#fff;font-size:16px;' +
+      'line-height:1;cursor:pointer;display:none;z-index:2;padding:0;';
+    const prev = document.createElement('button');
+    const next = document.createElement('button');
+    prev.type = next.type = 'button';
+    prev.setAttribute('aria-label','Previous image');
+    next.setAttribute('aria-label','Next image');
+    prev.textContent = '\u2039'; next.textContent = '\u203a';
+    prev.style.cssText = arrowCss + 'left:6px;';
+    next.style.cssText = arrowCss + 'right:6px;';
+
+    function show(i){
+      idx = (i + imgs.length) % imgs.length;
+      img.src = encodeURI(imgs[idx]);
+    }
+    function nav(delta, ev){
+      ev.preventDefault(); ev.stopPropagation();
+      show(idx + delta);
+    }
+    prev.addEventListener('click', (e)=>nav(-1, e));
+    next.addEventListener('click', (e)=>nav( 1, e));
+
+    card.addEventListener('mouseenter', ()=>{
+      prev.style.display = next.style.display = 'block';
+      if (!preloaded){               // lazy: fetch the rest only on first hover
+        preloaded = true;
+        for (let i = 1; i < imgs.length; i++){ const p = new Image(); p.src = encodeURI(imgs[i]); }
+      }
+    });
+    card.addEventListener('mouseleave', ()=>{
+      prev.style.display = next.style.display = 'none';
+    });
+
+    wrap.appendChild(prev);
+    wrap.appendChild(next);
   }
   function fmtBytes(b){ if(!b) return ''; const u=['B','KB','MB','GB']; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return (i===0?Math.round(n):n.toFixed(1))+' '+u[i]; }
 

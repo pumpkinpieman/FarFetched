@@ -121,12 +121,43 @@ final class MakerWorldService
                 $size = $this->sumModelFiles($hit['designExtension']['model_files']);
             }
 
+            // Gallery images for the hover slider. design_pictures[0] is the cover,
+            // so the slider opens on the same image as the static thumb. Each URL is
+            // forced through the OSS transform to a small webp — this also collapses
+            // multi-MB animated GIFs to a light static frame, keeping the grid cheap.
+            $images = [];
+            $cover  = (string) ($hit['cover'] ?? '');
+            if (isset($hit['designExtension']['design_pictures']) && is_array($hit['designExtension']['design_pictures'])) {
+                foreach ($hit['designExtension']['design_pictures'] as $pic) {
+                    if (!is_array($pic)) {
+                        continue;
+                    }
+                    $u = (string) ($pic['url'] ?? '');
+                    if ($u === '') {
+                        continue;
+                    }
+                    $u = $this->thumbTransform($u);
+                    if (!in_array($u, $images, true)) {
+                        $images[] = $u;
+                    }
+                    if (count($images) >= 8) { // cap gallery size
+                        break;
+                    }
+                }
+            }
+            $thumb = $cover !== '' ? $this->thumbTransform($cover) : '';
+            if ($thumb !== '' && (empty($images) || $images[0] !== $thumb)) {
+                array_unshift($images, $thumb);
+                $images = array_slice(array_values(array_unique($images)), 0, 8);
+            }
+
             $out[] = [
                 'id'      => (string) ($hit['id'] ?? ''),
                 'slug'    => (string) ($hit['slug'] ?? ''),
                 'name'    => (string) ($hit['title'] ?? ''),
                 'creator' => $creator,
-                'thumb'   => (string) ($hit['cover'] ?? ''),
+                'thumb'   => $thumb,
+                'images'  => $images,
                 'size'    => $size,
                 'nsfw'    => $nsfw,
                 'source'  => 'makerworld',
@@ -354,6 +385,20 @@ final class MakerWorldService
             return null;
         }
         return $json;
+    }
+
+    /**
+     * Force a bblmw CDN image URL through the OSS resize/format transform so the
+     * grid loads small static webp thumbnails instead of full-size (and sometimes
+     * multi-MB animated GIF) originals. Any pre-existing query is replaced.
+     */
+    private function thumbTransform(string $url, int $width = 800): string
+    {
+        if ($url === '' || !preg_match('~^https://makerworld\.bblmw\.com/~', $url)) {
+            return $url; // leave non-CDN urls untouched
+        }
+        $base = explode('?', $url, 2)[0];
+        return $base . '?x-oss-process=image/resize,w_' . $width . '/format,webp';
     }
 
     /** Recursively sum modelSize across files + nested dir children. */
