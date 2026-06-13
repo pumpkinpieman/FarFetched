@@ -100,7 +100,7 @@ echo json_encode([
     'counts'      => ['total' => $total, 'done' => $done, 'by' => $by],
     'active'      => $active,
     'jobs'        => $jobs,
-    'feed'        => worker_feed_tail(20),
+    'feed'        => worker_feed_tail(200),
     'eta_seconds' => $eta,
     'pace'        => ['printables' => $pbDelay, 'makerworld' => $mwDelay],
 ]);

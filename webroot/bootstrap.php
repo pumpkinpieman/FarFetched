@@ -658,34 +658,46 @@ function ff_log_tail(int $lines = 50): array
 }
 
 // ---- Worker activity feed ("chef's pass") --------------------------------
-// The verbose, human-readable narration the worker emits as it runs (job start,
-// saved/extracted, pacing, re-mints, skips). Distinct from the cron stdout
-// redirect (worker.log) and the curated error log — this one the UI owns, so
-// the Queue's activity strip always has data regardless of cron configuration.
-define('WORKER_FEED', PRIVATE_DIR . '/worker-feed.log');
+// The Queue page's activity strip mirrors the worker's raw stdout verbatim —
+// the same lines you'd see from `docker exec … worker.php`. Cron redirects that
+// stdout to private/worker.log, so we simply tail it. No separate writer needed.
+define('WORKER_LOG', PRIVATE_DIR . '/worker.log');
 
-function worker_feed_append(string $msg): void
+/** Last $lines of the raw worker stdout log, oldest-first. */
+function worker_feed_tail(int $lines = 200): array
 {
-    $line = '[' . date('H:i:s') . '] ' . str_replace(["\r", "\n"], ' ', $msg) . "\n";
-    if (is_file(WORKER_FEED) && (int) @filesize(WORKER_FEED) > 256 * 1024) {
-        @rename(WORKER_FEED, WORKER_FEED . '.1'); // single-generation rotation
+    if (!is_file(WORKER_LOG)) {
+        return [];
     }
-    @file_put_contents(WORKER_FEED, $line, FILE_APPEND | LOCK_EX);
+    // Read only the tail of the file so a large log doesn't cost a full read.
+    $all = ff_tail_file(WORKER_LOG, $lines);
+    return $all;
 }
 
-/** Last $lines feed entries, oldest-first. */
-function worker_feed_tail(int $lines = 20): array
+/**
+ * Efficiently read approximately the last $lines lines of a (possibly large)
+ * file by seeking from the end in chunks. Returns lines oldest-first.
+ */
+function ff_tail_file(string $path, int $lines): array
 {
-    foreach ([WORKER_FEED, WORKER_FEED . '.1'] as $f) {
-        // Prefer the live file; fall back to the rotated one if live is empty.
-        if (is_file($f)) {
-            $all = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-            if ($all) {
-                return array_slice($all, -max(1, $lines));
-            }
-        }
+    $f = @fopen($path, 'rb');
+    if (!$f) {
+        return [];
     }
-    return [];
+    $buffer = '';
+    $chunk  = 8192;
+    $pos    = fstat($f)['size'] ?? 0;
+    $found  = 0;
+    while ($pos > 0 && $found <= $lines) {
+        $read = (int) min($chunk, $pos);
+        $pos -= $read;
+        fseek($f, $pos, SEEK_SET);
+        $buffer = fread($f, $read) . $buffer;
+        $found  = substr_count($buffer, "\n");
+    }
+    fclose($f);
+    $rows = preg_split('/\r?\n/', rtrim($buffer, "\r\n")) ?: [];
+    return array_slice($rows, -max(1, $lines));
 }
 
 // ---- Token expiry (read the JWT's own exp claim) --------------------------
