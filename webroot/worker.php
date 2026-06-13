@@ -440,14 +440,25 @@ function pace(?int $delay = null): void
 {
     $delay = $delay ?? DOWNLOAD_DELAY_SECONDS;
     // Surface the deliberate delay as a countdown the queue UI can show, so the
-    // paced wait reads as "intentional", not "frozen".
-    write_worker_status([
-        'phase'   => 'waiting',
-        'job_id'  => $GLOBALS['ACTIVE_JOB_ID'] ?? null,
-        'next_at' => microtime(true) + $delay,
-        'delay'   => $delay,
-    ]);
-    sleep($delay);
+    // paced wait reads as "intentional", not "frozen". The worker status has a
+    // staleness guard (read_worker_status), so we must refresh the heartbeat
+    // throughout the wait — a single write + one long sleep would go "stale"
+    // partway through and make the countdown bar disappear before it hits 0:00.
+    $nextAt = microtime(true) + $delay;
+    $beat   = 5; // seconds per heartbeat; comfortably under the 12s stale cutoff
+    do {
+        write_worker_status([
+            'phase'   => 'waiting',
+            'job_id'  => $GLOBALS['ACTIVE_JOB_ID'] ?? null,
+            'next_at' => $nextAt,
+            'delay'   => $delay,
+        ]);
+        $left = $nextAt - microtime(true);
+        if ($left <= 0) {
+            break;
+        }
+        sleep((int) min($beat, ceil($left)));
+    } while (microtime(true) < $nextAt);
 }
 
 /** Make a filesystem-safe path segment (no traversal, no separators). */
