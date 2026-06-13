@@ -373,6 +373,22 @@ $csrf = csrf_token();
       if (loadMoreBtn) loadMoreBtn.disabled = false;
     }
     loading = false;
+
+    // IntersectionObserver only fires on a not-visible→visible transition. When
+    // a page of results doesn't push the sentinel back out of view (e.g. 20 tall
+    // cards still inside the 600px prefetch zone), that transition never happens
+    // and auto-load stalls. Keep loading while the sentinel stays in range.
+    if (hasMore() && sentinelInView()) {
+      requestAnimationFrame(loadMore);
+    }
+  }
+
+  function sentinelInView() {
+    const s = document.getElementById('scrollSentinel');
+    if (!s) return false;
+    const r = s.getBoundingClientRect();
+    // Within the viewport plus the same 600px prefetch margin the observer uses.
+    return r.top <= (window.innerHeight || document.documentElement.clientHeight) + 600;
   }
 
   // Kick off a keyword search (or clear back to category browse if empty).
