@@ -114,7 +114,7 @@ $csrf = csrf_token();
   :root{--bg:#FAF9F5;--panel:#F0EEE6;--card:#FFFFFF;--ink:#2B2A28;--muted:#6B6862;--line:#E5E2D8;--clay:#D97757;--clay-deep:#C2613F;}
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh;}
-  aside{width:240px;background:var(--panel);border-right:1px solid var(--line);padding:24px 16px;flex-shrink:0;}
+  aside{width:240px;background:var(--panel);border-right:1px solid var(--line);padding:24px 16px;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto;}
   .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 16px;letter-spacing:-0.3px;}
   .navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#A9A496;padding:12px 12px 6px;}
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;cursor:pointer;}
@@ -292,8 +292,28 @@ $csrf = csrf_token();
   const loadMoreBtn = document.getElementById('loadMore');
   const loadStatus = document.getElementById('loadStatus');
 
-  const selectedCards = () => grid ? [...grid.querySelectorAll('.card.sel')] : [];
-  function refresh(){ const n = selectedCards().length; if (countEl) countEl.textContent = n+' selected'; if (dlBtn) dlBtn.disabled = n===0; }
+  // ---- Cross-category persistent selection store -----------------------------
+  // Keyed by model id (string). Value = {id, slug, name, creator}.
+  // Survives grid resets when browsing/searching between categories.
+  const selStore = new Map();
+  function selSet(id, data) { selStore.set(String(id), data); }
+  function selDel(id)       { selStore.delete(String(id)); }
+  function selHas(id)       { return selStore.has(String(id)); }
+
+  function refresh(){
+    const n = selStore.size;
+    if (countEl) countEl.textContent = n + ' selected';
+    if (dlBtn) dlBtn.disabled = n === 0;
+    // Re-sync visible card highlight to store (handles grid repaints).
+    if (grid) {
+      grid.querySelectorAll('.card').forEach(c => {
+        const inStore = selHas(c.dataset.id);
+        c.classList.toggle('sel', inStore);
+        const box = c.querySelector('.pick');
+        if (box) box.checked = inStore;
+      });
+    }
+  }
 
   // Build a card DOM node from a model object (same markup as the PHP render).
   function makeCard(m){
@@ -301,6 +321,8 @@ $csrf = csrf_token();
     card.className = 'card';
     card.dataset.id = m.id; card.dataset.slug = m.slug;
     card.dataset.name = m.name; card.dataset.creator = m.creator;
+    // Restore selection highlight if already in the store.
+    if (selHas(m.id)) card.classList.add('sel');
 
     // Gallery: prefer images[]; fall back to the single thumb. Slider arrows show
     // on hover only when there's more than one image.
@@ -320,7 +342,7 @@ $csrf = csrf_token();
 
     // textContent-safe insertion for name/creator
     card.innerHTML =
-      '<input type="checkbox" class="pick" aria-label="Select model">' +
+      '<input type="checkbox" class="pick" aria-label="Select model"' + (selHas(m.id) ? ' checked' : '') + '>' +
       '<div class="thumb" style="position:relative;">'+thumb+'</div>' + badge +
       '<div class="meta"><div class="mname"></div><div class="mcreator"></div><div class="msize"></div></div>';
     card.querySelector('.mname').textContent = m.name;
@@ -529,7 +551,10 @@ $csrf = csrf_token();
 
   if (grid) grid.addEventListener('change', e => {
     if (!e.target.classList.contains('pick')) return;
-    e.target.closest('.card').classList.toggle('sel', e.target.checked);
+    const card = e.target.closest('.card');
+    if (e.target.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator});
+    else selDel(card.dataset.id);
+    card.classList.toggle('sel', e.target.checked);
     refresh();
   });
 
@@ -541,19 +566,25 @@ $csrf = csrf_token();
     if (!card) return;
     const box = card.querySelector('.pick');
     box.checked = !box.checked;
+    if (box.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator});
+    else selDel(card.dataset.id);
     card.classList.toggle('sel', box.checked);
     refresh();
   });
   if (selAllBtn) selAllBtn.addEventListener('click', () => {
-    const boxes = grid.querySelectorAll('.pick');
-    const on = [...boxes].some(b => !b.checked);
-    boxes.forEach(b => { b.checked = on; b.closest('.card').classList.toggle('sel', on); });
+    const cards = grid ? [...grid.querySelectorAll('.card')] : [];
+    const on = cards.some(c => !selHas(c.dataset.id));
+    cards.forEach(c => {
+      if (on) selSet(c.dataset.id, {id:c.dataset.id,slug:c.dataset.slug,name:c.dataset.name,creator:c.dataset.creator});
+      else selDel(c.dataset.id);
+      c.classList.toggle('sel', on);
+      const box = c.querySelector('.pick');
+      if (box) box.checked = on;
+    });
     refresh();
   });
   if (dlBtn) dlBtn.addEventListener('click', async () => {
-    const models = selectedCards().map(c => ({
-      id: c.dataset.id, slug: c.dataset.slug, name: c.dataset.name, creator: c.dataset.creator
-    }));
+    const models = [...selStore.values()];
     if (!models.length) return;
     dlBtn.disabled = true; dlBtn.textContent = 'Queuing…';
     try {
@@ -563,6 +594,7 @@ $csrf = csrf_token();
       });
       const data = await res.json();
       if (data.ok) {
+        selStore.clear();
         window.location.href = 'jobs.php';
       } else {
         alert('Queue failed: ' + (data.error || 'unknown'));
