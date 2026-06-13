@@ -326,13 +326,6 @@ $csrf = csrf_token();
   const MW_CAT = <?= json_encode($mwCat) ?>;
   const MW_BROWSE = <?= json_encode($mwBrowse) ?>;
   let mwCatActive = '';    // current MakerWorld category id while browsing
-  // Interim category browse: keyword term per category (true taxonomy filtering
-  // needs the confirmed category param — see notes). All Models = empty = popular.
-  const MW_TERMS = {
-    '900':'3d printer','100':'art','500':'education','200':'fashion',
-    '300':'hobby','400':'household','600':'miniature','1000':'cosplay',
-    '700':'tool','800':'toys games','2000':'generative'
-  };
 
   function hasMore() { return mode === 'search' ? (searchNext !== null) : !!nextCursor; }
 
@@ -406,10 +399,12 @@ $csrf = csrf_token();
 
   // MakerWorld category browse. All Models (no id) = popular browse (empty
   // keyword). A category = keyword search of its term (reliable + differentiated).
+  // MakerWorld category browse: true taxonomy filter via the category id
+  // (passed as mwcat → ?categories={id}). All Models (no id) = popular browse.
   async function browseCategory(catId, label) {
-    mwCatActive = '';
+    mwCatActive = catId || '';
     mode = 'search';             // reuses the offset-paged search pipeline
-    searchQuery = catId ? (MW_TERMS[catId] || (label || '')) : '';
+    searchQuery = '';
     searchNext = 0;
     nextCursor = null;
     grid.innerHTML = '';

@@ -59,20 +59,28 @@ final class MakerWorldService
         $this->lastError = '';
         $this->lastTotalCount = 0;
 
-        $params = [
-            'keyword'         => $query,
-            'limit'           => max(1, $limit),
-            'offset'          => max(0, $offset),
-            'orderBy'         => 'score',
-            'designType'      => 0,
-            'isFromSearchList'=> 'false',
-        ];
-        // Category browse: MakerWorld's category ids (e.g. 900=3D Printer). Best
-        // effort on the stable endpoint; if the backend ignores it, results are
-        // simply unfiltered rather than broken.
         $categoryId = preg_replace('/[^0-9]/', '', $categoryId);
-        if ($categoryId !== '') {
-            $params['categoryId'] = $categoryId;
+        $isBrowse   = ($categoryId !== '' || $query === '');
+
+        $params = [
+            'keyword'    => $query,
+            'limit'      => max(1, $limit),
+            'offset'     => max(0, $offset),
+            // Browsing (category / All Models) ranks by hotScore like MakerWorld's
+            // own category pages; keyword search ranks by relevance (score).
+            'orderBy'    => $isBrowse ? 'hotScore' : 'score',
+            'designType' => 0,
+        ];
+        if ($isBrowse) {
+            // Confirmed category filter: ?categories={numericId} (bare id, plural key).
+            // Empty = All Models (popular browse). entrance=list matches the site.
+            if ($categoryId !== '') {
+                $params['categories'] = $categoryId;
+            }
+            $params['designCreateSince'] = 0;
+            $params['entrance']          = 'list';
+        } else {
+            $params['isFromSearchList'] = 'false';
         }
         $json = $this->apiGet(self::API . '/search-service/select/design2?' . http_build_query($params));
         if ($json === null) {
