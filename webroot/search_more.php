@@ -49,9 +49,12 @@ if ($source === 'makerworld') {
         exit;
     }
     $total      = $mw->lastTotalCount;
-    // NSFW filtering can shrink a page below `limit`, so base "has more" on the
-    // requested window vs total rather than the returned count.
-    $nextOffset = (($offset + $limit) < $total) ? $offset + $limit : null;
+    // "Has more" is driven by page fullness: a full page of raw hits means another
+    // page likely exists. This works even when `total` is 0/absent (All Models /
+    // popular feed). If `total` IS known, also stop once we've passed it.
+    $gotFullPage = ($mw->lastPageHitCount >= $limit);
+    $withinTotal = ($total <= 0) || (($offset + $limit) < $total);
+    $nextOffset  = ($gotFullPage && $withinTotal) ? $offset + $limit : null;
     echo json_encode([
         'ok'         => true,
         'models'     => $models,

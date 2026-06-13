@@ -30,6 +30,8 @@ final class MakerWorldService
 
     public string $lastError      = '';
     public int    $lastTotalCount = 0;
+    /** Raw hit count of the most recent search page (before NSFW filtering). */
+    public int    $lastPageHitCount = 0;
     /** Raw body of the most recent API call — surfaced for debugging empty parses. */
     public string $lastRaw        = '';
 
@@ -58,6 +60,7 @@ final class MakerWorldService
     {
         $this->lastError = '';
         $this->lastTotalCount = 0;
+        $this->lastPageHitCount = 0;
 
         $categoryId = preg_replace('/[^0-9]/', '', $categoryId);
         $isBrowse   = ($categoryId !== '' || $query === '');
@@ -94,6 +97,9 @@ final class MakerWorldService
             $this->lastError = 'Unexpected search response (no hits array).';
             return [];
         }
+        // Raw hit count BEFORE NSFW filtering — drives pagination independently of
+        // `total` (MakerWorld's popular/All-Models feed often returns total=0).
+        $this->lastPageHitCount = count($hits);
 
         $out = [];
         foreach ($hits as $hit) {
