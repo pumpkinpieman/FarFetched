@@ -10,10 +10,14 @@ DOWNLOAD_DIR="${FETCHER_DOWNLOAD_DIR:-/downloads}"
 
 # Ensure the persistent dirs exist and are owned by the web/cron user.
 mkdir -p "$PRIVATE_DIR" "$DOWNLOAD_DIR"
+# Per-source subfolders so each shows up on the home page from first boot
+# (these map onto the host via the /downloads bind mount).
+mkdir -p "$DOWNLOAD_DIR/printables" "$DOWNLOAD_DIR/makerworld"
 chown -R www-data:www-data "$PRIVATE_DIR" || true
 # Downloads may be a host bind-mount with foreign ownership; try, don't fail.
 chown -R www-data:www-data "$DOWNLOAD_DIR" 2>/dev/null || true
 chmod 0775 "$DOWNLOAD_DIR" 2>/dev/null || true
+chmod 0775 "$DOWNLOAD_DIR/printables" "$DOWNLOAD_DIR/makerworld" 2>/dev/null || true
 
 # cron needs the env vars too (cron strips the container environment),
 # so persist the ones the worker reads into a file the crontab sources.

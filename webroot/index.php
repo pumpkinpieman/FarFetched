@@ -28,6 +28,22 @@ const CATEGORIES = [
     'world-scans' => 'World & Scans',
 ];
 
+// MakerWorld categories (id => label). Ids drive the category browse filter.
+const MW_CATEGORIES = [
+    ''     => 'All Models',
+    '900'  => '3D Printer',
+    '100'  => 'Art',
+    '500'  => 'Education',
+    '200'  => 'Fashion',
+    '300'  => 'Hobby & DIY',
+    '400'  => 'Household',
+    '600'  => 'Miniatures',
+    '1000' => 'Props & Cosplays',
+    '700'  => 'Tools',
+    '800'  => 'Toys & Games',
+    '2000' => 'Generative 3D Model',
+];
+
 $active = $_GET['cat'] ?? 'all';
 $isRawId = false;
 if (!array_key_exists($active, CATEGORIES)) {
@@ -43,16 +59,40 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
     $fileType = 'STL';
 }
 
-$svc    = new PrintablesService();
-$models = $svc->isAuthed() ? $svc->searchModels($active) : [];
-$initialCursor = $svc->lastCursor; // for "Load more"
-$banner = null;
-if (!$svc->isAuthed()) {
-    $banner = 'No Printables token yet — add one in Settings to load real models.';
-} elseif ($svc->lastError !== '') {
-    $banner = $svc->lastError;
-} elseif ($models === []) {
-    $banner = 'No models returned. If you just wired the API, verify the search query against your Network tab.';
+$source = strtolower($_GET['src'] ?? 'printables');
+if (!in_array($source, ['printables', 'makerworld'], true)) {
+    $source = 'printables';
+}
+
+// MakerWorld category browse state.
+$mwCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['mwcat'] ?? '')) ?? '';
+$mwBrowse = $source === 'makerworld' && (isset($_GET['mwcat']) || isset($_GET['browse']));
+if (!array_key_exists($mwCat, MW_CATEGORIES)) {
+    $mwCat = '';
+}
+
+if ($source === 'makerworld') {
+    // MakerWorld is search-only (no category browse). Start with an empty grid
+    // and prompt the user to search. Downloads need a token; search does not.
+    $svc           = null;
+    $models        = [];
+    $initialCursor = null;
+    $mwReady       = (string) cfg('makerworld_token') !== '';
+    $banner        = $mwReady
+        ? 'MakerWorld — type a keyword above to search. Whole-model ZIPs download with your saved token.'
+        : 'MakerWorld — search works now; add your MakerWorld token in Settings to download.';
+} else {
+    $svc    = new PrintablesService();
+    $models = $svc->isAuthed() ? $svc->searchModels($active) : [];
+    $initialCursor = $svc->lastCursor; // for "Load more"
+    $banner = null;
+    if (!$svc->isAuthed()) {
+        $banner = 'No Printables token yet — add one in Settings to load real models.';
+    } elseif ($svc->lastError !== '') {
+        $banner = $svc->lastError;
+    } elseif ($models === []) {
+        $banner = 'No models returned. If you just wired the API, verify the search query against your Network tab.';
+    }
 }
 
 $csrf = csrf_token();
@@ -95,7 +135,13 @@ $csrf = csrf_token();
   .thumb img{width:100%;height:100%;object-fit:cover;}
   .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
   .msize{font-size:11px;color:var(--clay-deep);font-weight:600;margin-top:5px;} .msize:empty{display:none;}
-  .searchbar{display:flex;gap:8px;margin-bottom:18px;}
+  .searchbar{display:flex;gap:8px;margin-bottom:18px;align-items:center;}
+  .srcToggle{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;}
+  .srcBtn{padding:7px 12px;font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;background:var(--card);}
+  .srcBtn+.srcBtn{border-left:1px solid var(--line);}
+  .srcBtn.active{background:var(--clay);color:#fff;}
+  .ftype-fixed{font-size:13px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--card);}
+  .nsfwToggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap;cursor:pointer;}
   .searchbar input{flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:15px;background:var(--card);color:var(--ink);}
   .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.15);}
   .badge{position:absolute;top:10px;right:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#fff;}
@@ -108,6 +154,15 @@ $csrf = csrf_token();
   <aside>
     <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
 
+    <?php if ($source === 'makerworld'): ?>
+    <div class="navlabel">MakerWorld Categories</div>
+    <nav>
+      <?php foreach (MW_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
+        <a href="<?= $cid === '' ? '?src=makerworld&browse=all' : '?src=makerworld&mwcat=' . e($cid) ?>"
+           class="<?= ($mwBrowse && $cid === $mwCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+      <?php endforeach; ?>
+    </nav>
+    <?php else: ?>
     <div class="navlabel">Category ID</div>
     <form method="get" style="padding:0 8px 6px;">
       <input type="hidden" name="type" value="<?= e($fileType) ?>">
@@ -123,6 +178,7 @@ $csrf = csrf_token();
         <a href="?cat=<?= e($slug) ?>&type=<?= e($fileType) ?>" class="<?= $slug === $active ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
+    <?php endif; ?>
     <div class="navlabel">Tool</div>
     <nav>
       <a href="home.php">← Sources</a>
@@ -136,11 +192,19 @@ $csrf = csrf_token();
     <div class="topbar">
       <h1 id="pageTitle"><?= e($title) ?></h1>
       <div class="actions">
+        <div class="srcToggle" role="group" aria-label="Model source">
+          <a href="?cat=<?= e($active) ?>&type=<?= e($fileType) ?>" class="srcBtn <?= $source==='printables'?'active':'' ?>">Printables</a>
+          <a href="?src=makerworld" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
+        </div>
+        <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
           <option value="STL" <?= $fileType==='STL'?'selected':'' ?>>STL</option>
           <option value="3MF" <?= $fileType==='3MF'?'selected':'' ?>>3MF</option>
           <option value="PACK" <?= $fileType==='PACK'?'selected':'' ?>>Whole model (ZIP)</option>
         </select>
+        <?php else: ?>
+        <span class="ftype-fixed" title="MakerWorld downloads are always the whole-model ZIP">Whole model (ZIP)</span>
+        <?php endif; ?>
         <span class="selcount" id="selcount">0 selected</span>
         <button class="btn-ghost" id="selectAll">Select all on page</button>
         <button class="btn-primary" id="download" disabled>Download Selected</button>
@@ -148,13 +212,19 @@ $csrf = csrf_token();
     </div>
 
     <div class="searchbar">
-      <input type="search" id="searchInput" placeholder="Search all of Printables — e.g. belt sander, toothpick, sanding block…" autocomplete="off">
+      <input type="search" id="searchInput" placeholder="<?= $source==='makerworld'
+        ? 'Search all of MakerWorld — e.g. airless ball, gridfinity, phone stand…'
+        : 'Search all of Printables — e.g. belt sander, toothpick, sanding block…' ?>" autocomplete="off">
       <button class="btn-primary" id="searchGo">Search</button>
       <button class="btn-ghost" id="searchClear" style="display:none;">Clear</button>
+      <?php if ($source === 'makerworld'): ?>
+      <label class="nsfwToggle" title="MakerWorld hosts adult content; off by default"><input type="checkbox" id="nsfwToggle"> Show NSFW</label>
+      <?php endif; ?>
     </div>
 
     <?php if ($banner): ?><div class="banner"><?= e($banner) ?></div><?php endif; ?>
 
+    <?php if ($source === 'printables'): ?>
     <div class="pastebar">
       <div class="pastebar-label">No token? Paste a Printables model URL or ID — downloads the whole model as a ZIP (no login needed):</div>
       <div class="pastebar-row">
@@ -163,6 +233,7 @@ $csrf = csrf_token();
       </div>
       <div class="pastebar-status" id="pasteStatus"></div>
     </div>
+    <?php endif; ?>
 
     <div class="grid" id="grid">
       <?php foreach ($models as $m): ?>
@@ -192,7 +263,17 @@ $csrf = csrf_token();
 <script>
   const CSRF = <?= json_encode($csrf) ?>;
   const FILE_TYPE = <?= json_encode($fileType) ?>;
+  const SOURCE = <?= json_encode($source) ?>;
   const ACTIVE_CAT = <?= json_encode($active) ?>;
+  const nsfwEl = document.getElementById('nsfwToggle');
+  const showNsfw = () => (nsfwEl && nsfwEl.checked) ? '1' : '0';
+
+  // Instant visual switch on the source toggle (the link then reloads the page,
+  // which re-renders the authoritative active state server-side).
+  document.querySelectorAll('.srcBtn').forEach(b => b.addEventListener('click', function () {
+    document.querySelectorAll('.srcBtn').forEach(x => x.classList.remove('active'));
+    this.classList.add('active');
+  }));
   let nextCursor = <?= json_encode($initialCursor) ?>;
   const grid = document.getElementById('grid');
   const countEl = document.getElementById('selcount');
@@ -235,6 +316,9 @@ $csrf = csrf_token();
   let mode = 'browse';
   let searchQuery = '';
   let searchNext = null;   // next offset to fetch, or null when exhausted
+  const MW_CAT = <?= json_encode($mwCat) ?>;
+  const MW_BROWSE = <?= json_encode($mwBrowse) ?>;
+  let mwCatActive = '';    // current MakerWorld category id while browsing
 
   function hasMore() { return mode === 'search' ? (searchNext !== null) : !!nextCursor; }
 
@@ -246,7 +330,9 @@ $csrf = csrf_token();
     try {
       const url = (mode === 'search')
         ? 'search_more.php?q=' + encodeURIComponent(searchQuery) +
-          '&offset=' + encodeURIComponent(searchNext) + '&paid=all'
+          '&offset=' + encodeURIComponent(searchNext) + '&paid=all' +
+          '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
+          (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '')
         : 'browse_more.php?cat=' + encodeURIComponent(ACTIVE_CAT) +
           '&cursor=' + encodeURIComponent(nextCursor || '');
       const res = await fetch(url);
@@ -290,6 +376,7 @@ $csrf = csrf_token();
   async function runSearch() {
     const q = (searchInput.value || '').trim();
     if (!q) { clearSearch(); return; }
+    mwCatActive = '';            // a keyword search clears any category filter
     mode = 'search';
     searchQuery = q;
     searchNext = 0;
@@ -301,13 +388,34 @@ $csrf = csrf_token();
     refresh();
     await loadMore(); // fetches offset 0
   }
+
+  // MakerWorld category browse: keyword-less, filtered by category id.
+  async function browseCategory(catId, label) {
+    mwCatActive = catId || '';
+    mode = 'search';             // reuses the offset-paged search pipeline
+    searchQuery = '';
+    searchNext = 0;
+    nextCursor = null;
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'All Models';
+    refresh();
+    await loadMore();
+  }
   function clearSearch() {
+    if (SOURCE === 'makerworld') {
+      // No category browse for MakerWorld — just reset to the empty prompt.
+      location.href = '?src=makerworld';
+      return;
+    }
     // Return to the category browse the page loaded with.
     location.href = '?cat=' + encodeURIComponent(ACTIVE_CAT) + '&type=' + encodeURIComponent(FILE_TYPE);
   }
   if (searchGo) searchGo.addEventListener('click', runSearch);
   if (searchClear) searchClear.addEventListener('click', clearSearch);
   if (searchInput) searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+  // Re-run the current search when the NSFW filter is toggled.
+  if (nsfwEl) nsfwEl.addEventListener('change', () => { if (searchQuery) runSearch(); });
 
   // Infinite scroll: auto-load when the sentinel near the page bottom appears.
   const sentinel = document.getElementById('scrollSentinel');
@@ -323,6 +431,12 @@ $csrf = csrf_token();
   }
   // Button still works as a manual fallback if present.
   if (loadMoreBtn) loadMoreBtn.addEventListener('click', loadMore);
+
+  // MakerWorld: if the page loaded via a category link, browse it immediately.
+  if (SOURCE === 'makerworld' && MW_BROWSE) {
+    const lbl = (document.querySelector('aside nav a.active') || {}).textContent || 'All Models';
+    browseCategory(MW_CAT, lbl);
+  }
 
   if (grid) grid.addEventListener('change', e => {
     if (!e.target.classList.contains('pick')) return;
@@ -356,7 +470,7 @@ $csrf = csrf_token();
     try {
       const res = await fetch('enqueue.php', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ csrf: CSRF, fileType: FILE_TYPE, models })
+        body: JSON.stringify({ csrf: CSRF, fileType: FILE_TYPE, source: SOURCE, models })
       });
       const data = await res.json();
       if (data.ok) {

@@ -126,6 +126,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (is_file($f)) { @unlink($f); }
         }
         $notice = ['type' => 'ok', 'text' => 'Tokens cleared.'];
+    } elseif ($action === 'save_mw_token') {
+        // MakerWorld auth is a single opaque `token` cookie value (not a JWT).
+        $tok = trim((string) ($_POST['mw_token'] ?? ''));
+        $tok = preg_replace('/^token=/', '', $tok) ?? $tok; // tolerate cookie-pair paste
+        if ($tok === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your MakerWorld token first.'];
+        } else {
+            $ok = cfg_save(['makerworld_token' => $tok]);
+            $notice = $ok
+                ? ['type' => 'ok', 'text' => 'MakerWorld token saved. It authorizes downloads until it expires — re-paste a fresh one if MakerWorld jobs start failing with an auth error.']
+                : ['type' => 'err', 'text' => 'Could not write config (check private/ permissions).'];
+        }
+    } elseif ($action === 'clear_mw_token') {
+        cfg_save(['makerworld_token' => '']);
+        $notice = ['type' => 'ok', 'text' => 'MakerWorld token cleared.'];
+    } elseif ($action === 'save_mw_dir') {
+        $path = trim((string) ($_POST['mw_dir'] ?? ''));
+        if ($path === '' || $path[0] !== '/') {
+            $validation = ['ok' => false, 'msg' => 'MakerWorld location: use an absolute path (starts with "/").'];
+        } elseif (strpos($path, "\0") !== false || preg_match('#(^|/)\.\.(/|$)#', $path)) {
+            $validation = ['ok' => false, 'msg' => 'MakerWorld location: path contains illegal segments.'];
+        } elseif (!is_dir($path) && !@mkdir($path, 0775, true) && !is_dir($path)) {
+            $validation = ['ok' => false, 'msg' => 'MakerWorld location not found and could not be created — check that the parent share is mounted and writable.'];
+        } elseif (!is_writable($path)) {
+            $validation = ['ok' => false, 'msg' => 'MakerWorld location exists but is not writable by the web user.'];
+        } else {
+            $real = realpath($path) ?: $path;
+            cfg_save(['makerworld_download_dir' => $real]);
+            $validation = ['ok' => true, 'msg' => 'MakerWorld download location set: ' . $real];
+        }
+    } elseif ($action === 'save_mw_delay') {
+        $d = (int) ($_POST['mw_delay'] ?? 45);
+        cfg_save(['makerworld_delay' => $d]);
+        $eff = (int) cfg('makerworld_delay');
+        $warn = $eff < 45 ? ' ⚠ Below 45s MakerWorld may trigger its "are you a robot?" check and block downloads.' : '';
+        $notice = ['type' => $eff < 45 ? 'err' : 'ok', 'text' => 'MakerWorld pacing set to ' . $eff . 's.' . $warn];
     } elseif ($action === 'save_dir') {
         $r = apply_download_dir((string) ($_POST['dir'] ?? ''));
         $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
@@ -178,11 +214,14 @@ $csrf = csrf_token();
   .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 20px;letter-spacing:-0.3px;}
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;}
   nav a:hover{background:#E8E5DA;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
-  main{flex:1;padding:28px 32px;max-width:720px;}
+  main{flex:1;padding:28px 32px;max-width:1060px;}
   h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;margin-bottom:6px;}
   h2{font-size:15px;font-weight:600;margin-bottom:14px;}
   .sub{color:var(--muted);font-size:14px;margin-bottom:24px;line-height:1.5;}
   .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:18px;}
+  .panel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start;}
+  .panel-grid .panel{margin-bottom:0;}
+  @media (max-width:900px){.panel-grid{grid-template-columns:1fr;}}
   .status{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:500;margin-bottom:16px;}
   .dot{width:10px;height:10px;border-radius:50%;} .dot.on{background:var(--ok);} .dot.off{background:#C9C4B6;} .dot.warn{background:#C9912F;}
   label{display:block;font-size:13px;font-weight:600;margin-bottom:6px;}
@@ -215,6 +254,7 @@ $csrf = csrf_token();
     <?php if ($notice): ?><div class="notice <?= $notice['type']==='ok'?'ok':'err' ?>"><?= e($notice['text']) ?></div><?php endif; ?>
     <?php if ($validation): ?><div class="notice <?= $validation['ok']?'ok':'err' ?>"><?= e($validation['msg']) ?></div><?php endif; ?>
 
+    <div class="panel-grid">
     <div class="panel">
       <h2>Printables Authentication</h2>
       <?php
@@ -266,6 +306,64 @@ $csrf = csrf_token();
         <textarea id="refresh_token" name="refresh_token" placeholder="eyJ… (auth.refresh_token — or auth.access_token if your account has no refresh token)"></textarea>
         <div class="row"><button class="btn-primary" name="action" value="save_refresh">Save &amp; Connect</button></div>
         <p class="hint">printables.com → DevTools → <strong>Application/Storage</strong> → Cookies → <code>printables.com</code>. Best: copy <code>auth.refresh_token</code> (self-renews, re-paste ~monthly). If your account doesn't have one (some SSO logins), copy <code>auth.access_token</code> instead — it works for about 2 hours, then paste a fresh one. The app auto-detects which you pasted.</p>
+      </form>
+    </div>
+
+    <?php
+      $mwTok    = (string) cfg('makerworld_token');
+      $mwHas    = $mwTok !== '';
+      $mwMasked = $mwHas ? substr($mwTok, 0, 6) . str_repeat('•', 14) . substr($mwTok, -4) : '';
+    ?>
+    <div class="panel">
+      <h2>MakerWorld Authentication</h2>
+      <div class="status"><span class="dot <?= $mwHas ? 'on' : 'off' ?>"></span><?= $mwHas
+        ? 'Token stored — authorizes MakerWorld downloads'
+        : 'Not connected — paste your MakerWorld token below' ?></div>
+      <?php if ($mwHas): ?>
+        <div class="status" style="font-size:13px;color:var(--muted);margin-top:-8px;"><span class="dot on"></span>Stored: <code><?= e($mwMasked) ?></code></div>
+        <form method="post" class="row">
+          <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+          <button class="btn-ghost" name="action" value="clear_mw_token" onclick="return confirm('Remove the stored MakerWorld token?');">Clear</button>
+        </form>
+        <hr>
+      <?php endif; ?>
+      <form method="post">
+        <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+        <label for="mw_token"><?= $mwHas ? 'Replace token' : 'Paste token' ?></label>
+        <textarea id="mw_token" name="mw_token" placeholder="AQAD… (the makerworld.com `token` cookie value)"></textarea>
+        <div class="row"><button class="btn-primary" name="action" value="save_mw_token">Save &amp; Connect</button></div>
+        <p class="hint">makerworld.com (logged in) → DevTools → <strong>Application/Storage</strong> → Cookies → <code>makerworld.com</code> → copy the value of the <code>token</code> cookie. Search works without it, but downloading requires it. Unlike Printables it won't self-renew, so if MakerWorld jobs start failing with an auth error, paste a fresh one.</p>
+      </form>
+    </div>
+
+    <?php
+      $mwDir       = get_makerworld_dir();
+      $mwDirIsSet  = (string) cfg('makerworld_download_dir') !== '';
+      $mwDirWrite  = is_dir($mwDir) && is_writable($mwDir);
+      $mwDelay     = (int) cfg('makerworld_delay');
+    ?>
+    <div class="panel">
+      <h2>MakerWorld Downloads</h2>
+      <div class="status">
+        <span class="dot <?= $mwDirWrite ? 'on' : ($mwDirIsSet ? 'warn' : 'off') ?>"></span>
+        <?php if ($mwDirWrite): ?>Ready &mdash; <?= e($mwDir) ?>
+        <?php elseif (is_dir($mwDir)): ?>Exists but not writable &mdash; <?= e($mwDir) ?>
+        <?php else: ?>Not found / not mounted &mdash; will be created on save: <?= e($mwDir) ?><?php endif; ?>
+      </div>
+      <form method="post">
+        <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+        <label for="mw_dir">MakerWorld download location</label>
+        <input type="text" id="mw_dir" name="mw_dir" value="<?= e($mwDir) ?>">
+        <div class="row"><button class="btn-primary" name="action" value="save_mw_dir">Save &amp; Create</button></div>
+        <p class="hint">Defaults to <code><?= e(MAKERWORLD_DOWNLOAD_DIR) ?></code> (a sibling of the Printables folder so each source stays separate). Created automatically if missing; saving verifies the path is mounted and writable first.</p>
+      </form>
+      <hr>
+      <form method="post">
+        <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+        <label for="mw_delay">Seconds between MakerWorld downloads</label>
+        <input type="text" id="mw_delay" name="mw_delay" inputmode="numeric" pattern="[0-9]*" value="<?= e((string) $mwDelay) ?>">
+        <div class="row"><button class="btn-primary" name="action" value="save_mw_delay">Save Pacing</button></div>
+        <p class="hint">MakerWorld paces <strong>separately</strong> from Printables. <strong>Keep this at 45s or higher</strong> — testing shows 45s avoids MakerWorld's anti-bot verification. Going below 45s risks HTTP 418 "confirm you are not a robot" responses that block downloads until the rate drops.</p>
       </form>
     </div>
 
@@ -345,6 +443,7 @@ $csrf = csrf_token();
         <p class="hint">Pausing keeps the queue intact; the worker simply skips runs until you resume. Changes apply on the worker’s next cron tick.</p>
       </form>
     </div>
+    </div><!-- /.panel-grid -->
   </main>
 </body>
 </html>

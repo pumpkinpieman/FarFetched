@@ -78,6 +78,7 @@ foreach ($sources as $s) {
     <nav>
       <a href="home.php">← Sources</a>
       <a href="index.php">Printables</a>
+      <a href="index.php?src=makerworld">MakerWorld</a>
       <a href="jobs.php">Queue</a>
       <a href="viewer.php" class="active">3D Viewer</a>
       <a href="settings.php">Settings</a>
@@ -93,8 +94,11 @@ foreach ($sources as $s) {
         <label for="src">Source</label>
         <select id="src">
           <option value="">— select —</option>
-          <?php foreach (array_keys($map) as $slug): ?>
-            <option value="<?= e($slug) ?>"><?= e(ucfirst($slug)) ?></option>
+          <?php
+            $srcLabels = ['makerworld' => 'MakerWorld', 'printables' => 'Printables', 'stlflix' => 'STLFlix'];
+            foreach (array_keys($map) as $slug):
+          ?>
+            <option value="<?= e($slug) ?>"><?= e($srcLabels[$slug] ?? ucfirst($slug)) ?></option>
           <?php endforeach; ?>
         </select>
       </div>

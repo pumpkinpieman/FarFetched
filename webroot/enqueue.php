@@ -52,6 +52,17 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
     $fileType = 'STL';
 }
 
+// Source selector. MakerWorld is always a whole-model ZIP, which the worker
+// treats as PACK-equivalent — normalize its file_type so the unique key and
+// the queue UI stay consistent.
+$source = strtolower(trim((string) ($in['source'] ?? 'printables')));
+if (!in_array($source, ['printables', 'makerworld'], true)) {
+    $source = 'printables';
+}
+if ($source === 'makerworld') {
+    $fileType = 'PACK';
+}
+
 $models = $in['models'] ?? null;
 if (!is_array($models) || $models === []) {
     fail('No models selected.');
@@ -63,8 +74,8 @@ if (count($models) > $batchCap) {
 
 $pdo = db();
 $stmt = $pdo->prepare(
-    'INSERT OR IGNORE INTO download_jobs (model_id, slug, name, creator, file_type, status)
-     VALUES (:model_id, :slug, :name, :creator, :file_type, "queued")'
+    'INSERT OR IGNORE INTO download_jobs (source, model_id, slug, name, creator, file_type, status)
+     VALUES (:source, :model_id, :slug, :name, :creator, :file_type, "queued")'
 );
 
 $queued = 0;
@@ -79,6 +90,7 @@ try {
             continue;
         }
         $stmt->execute([
+            ':source'    => $source,
             ':model_id'  => $id,
             ':slug'      => substr((string) ($m['slug'] ?? ''), 0, 200),
             ':name'      => substr((string) ($m['name'] ?? ''), 0, 300),

@@ -1,6 +1,30 @@
 <?php
 declare(strict_types=1);
 
+// ---- Render safety net ----------------------------------------------------
+// A partial deploy (some files updated, others stale) can fatal mid-render and
+// leave a blank page that's hard to diagnose. Convert that into a visible,
+// logged, non-leaky message for any page that includes bootstrap.
+register_shutdown_function(static function (): void {
+    $e = error_get_last();
+    if ($e === null || !in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        return;
+    }
+    error_log('[FarFetched] fatal: ' . $e['message'] . ' in ' . $e['file'] . ':' . $e['line']);
+    if (PHP_SAPI === 'cli') {
+        return;
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+    }
+    echo '<div style="margin:24px;padding:16px 18px;border:1px solid #C2613F;border-radius:10px;'
+       . 'background:#F6E7E7;color:#7A2E2E;font:14px ui-sans-serif,system-ui,sans-serif;line-height:1.5;">'
+       . '<strong>FarFetched hit a server error rendering this page.</strong><br>'
+       . 'This is almost always a partial deploy &mdash; some files updated while others stayed stale. '
+       . 'Re-deploy the <em>complete</em> <code>webroot/</code> as one set and rebuild the container, then hard-refresh. '
+       . 'The specific error has been written to the PHP/container log.</div>';
+});
+
 /**
  * bootstrap.php — shared foundation for every entry point.
  *
@@ -38,6 +62,9 @@ define('THUMBS_DIR',  PRIVATE_DIR . '/thumbs');
 // 'printables' subfolder so every source lives side by side.
 define('MODELS_ROOT', getenv('FETCHER_DOWNLOAD_DIR') ?: '/mnt/user/Downloads/models');
 define('DEFAULT_DOWNLOAD_DIR', rtrim(MODELS_ROOT, '/') . '/printables');
+// MakerWorld saves into its own sibling folder so each source lives side by side
+// (printables/, makerworld/, …) and shows up independently on the home page.
+define('MAKERWORLD_DOWNLOAD_DIR', rtrim(MODELS_ROOT, '/') . '/makerworld');
 
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
@@ -413,6 +440,10 @@ function cfg_defaults(): array
         'paused'         => false,
         'keep_zip'       => true,
         'overwrite'      => false,
+        'makerworld_token'        => (string) (getenv('FETCHER_MAKERWORLD_TOKEN') ?: ''),
+        'makerworld_refresh_token'=> '',
+        'makerworld_download_dir' => '',
+        'makerworld_delay'        => (int) (getenv('FETCHER_MAKERWORLD_DELAY') ?: 45),
     ];
 }
 
@@ -464,6 +495,20 @@ function cfg_save(array $patch): bool
     if (array_key_exists('overwrite', $patch)) {
         $current['overwrite'] = (bool) $patch['overwrite'];
     }
+    if (array_key_exists('makerworld_token', $patch)) {
+        // Opaque cookie value; trim only. Empty string clears it.
+        $current['makerworld_token'] = trim((string) $patch['makerworld_token']);
+    }
+    if (array_key_exists('makerworld_refresh_token', $patch)) {
+        $current['makerworld_refresh_token'] = trim((string) $patch['makerworld_refresh_token']);
+    }
+    if (array_key_exists('makerworld_download_dir', $patch)) {
+        $current['makerworld_download_dir'] = trim((string) $patch['makerworld_download_dir']);
+    }
+    if (isset($patch['makerworld_delay'])) {
+        // Hard floor 30s; the UI warns below 45s (MakerWorld's anti-bot threshold).
+        $current['makerworld_delay'] = max(30, min(3600, (int) $patch['makerworld_delay']));
+    }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
     if (file_put_contents(CONFIG_STORE, $payload, LOCK_EX) === false) {
@@ -476,6 +521,18 @@ function cfg_save(array $patch): bool
 // Backward-compatible constant: existing code (worker.php) reads this directly.
 // Now sourced from the config layer instead of a fixed env value.
 define('DOWNLOAD_DELAY_SECONDS', (int) cfg('download_delay'));
+// MakerWorld paces separately (its anti-bot trips around <45s; default 45).
+define('MAKERWORLD_DELAY_SECONDS', (int) cfg('makerworld_delay'));
+
+/**
+ * MakerWorld download directory: the configured override if set, else the
+ * sibling makerworld/ folder under the models root.
+ */
+function get_makerworld_dir(): string
+{
+    $v = trim((string) cfg('makerworld_download_dir'));
+    return $v !== '' ? $v : MAKERWORLD_DOWNLOAD_DIR;
+}
 
 // ---- Database (SQLite via PDO) --------------------------------------------
 /**
@@ -520,6 +577,7 @@ function init_schema(PDO $pdo): void
     $pdo->exec(<<<'SQL'
         CREATE TABLE IF NOT EXISTS download_jobs (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            source       TEXT    NOT NULL DEFAULT 'printables',
             model_id     TEXT    NOT NULL,
             slug         TEXT    NOT NULL DEFAULT '',
             name         TEXT    NOT NULL DEFAULT '',
@@ -531,11 +589,19 @@ function init_schema(PDO $pdo): void
             saved_path   TEXT    NOT NULL DEFAULT '',
             created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
             updated_at   TEXT    NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(model_id, file_type)
+            UNIQUE(source, model_id, file_type)
         );
     SQL);
 
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status ON download_jobs(status);');
+
+    // Migration: add `source` to pre-existing installs (CREATE TABLE won't alter).
+    $cols = $pdo->query("PRAGMA table_info(download_jobs)")->fetchAll(PDO::FETCH_COLUMN, 1);
+    if (!in_array('source', $cols, true)) {
+        $pdo->exec("ALTER TABLE download_jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'printables'");
+        // New uniqueness key spanning source (old table-level UNIQUE stays harmless).
+        $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_src_unique ON download_jobs(source, model_id, file_type)");
+    }
 }
 
 // ---- View helpers ---------------------------------------------------------

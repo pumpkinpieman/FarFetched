@@ -10,12 +10,48 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
 
 $sources = list_sources();
+$bySlug  = [];
+foreach ($sources as $s) {
+    $bySlug[$s['slug']] = $s;
+}
 
-// Friendly labels + mode per known source; unknown folders default to library.
-$meta = [
-    'printables' => ['label' => 'Printables',  'mode' => 'fetch',   'desc' => 'Browse & download free models from printables.com'],
-    'stlflix'    => ['label' => 'STLFlix',      'mode' => 'library', 'desc' => 'Your downloaded STLFlix files, organized locally'],
+// Fetch sources are always shown as entry points (even before any download),
+// each linking to its own Browse view. Other discovered folders show as library.
+$fetchSources = [
+    'printables' => ['label' => 'Printables', 'desc' => 'Browse & download free models from printables.com',     'href' => 'index.php'],
+    'makerworld' => ['label' => 'MakerWorld', 'desc' => 'Browse & download whole-model ZIPs from makerworld.com', 'href' => 'index.php?src=makerworld'],
 ];
+
+// Library labels for known non-fetch folders.
+$meta = [
+    'stlflix' => ['label' => 'STLFlix', 'desc' => 'Your downloaded STLFlix files, organized locally'],
+];
+
+$tiles = [];
+foreach ($fetchSources as $slug => $fs) {
+    $tiles[] = [
+        'slug'  => $slug,
+        'label' => $fs['label'],
+        'desc'  => $fs['desc'],
+        'mode'  => 'fetch',
+        'href'  => $fs['href'],
+        'count' => isset($bySlug[$slug]) ? (int) $bySlug[$slug]['count'] : 0,
+    ];
+}
+foreach ($sources as $s) {
+    if (isset($fetchSources[$s['slug']])) {
+        continue; // already represented above
+    }
+    $lib = $meta[$s['slug']] ?? ['label' => ucfirst($s['slug']), 'desc' => 'Local model library'];
+    $tiles[] = [
+        'slug'  => $s['slug'],
+        'label' => $lib['label'],
+        'desc'  => $lib['desc'],
+        'mode'  => 'library',
+        'href'  => 'library.php?src=' . urlencode($s['slug']),
+        'count' => (int) $s['count'],
+    ];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -51,28 +87,18 @@ $meta = [
     <div class="sub">Pick a source. Each folder under your models directory shows up here automatically.</div>
   </header>
   <main>
-    <?php if ($sources === []): ?>
-      <div class="empty">
-        No sources yet. Create a folder under <code><?= e(MODELS_ROOT) ?></code>
-        (e.g. <code>printables/</code> or <code>stlflix/</code>) and it'll appear here.
-      </div>
-    <?php else: ?>
       <div class="grid">
-        <?php foreach ($sources as $s):
-          $m = $meta[$s['slug']] ?? ['label' => ucfirst($s['slug']), 'mode' => 'library', 'desc' => 'Local model library'];
-          $href = $m['mode'] === 'fetch' ? 'index.php' : ('library.php?src=' . urlencode($s['slug']));
-        ?>
-          <a class="tile" href="<?= e($href) ?>">
-            <div class="tname"><?= e($m['label']) ?></div>
-            <div class="tdesc"><?= e($m['desc']) ?></div>
+        <?php foreach ($tiles as $t): ?>
+          <a class="tile" href="<?= e($t['href']) ?>">
+            <div class="tname"><?= e($t['label']) ?></div>
+            <div class="tdesc"><?= e($t['desc']) ?></div>
             <div class="tmeta">
-              <span><?= (int) $s['count'] ?> model<?= $s['count'] === 1 ? '' : 's' ?></span>
-              <span class="pill <?= $m['mode'] === 'fetch' ? 'fetch' : '' ?>"><?= e($m['mode']) ?></span>
+              <span><?= (int) $t['count'] ?> model<?= $t['count'] === 1 ? '' : 's' ?></span>
+              <span class="pill <?= $t['mode'] === 'fetch' ? 'fetch' : '' ?>"><?= e($t['mode']) ?></span>
             </div>
           </a>
         <?php endforeach; ?>
       </div>
-    <?php endif; ?>
 
     <div class="links">
       <a href="index.php">Browse Models</a>

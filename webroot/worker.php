@@ -28,6 +28,7 @@ if (PHP_SAPI !== 'cli') {
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
+require_once __DIR__ . '/MakerWorldService.php';
 
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
@@ -91,19 +92,33 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
 }
 
 $svc = new PrintablesService();
-if (!$svc->isAuthed()) {
-    logerr('error', 'No refresh token configured — paste it once in Settings. Exiting.');
-    exit(0);
+$mw  = new MakerWorldService();
+
+// Per-source readiness. A source that isn't configured simply has its jobs wait
+// in the queue (they're filtered out of the claim query below) rather than
+// failing — so a MakerWorld-only or Printables-only setup both work.
+$printablesReady = false;
+if ($svc->isAuthed() && $svc->ensureFreshToken()) {
+    $printablesReady = true;
+    $ts = token_status();
+    logln('Printables token OK — access valid ' . human_duration((int) ($ts['seconds'] ?? 0)) . '.');
+} else {
+    logln('Printables not ready (' . ($svc->lastError !== '' ? $svc->lastError : 'no token') . ') — Printables jobs will wait.');
 }
 
-// Proactively ensure a fresh access token before processing. With a stored
-// refresh token this self-renews; logs the outcome either way.
-if (!$svc->ensureFreshToken()) {
-    logerr('error', 'Could not obtain a valid token: ' . $svc->lastError . ' Exiting.');
+$makerworldReady = $mw->isAuthed();
+logln($makerworldReady
+    ? 'MakerWorld token present.'
+    : 'MakerWorld token absent — MakerWorld jobs will wait.');
+
+$readySources = [];
+if ($printablesReady) { $readySources[] = 'printables'; }
+if ($makerworldReady) { $readySources[] = 'makerworld'; }
+
+if ($readySources === []) {
+    logerr('error', 'No source configured — paste a Printables and/or MakerWorld token in Settings. Exiting.');
     exit(0);
 }
-$ts = token_status();
-logln('Token OK — access valid ' . human_duration((int) ($ts['seconds'] ?? 0)) . '.');
 
 if (cfg('paused') === true) {
     logln('Downloads paused via Settings — exiting without processing.');
@@ -140,11 +155,15 @@ while (true) {
     }
 
     // Claim the next job atomically: select oldest queued, flip to working.
-    $job = $pdo->query(
+    // Only jobs whose source is configured/ready are eligible — others wait.
+    $inHolders = implode(',', array_fill(0, count($readySources), '?'));
+    $claimStmt = $pdo->prepare(
         "SELECT * FROM download_jobs
-         WHERE status = 'queued'
+         WHERE status = 'queued' AND source IN ($inHolders)
          ORDER BY id ASC LIMIT 1"
-    )->fetch();
+    );
+    $claimStmt->execute($readySources);
+    $job = $claimStmt->fetch();
 
     if (!$job) {
         logln('Queue empty. Processed ' . $processed . ' job(s) this run.');
@@ -169,6 +188,83 @@ while (true) {
         ->execute([':id' => $jobId]);
 
     logln("Job #$jobId  model=$modelId  type=$fileTy  ($slug)");
+
+    // ---- MakerWorld: always a whole-model ZIP ------------------------------
+    if (($job['source'] ?? 'printables') === 'makerworld') {
+        try {
+            $link = $mw->getModelZipLink($modelId);
+            if ($link === '') {
+                $msg = $mw->lastError !== '' ? $mw->lastError : 'No MakerWorld download available.';
+                // Auth-ish failures halt the run (so the user re-pastes the token);
+                // requeue this job so nothing is lost.
+                if (stripos($msg, 'token') !== false || stripos($msg, 'log in') !== false
+                    || preg_match('/\b(401|403)\b/', $msg)) {
+                    $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                    logerr('error', '  MakerWorld auth issue — halting. Re-paste token in Settings.');
+                    break;
+                }
+                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Skipped: ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(MAKERWORLD_DELAY_SECONDS);
+                continue;
+            }
+
+            $mwBase  = get_makerworld_dir();
+            $destDir = rtrim($mwBase, '/') . '/' . safe_segment($slug);
+            if (!is_dir($destDir) && !@mkdir($destDir, 0775, true) && !is_dir($destDir)) {
+                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Cannot create MakerWorld dir: ' . $destDir, ':path' => '', ':id' => $jobId]);
+                logerr('error', '  Cannot create MakerWorld dir: ' . $destDir);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(MAKERWORLD_DELAY_SECONDS);
+                continue;
+            }
+            $dest = $destDir . '/' . safe_segment($slug) . '_makerworld.zip';
+
+            if (!cfg('overwrite') && is_file($dest)) {
+                logln('  Exists, skip: ' . basename($dest));
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                continue; // no network, no pace
+            }
+
+            $okDl = $mw->downloadToFile($link, $dest, progress_writer($jobId, basename($dest)));
+
+            // Signed MakerWorld URLs have a ~5 min TTL; a 401/403 means it lapsed
+            // between mint and fetch. Re-mint once and retry — cheap recovery.
+            if (!$okDl && preg_match('/\b(401|403)\b/', $mw->lastError)) {
+                logln('  Signed URL stale (' . trim($mw->lastError) . ') — re-minting and retrying.');
+                $link2 = $mw->getModelZipLink($modelId);
+                if ($link2 !== '') {
+                    $okDl = $mw->downloadToFile($link2, $dest, progress_writer($jobId, basename($dest)));
+                }
+            }
+
+            if ($okDl) {
+                logln('  Saved MakerWorld zip: ' . $dest);
+                if (extract_zip_safe($dest, $destDir)) {
+                    logln('  Extracted into: ' . $destDir);
+                    if (cfg('keep_zip') !== true) {
+                        @unlink($dest);
+                        logln('  Removed zip (keep_zip off).');
+                    }
+                    $finalPath = $destDir;
+                } else {
+                    logln('  Extract failed; zip kept at ' . $dest);
+                    $finalPath = $dest;
+                }
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $finalPath, ':id' => $jobId]);
+            } else {
+                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $mw->lastError, ':path' => '', ':id' => $jobId]);
+                logln('  MakerWorld download failed: ' . $mw->lastError);
+            }
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  MakerWorld error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(MAKERWORLD_DELAY_SECONDS);
+        continue;
+    }
 
     // ---- PACK mode: one whole-model ZIP instead of the per-file loop --------
     if (strtoupper($fileTy) === 'PACK') {
@@ -340,17 +436,18 @@ fclose($lock);
 logln('Worker exit.');
 
 // ---- helpers --------------------------------------------------------------
-function pace(): void
+function pace(?int $delay = null): void
 {
+    $delay = $delay ?? DOWNLOAD_DELAY_SECONDS;
     // Surface the deliberate delay as a countdown the queue UI can show, so the
     // paced wait reads as "intentional", not "frozen".
     write_worker_status([
         'phase'   => 'waiting',
         'job_id'  => $GLOBALS['ACTIVE_JOB_ID'] ?? null,
-        'next_at' => microtime(true) + DOWNLOAD_DELAY_SECONDS,
-        'delay'   => DOWNLOAD_DELAY_SECONDS,
+        'next_at' => microtime(true) + $delay,
+        'delay'   => $delay,
     ]);
-    sleep(DOWNLOAD_DELAY_SECONDS);
+    sleep($delay);
 }
 
 /** Make a filesystem-safe path segment (no traversal, no separators). */
