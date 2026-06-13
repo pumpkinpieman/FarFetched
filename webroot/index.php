@@ -201,7 +201,7 @@ $csrf = csrf_token();
       <div class="actions">
         <div class="srcToggle" role="group" aria-label="Model source">
           <a href="?cat=<?= e($active) ?>&type=<?= e($fileType) ?>" class="srcBtn <?= $source==='printables'?'active':'' ?>">Printables</a>
-          <a href="?src=makerworld" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
+          <a href="src=makerworld&browse=all" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
