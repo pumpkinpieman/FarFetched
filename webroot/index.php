@@ -106,7 +106,7 @@ $csrf = csrf_token();
 </head>
 <body>
   <aside>
-    <div class="brand">◆ FarFetched</div>
+    <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
 
     <div class="navlabel">Category ID</div>
     <form method="get" style="padding:0 8px 6px;">

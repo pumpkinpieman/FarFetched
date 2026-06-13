@@ -47,7 +47,7 @@ $meta = [
 </head>
 <body>
   <header>
-    <div class="brand">◆ FarFetched</div>
+    <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
     <div class="sub">Pick a source. Each folder under your models directory shows up here automatically.</div>
   </header>
   <main>

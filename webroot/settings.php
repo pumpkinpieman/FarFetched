@@ -200,7 +200,7 @@ $csrf = csrf_token();
 </head>
 <body>
   <aside>
-    <div class="brand">◆ FarFetched</div>
+    <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
     <nav>
       <a href="index.php">Browse Models</a>
       <a href="jobs.php">Queue</a>

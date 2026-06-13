@@ -73,7 +73,7 @@ foreach ($sources as $s) {
 </head>
 <body>
   <aside>
-    <div class="brand">◆ FarFetched</div>
+    <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
     <div class="navlabel">Tool</div>
     <nav>
       <a href="home.php">← Sources</a>
