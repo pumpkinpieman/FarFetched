@@ -219,7 +219,12 @@ while (true) {
                 pace(MAKERWORLD_DELAY_SECONDS);
                 continue;
             }
-            $dest = $destDir . '/' . safe_segment($slug) . '_makerworld.zip';
+            // Detect if MakerWorld returned a bare .3mf file instead of a .zip.
+            // Single-instance models return instance/{uuid}.3mf directly.
+            $isBare3mf = (bool) preg_match('/\.3mf(\?|$)/i', strtok($link, '?') ?: $link);
+            $dest = $isBare3mf
+                ? $destDir . '/' . safe_segment($slug) . '.3mf'
+                : $destDir . '/' . safe_segment($slug) . '_makerworld.zip';
 
             if (!cfg('overwrite') && is_file($dest)) {
                 logln('  Exists, skip: ' . basename($dest));
@@ -235,22 +240,33 @@ while (true) {
                 logln('  Signed URL stale (' . trim($mw->lastError) . ') — re-minting and retrying.');
                 $link2 = $mw->getModelZipLink($modelId, $fileTy);
                 if ($link2 !== '') {
+                    $isBare3mf = (bool) preg_match('/\.3mf(\?|$)/i', strtok($link2, '?') ?: $link2);
+                    $dest2 = $isBare3mf
+                        ? $destDir . '/' . safe_segment($slug) . '.3mf'
+                        : $destDir . '/' . safe_segment($slug) . '_makerworld.zip';
+                    if ($dest2 !== $dest) { @unlink($dest); $dest = $dest2; }
                     $okDl = $mw->downloadToFile($link2, $dest, progress_writer($jobId, basename($dest)));
                 }
             }
 
             if ($okDl) {
-                logln('  Saved MakerWorld zip: ' . $dest);
-                if (extract_zip_safe($dest, $destDir)) {
-                    logln('  Extracted into: ' . $destDir);
-                    if (cfg('keep_zip') !== true) {
-                        @unlink($dest);
-                        logln('  Removed zip (keep_zip off).');
-                    }
-                    $finalPath = $destDir;
-                } else {
-                    logln('  Extract failed; zip kept at ' . $dest);
+                if ($isBare3mf) {
+                    // Bare .3mf file — save as-is, no extraction needed.
+                    logln('  Saved MakerWorld 3MF: ' . $dest);
                     $finalPath = $dest;
+                } else {
+                    logln('  Saved MakerWorld zip: ' . $dest);
+                    if (extract_zip_safe($dest, $destDir)) {
+                        logln('  Extracted into: ' . $destDir);
+                        if (cfg('keep_zip') !== true) {
+                            @unlink($dest);
+                            logln('  Removed zip (keep_zip off).');
+                        }
+                        $finalPath = $destDir;
+                    } else {
+                        logln('  Extract failed; zip kept at ' . $dest);
+                        $finalPath = $dest;
+                    }
                 }
                 $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $finalPath, ':id' => $jobId]);
             } else {
