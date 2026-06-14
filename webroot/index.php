@@ -428,7 +428,7 @@ $csrf = csrf_token();
   let mwCatActive = '';    // current MakerWorld category id while browsing
   let pbCatActive = ACTIVE_CAT; // current Printables category slug (mutable)
 
-  function hasMore() { return mode === 'search' ? (searchNext !== null) : !!nextCursor; }
+  function hasMore() { return mode === 'search' ? (searchNext !== null) : (nextCursor !== null); }
 
   async function loadMore() {
     if (loading || !hasMore()) return;
@@ -553,7 +553,7 @@ $csrf = csrf_token();
       if (entries.some(e => e.isIntersecting)) loadMore();
     }, { rootMargin: '600px 0px' }); // prefetch before the user hits the very bottom
     observer.observe(sentinel);
-  } else if (loadMoreBtn && nextCursor) {
+  } else if (loadMoreBtn && nextCursor !== null) {
     // Fallback for old browsers: show the manual button.
     loadMoreBtn.style.display = 'inline-block';
   }
@@ -585,7 +585,7 @@ $csrf = csrf_token();
     mode = 'browse';
     searchQuery = '';
     searchNext = null;
-    nextCursor = null;
+    nextCursor = '';  // '' = first page pending (null = exhausted)
     mwCatActive = '';
     grid.innerHTML = '';
     if (loadMoreBtn) loadMoreBtn.style.display = 'none';
