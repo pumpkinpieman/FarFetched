@@ -210,10 +210,7 @@ $csrf = csrf_token();
           <option value="PACK" <?= $fileType==='PACK'?'selected':'' ?>>Whole model (ZIP)</option>
         </select>
         <?php else: ?>
-        <select id="fileType" onchange="location.href='?src=makerworld&browse=all&type='+this.value">
-          <option value="STL" <?= $fileType==='STL'?'selected':'' ?>>STL</option>
-          <option value="3MF" <?= $fileType==='3MF'?'selected':'' ?>>3MF</option>
-        </select>
+        <span class="ftype-fixed" title="MakerWorld downloads include all available formats">All formats</span>
         <?php endif; ?>
         <span class="selcount" id="selcount">0 selected</span>
         <button class="btn-ghost" id="selectAll">Select all on page</button>

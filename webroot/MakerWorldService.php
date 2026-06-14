@@ -168,19 +168,14 @@ final class MakerWorldService
 
     /**
      * Mint a signed download URL for a design (auth required).
-     *
-     * STL mode (fileType='STL') — tries, in order:
-     *   1. instance/{id}/stl?type=download  → _stls.zip  (flat STL files)
-     *   2. design/{id}/model?type=download  → fallback combined pack
-     *
-     * 3MF mode (fileType='3MF', default) — tries, in order:
-     *   1. design/{id}/model?modelType=all&type=download  → BambuStudio/3MF pack
+     * Always fetches the combined whole-model pack (all formats included).
+     * Tries, in order:
+     *   1. design/{id}/model?modelType=all&type=download  → combined pack
      *   2. design/{id}/model?type=download                → plain download doc
-     *   3. instance/{id}/f3mf?type=download               → per-instance 3MF zip
-     *
-     * Returns the first signed makerworld.bblmw.com .zip URL found, or '' on failure.
+     *   3. instance/{id}/f3mf?type=download               → per-instance fallback
+     * Returns the first signed makerworld.bblmw.com URL found, or '' on failure.
      */
-    public function getModelZipLink(string $designId, string $fileType = '3MF'): string
+    public function getModelZipLink(string $designId, string $fileType = 'PACK'): string
     {
         $this->lastError = '';
         $designId = preg_replace('/[^0-9]/', '', $designId);
@@ -193,40 +188,6 @@ final class MakerWorldService
             return '';
         }
 
-        $wantStl = (strtoupper($fileType) === 'STL');
-
-        if ($wantStl) {
-            // STL path: fileType=3mfstl asks MakerWorld for the _stls.zip.
-            // For 3MF-only models MakerWorld ignores the param and returns a .3mf
-            // URL instead — we detect that and fall through with a clear error.
-            // devModelName is omitted (varies per printer; MakerWorld picks a default).
-            $instanceId = $this->findInstanceId($designId);
-            if ($instanceId !== '') {
-                $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/f3mf?type=download&fileType=3mfstl');
-                if ($url !== '') {
-                    // Confirm MakerWorld actually returned an STL zip, not a 3MF file.
-                    if (str_contains($url, '_stls.zip')) {
-                        return $url;
-                    }
-                    // Model has no STL export — MakerWorld returned 3MF despite the param.
-                    $this->lastError = 'Model has no STL export on MakerWorld (3MF only). Select 3MF to download it.';
-                    return '';
-                }
-            }
-            $firstErr = $this->lastError;
-
-            // Fallback: plain model download doc sometimes carries an _stls link.
-            $url = $this->mintFrom(self::API . '/design-service/design/' . $designId . '/model?type=download&fileType=3mfstl');
-            if ($url !== '' && str_contains($url, '_stls.zip')) {
-                return $url;
-            }
-
-            $this->lastError = $firstErr !== '' ? $firstErr
-                : ($this->lastError !== '' ? $this->lastError : 'No STL export available for this MakerWorld model. Try 3MF instead.');
-            return '';
-        }
-
-        // 3MF path (original logic).
         // 1) combined whole-model pack
         $url = $this->mintFrom(self::API . '/design-service/design/' . $designId . '/model?modelType=all&type=download');
         if ($url !== '') {
@@ -240,7 +201,7 @@ final class MakerWorldService
             return $url;
         }
 
-        // 3) default profile's 3MF zip via the instance route
+        // 3) per-instance fallback
         $instanceId = $this->findInstanceId($designId);
         if ($instanceId !== '') {
             $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/f3mf?type=download');

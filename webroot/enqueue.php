@@ -56,10 +56,9 @@ $source = strtolower(trim((string) ($in['source'] ?? 'printables')));
 if (!in_array($source, ['printables', 'makerworld'], true)) {
     $source = 'printables';
 }
-// MakerWorld supports STL and 3MF — pass the user's selection through.
-// PACK is still accepted for legacy paste-ID jobs from the no-token flow.
-if ($source === 'makerworld' && !in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
-    $fileType = 'STL';
+// MakerWorld always downloads the whole-model pack (all formats included).
+if ($source === 'makerworld') {
+    $fileType = 'PACK';
 }
 
 $models = $in['models'] ?? null;
