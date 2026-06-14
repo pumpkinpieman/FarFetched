@@ -347,17 +347,16 @@ $csrf = csrf_token();
     card.querySelector('.mcreator').textContent = 'by ' + m.creator;
     card.querySelector('.msize').textContent = m.size ? fmtBytes(m.size) : '';
 
-    if (multi) attachSlider(card, imgs);
+    if (multi) attachSlider(card, imgs, m.id);
+    else if (SOURCE === 'printables' && m.id) attachSlider(card, imgs, m.id);
     return card;
   }
 
-  // Hover image slider. Arrows appear only on mouse hover; navigating swaps the
-  // <img> src (lazy — neighbor images are fetched on first hover, not upfront).
-  function attachSlider(card, imgs){
+  function attachSlider(card, imgs, modelId){
     const wrap = card.querySelector('.thumb');
     const img  = card.querySelector('.thumb-img');
     if (!wrap || !img) return;
-    let idx = 0, preloaded = false;
+    let idx = 0, preloaded = false, galleryFetched = false;
 
     const arrowCss =
       'position:absolute;top:50%;transform:translateY(-50%);width:28px;height:28px;' +
@@ -383,9 +382,28 @@ $csrf = csrf_token();
     prev.addEventListener('click', (e)=>nav(-1, e));
     next.addEventListener('click', (e)=>nav( 1, e));
 
-    card.addEventListener('mouseenter', ()=>{
-      prev.style.display = next.style.display = 'block';
-      if (!preloaded){               // lazy: fetch the rest only on first hover
+    // For Printables cards: lazy-fetch the full gallery on first hover.
+    async function fetchPrintablesGallery() {
+      if (galleryFetched || !modelId || SOURCE !== 'printables') return;
+      galleryFetched = true;
+      try {
+        const res = await fetch('print_images.php?id=' + encodeURIComponent(modelId));
+        const urls = await res.json();
+        if (Array.isArray(urls) && urls.length > 1) {
+          imgs.length = 0;
+          urls.forEach(u => imgs.push(u));
+          // Preload all images now that we have them.
+          imgs.forEach(u => { const p = new Image(); p.src = encodeURI(u); });
+          // Show/hide arrows based on updated count.
+          prev.style.display = next.style.display = imgs.length > 1 ? 'block' : 'none';
+        }
+      } catch(e) { /* fail silently */ }
+    }
+
+    card.addEventListener('mouseenter', async ()=>{
+      await fetchPrintablesGallery();
+      if (imgs.length > 1) prev.style.display = next.style.display = 'block';
+      if (!preloaded){
         preloaded = true;
         for (let i = 1; i < imgs.length; i++){ const p = new Image(); p.src = encodeURI(imgs[i]); }
       }
