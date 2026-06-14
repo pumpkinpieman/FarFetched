@@ -18,8 +18,10 @@ foreach ($sources as $s) {
 // Fetch sources are always shown as entry points (even before any download),
 // each linking to its own Browse view. Other discovered folders show as library.
 $fetchSources = [
-    'printables' => ['label' => 'Printables', 'desc' => 'Browse & download free models from printables.com',     'href' => 'index.php'],
-    'makerworld' => ['label' => 'MakerWorld', 'desc' => 'Browse & download whole-model ZIPs from makerworld.com', 'href' => 'index.php?src=makerworld&browse=all'],
+    'printables'    => ['label' => 'Printables',    'desc' => 'Browse & download free models from printables.com',         'href' => 'index.php'],
+    'makerworld'    => ['label' => 'MakerWorld',    'desc' => 'Browse & download whole-model ZIPs from makerworld.com',    'href' => 'index.php?src=makerworld&browse=all'],
+    'thingiverse'   => ['label' => 'Thingiverse',   'desc' => 'Browse & download from the world\'s largest 3D model archive', 'href' => 'index.php?src=thingiverse&browse=all'],
+    'myminifactory' => ['label' => 'MyMiniFactory', 'desc' => 'Curated, tested 3D printable models from myminifactory.com', 'href' => 'index.php?src=myminifactory&browse=all'],
 ];
 
 // Library labels for known non-fetch folders.

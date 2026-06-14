@@ -60,7 +60,7 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower($_GET['src'] ?? 'printables');
-if (!in_array($source, ['printables', 'makerworld'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'myminifactory'], true)) {
     $source = 'printables';
 }
 
@@ -72,15 +72,10 @@ if (!array_key_exists($mwCat, MW_CATEGORIES)) {
 }
 
 if ($source === 'makerworld') {
-    // MakerWorld is search-only (no category browse). Start with an empty grid
-    // and prompt the user to search. Downloads need a token; search does not.
     $svc           = null;
     $models        = [];
     $initialCursor = null;
     $mwReady       = (string) cfg('makerworld_token') !== '';
-    // While browsing a category/All Models the grid populates via JS, so the
-    // "type a keyword" prompt would be misleading — only show it on the bare
-    // MakerWorld landing (no browse intent).
     if ($mwBrowse) {
         $banner = null;
     } else {
@@ -88,6 +83,22 @@ if ($source === 'makerworld') {
             ? 'MakerWorld — pick a category on the left, or type a keyword above to search.'
             : 'MakerWorld — search & browse work now; add your MakerWorld token in Settings to download.';
     }
+} elseif ($source === 'thingiverse') {
+    $svc           = null;
+    $models        = [];
+    $initialCursor = null;
+    $tvReady       = (string) cfg('thingiverse_token') !== '';
+    $banner        = $tvReady
+        ? 'Thingiverse — type a keyword to search, or scroll to browse popular.'
+        : 'Thingiverse — add your token in Settings to browse and download.';
+} elseif ($source === 'myminifactory') {
+    $svc           = null;
+    $models        = [];
+    $initialCursor = null;
+    $mmfReady      = (string) cfg('myminifactory_token') !== '';
+    $banner        = $mmfReady
+        ? 'MyMiniFactory — type a keyword to search.'
+        : 'MyMiniFactory — add your API key in Settings to browse and download.';
 } else {
     $svc    = new PrintablesService();
     $models = $svc->isAuthed() ? $svc->searchModels($active) : [];
@@ -169,6 +180,11 @@ $csrf = csrf_token();
            class="<?= ($mwBrowse && $cid === $mwCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
+    <?php elseif ($source === 'thingiverse' || $source === 'myminifactory'): ?>
+    <div class="navlabel"><?= $source === 'thingiverse' ? 'Thingiverse' : 'MyMiniFactory' ?></div>
+    <nav>
+      <a href="?src=<?= e($source) ?>&browse=all" class="active">All Models</a>
+    </nav>
     <?php else: ?>
     <div class="navlabel">Category ID</div>
     <form method="get" style="padding:0 8px 6px;">
@@ -203,6 +219,8 @@ $csrf = csrf_token();
         <div class="srcToggle" role="group" aria-label="Model source">
           <a href="?cat=<?= e($active) ?>&type=<?= e($fileType) ?>" class="srcBtn <?= $source==='printables'?'active':'' ?>">Printables</a>
           <a href="?src=makerworld&browse=all" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
+          <a href="?src=thingiverse&browse=all" class="srcBtn <?= $source==='thingiverse'?'active':'' ?>">Thingiverse</a>
+          <a href="?src=myminifactory&browse=all" class="srcBtn <?= $source==='myminifactory'?'active':'' ?>">MyMiniFactory</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
@@ -211,7 +229,7 @@ $csrf = csrf_token();
           <option value="PACK" <?= $fileType==='PACK'?'selected':'' ?>>Whole model (ZIP)</option>
         </select>
         <?php else: ?>
-        <span class="ftype-fixed" title="MakerWorld downloads include all available formats">All formats</span>
+        <span class="ftype-fixed" title="Downloads include all available formats">All formats</span>
         <?php endif; ?>
         <span class="selcount" id="selcount">0 selected</span>
         <button class="btn-ghost" id="selectAll">Select all on page</button>
@@ -441,7 +459,8 @@ $csrf = csrf_token();
           '&offset=' + encodeURIComponent(searchNext) + '&paid=all' +
           '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
           (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
-          (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '')
+          (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '') +
+          ((SOURCE === 'thingiverse' || SOURCE === 'myminifactory') && searchQuery === '' ? '&browse=1' : '')
         : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
           '&cursor=' + encodeURIComponent(nextCursor || '');
       const res = await fetch(url);
@@ -536,6 +555,14 @@ $csrf = csrf_token();
       location.href = '?src=makerworld&browse=all';
       return;
     }
+    if (SOURCE === 'thingiverse') {
+      location.href = '?src=thingiverse&browse=all';
+      return;
+    }
+    if (SOURCE === 'myminifactory') {
+      location.href = '?src=myminifactory&browse=all';
+      return;
+    }
     // Return to the category browse the page loaded with.
     location.href = '?cat=' + encodeURIComponent(pbCatActive) + '&type=' + encodeURIComponent(FILE_TYPE);
   }
@@ -564,6 +591,12 @@ $csrf = csrf_token();
   if (SOURCE === 'makerworld' && MW_BROWSE) {
     const lbl = (document.querySelector('aside nav a.active') || {}).textContent || 'All Models';
     browseCategory(MW_CAT, lbl);
+  }
+  // Thingiverse / MMF: auto-load popular on browse=all landing.
+  if ((SOURCE === 'thingiverse' || SOURCE === 'myminifactory') && <?= json_encode(isset($_GET['browse'])) ?>) {
+    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
+    if (pageTitle) pageTitle.textContent = SOURCE === 'thingiverse' ? 'Thingiverse' : 'MyMiniFactory';
+    loadMore();
   }
 
   // MW category nav — intercept clicks so the page never reloads (preserves selStore).

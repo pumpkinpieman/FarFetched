@@ -29,6 +29,8 @@ if (PHP_SAPI !== 'cli') {
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/MakerWorldService.php';
+require_once __DIR__ . '/ThingiverseService.php';
+require_once __DIR__ . '/MyMiniFactoryService.php';
 
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
@@ -91,8 +93,10 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
     exit(0);
 }
 
-$svc = new PrintablesService();
-$mw  = new MakerWorldService();
+$svc  = new PrintablesService();
+$mw   = new MakerWorldService();
+$tv   = new ThingiverseService();
+$mmf  = new MyMiniFactoryService();
 
 // Per-source readiness. A source that isn't configured simply has its jobs wait
 // in the queue (they're filtered out of the claim query below) rather than
@@ -111,12 +115,24 @@ logln($makerworldReady
     ? 'MakerWorld token present.'
     : 'MakerWorld token absent — MakerWorld jobs will wait.');
 
+$thingiverseReady = $tv->isAuthed();
+logln($thingiverseReady
+    ? 'Thingiverse token present.'
+    : 'Thingiverse token absent — Thingiverse jobs will wait.');
+
+$mmfReady = $mmf->isAuthed();
+logln($mmfReady
+    ? 'MyMiniFactory token present.'
+    : 'MyMiniFactory token absent — MyMiniFactory jobs will wait.');
+
 $readySources = [];
-if ($printablesReady) { $readySources[] = 'printables'; }
-if ($makerworldReady) { $readySources[] = 'makerworld'; }
+if ($printablesReady)  { $readySources[] = 'printables'; }
+if ($makerworldReady)  { $readySources[] = 'makerworld'; }
+if ($thingiverseReady) { $readySources[] = 'thingiverse'; }
+if ($mmfReady)         { $readySources[] = 'myminifactory'; }
 
 if ($readySources === []) {
-    logerr('error', 'No source configured — paste a Printables and/or MakerWorld token in Settings. Exiting.');
+    logerr('error', 'No source configured — paste at least one token in Settings. Exiting.');
     exit(0);
 }
 
@@ -175,6 +191,7 @@ while (true) {
     $modelId = (string) $job['model_id'];
     $fileTy  = (string) $job['file_type'];
     $slug    = $job['slug'] !== '' ? $job['slug'] : $modelId;
+    $name    = (string) ($job['name'] ?? '');
 
     $upd = $pdo->prepare(
         "UPDATE download_jobs
@@ -211,7 +228,7 @@ while (true) {
             }
 
             $mwBase  = get_makerworld_dir();
-            $destDir = rtrim($mwBase, '/') . '/' . safe_segment($slug);
+            $destDir = rtrim($mwBase, '/') . '/' . model_folder($modelId, $name, $slug);
             if (!is_dir($destDir) && !@mkdir($destDir, 0775, true) && !is_dir($destDir)) {
                 $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Cannot create MakerWorld dir: ' . $destDir, ':path' => '', ':id' => $jobId]);
                 logerr('error', '  Cannot create MakerWorld dir: ' . $destDir);
@@ -223,8 +240,8 @@ while (true) {
             // Single-instance models return instance/{uuid}.3mf directly.
             $isBare3mf = (bool) preg_match('/\.3mf(\?|$)/i', strtok($link, '?') ?: $link);
             $dest = $isBare3mf
-                ? $destDir . '/' . safe_segment($slug) . '.3mf'
-                : $destDir . '/' . safe_segment($slug) . '_makerworld.zip';
+                ? $destDir . '/' . model_folder($modelId, $name, $slug) . '.3mf'
+                : $destDir . '/' . model_folder($modelId, $name, $slug) . '_makerworld.zip';
 
             if (!cfg('overwrite') && is_file($dest)) {
                 logln('  Exists, skip: ' . basename($dest));
@@ -242,8 +259,8 @@ while (true) {
                 if ($link2 !== '') {
                     $isBare3mf = (bool) preg_match('/\.3mf(\?|$)/i', strtok($link2, '?') ?: $link2);
                     $dest2 = $isBare3mf
-                        ? $destDir . '/' . safe_segment($slug) . '.3mf'
-                        : $destDir . '/' . safe_segment($slug) . '_makerworld.zip';
+                        ? $destDir . '/' . model_folder($modelId, $name, $slug) . '.3mf'
+                        : $destDir . '/' . model_folder($modelId, $name, $slug) . '_makerworld.zip';
                     if ($dest2 !== $dest) { @unlink($dest); $dest = $dest2; }
                     $okDl = $mw->downloadToFile($link2, $dest, progress_writer($jobId, basename($dest)));
                 }
@@ -282,17 +299,112 @@ while (true) {
         continue;
     }
 
+    // ---- Thingiverse: ZIP download -----------------------------------------
+    if (($job['source'] ?? '') === 'thingiverse') {
+        try {
+            $zipUrl = $tv->getThingZipUrl($modelId);
+            if ($zipUrl === '') {
+                // Fall back to individual files
+                $files = $tv->getFiles($modelId);
+                if (empty($files)) {
+                    $msg = $tv->lastError !== '' ? $tv->lastError : 'No files found for this Thingiverse thing.';
+                    $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                    logerr('warn', '  Skipped: ' . $msg);
+                    $GLOBALS['ACTIVE_JOB_ID'] = null;
+                    pace(THINGIVERSE_DELAY_SECONDS);
+                    continue;
+                }
+                $destDir = rtrim(get_thingiverse_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+                if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+                $anyOk = false;
+                foreach ($files as $f) {
+                    $fname = safe_segment($f['name']);
+                    $dest  = $destDir . '/' . $fname;
+                    if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $anyOk = true; continue; }
+                    $ok = $tv->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
+                    if ($ok) { logln('  Saved: ' . $fname); $anyOk = true; }
+                    else { logln('  Failed: ' . $fname . ' — ' . $tv->lastError); }
+                    pace(THINGIVERSE_DELAY_SECONDS);
+                }
+                $upd->execute([':st' => $anyOk?'done':'error', ':inc' => 1, ':err' => $anyOk?'':$tv->lastError, ':path' => $anyOk?$destDir:'', ':id' => $jobId]);
+            } else {
+                $destDir = rtrim(get_thingiverse_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+                if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+                $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_thingiverse.zip';
+                if (!cfg('overwrite') && is_file($dest)) {
+                    logln('  Exists, skip: ' . basename($dest));
+                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                } else {
+                    $ok = $tv->downloadToFile($zipUrl, $dest, progress_writer($jobId, basename($dest)));
+                    if ($ok) {
+                        logln('  Saved Thingiverse zip: ' . $dest);
+                        if (extract_zip_safe($dest, $destDir)) {
+                            logln('  Extracted into: ' . $destDir);
+                            if (cfg('keep_zip') !== true) { @unlink($dest); logln('  Removed zip.'); }
+                            $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                        } else {
+                            $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                        }
+                    } else {
+                        $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $tv->lastError, ':path' => '', ':id' => $jobId]);
+                        logln('  Thingiverse download failed: ' . $tv->lastError);
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  Thingiverse error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(THINGIVERSE_DELAY_SECONDS);
+        continue;
+    }
+
+    // ---- MyMiniFactory: individual file downloads --------------------------
+    if (($job['source'] ?? '') === 'myminifactory') {
+        try {
+            $files = $mmf->getFiles($modelId);
+            if (empty($files)) {
+                $msg = $mmf->lastError !== '' ? $mmf->lastError : 'No files found for this MyMiniFactory object.';
+                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Skipped: ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(MYMINIFACTORY_DELAY_SECONDS);
+                continue;
+            }
+            $destDir = rtrim(get_myminifactory_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+            if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+            $anyOk = false;
+            foreach ($files as $f) {
+                $fname = safe_segment($f['name']);
+                $dest  = $destDir . '/' . $fname;
+                if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $anyOk = true; continue; }
+                $ok = $mmf->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
+                if ($ok) { logln('  Saved: ' . $fname); $anyOk = true; }
+                else { logln('  Failed: ' . $fname . ' — ' . $mmf->lastError); }
+                pace(MYMINIFACTORY_DELAY_SECONDS);
+            }
+            $upd->execute([':st' => $anyOk?'done':'error', ':inc' => 1, ':err' => $anyOk?'':$mmf->lastError, ':path' => $anyOk?$destDir:'', ':id' => $jobId]);
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  MyMiniFactory error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(MYMINIFACTORY_DELAY_SECONDS);
+        continue;
+    }
+
     // ---- PACK mode: one whole-model ZIP instead of the per-file loop --------
     if (strtoupper($fileTy) === 'PACK') {
         try {
-            // Paste-ID jobs arrive with no slug — resolve a sensible folder name.
-            if ($slug === '' || $slug === $modelId) {
+            // Paste-ID jobs arrive with no name/slug — resolve from API.
+            if ($name === '' && ($slug === '' || $slug === $modelId)) {
                 $info = $svc->getModelInfo($modelId);
-                if ($info['slug'] !== '') {
-                    $slug = $info['slug'];
-                } elseif ($info['name'] !== '') {
-                    $slug = $info['name'];
-                }
+                if ($info['name'] !== '') $name = $info['name'];
+                if ($info['slug'] !== '') $slug = $info['slug'];
+            } elseif ($name === '') {
+                $info = $svc->getModelInfo($modelId);
+                if ($info['name'] !== '') $name = $info['name'];
             }
 
             $link = $svc->getPackLink($modelId, 'MODEL_FILES');
@@ -312,11 +424,11 @@ while (true) {
                 continue;
             }
 
-            $destDir = rtrim($baseDir, '/') . '/' . safe_segment($slug);
+            $destDir = rtrim($baseDir, '/') . '/' . model_folder($modelId, $name, $slug);
             if (!is_dir($destDir)) {
                 @mkdir($destDir, 0775, true);
             }
-            $dest = $destDir . '/' . safe_segment($slug) . '_model_files.zip';
+            $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_model_files.zip';
 
             if (!cfg('overwrite') && is_file($dest)) {
                 logln('  Exists, skip: ' . basename($dest));
@@ -373,7 +485,7 @@ while (true) {
             continue;
         }
 
-        $destDir   = rtrim($baseDir, '/') . '/' . safe_segment($slug);
+        $destDir   = rtrim($baseDir, '/') . '/' . model_folder($modelId, $name, $slug);
         $savedAny  = false;
         $lastPath  = '';
 
@@ -487,4 +599,13 @@ function safe_segment(string $s): string
         $s = 'file';
     }
     return substr($s, 0, 150);
+}
+
+/** Build a human-readable folder name: "{modelId} - {model name}" */
+function model_folder(string $modelId, string $name, string $slug = ''): string
+{
+    // Prefer the human-readable name; fall back to slug, then bare id.
+    $label = $name !== '' ? $name : ($slug !== '' && $slug !== $modelId ? $slug : '');
+    $folder = $label !== '' ? $modelId . ' - ' . $label : $modelId;
+    return safe_segment($folder);
 }

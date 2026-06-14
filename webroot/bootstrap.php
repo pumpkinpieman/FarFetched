@@ -61,10 +61,11 @@ define('THUMBS_DIR',  PRIVATE_DIR . '/thumbs');
 // (printables/, stlflix/, etc.). FarFetched saves into the
 // 'printables' subfolder so every source lives side by side.
 define('MODELS_ROOT', getenv('FETCHER_DOWNLOAD_DIR') ?: '/mnt/user/Downloads/models');
-define('DEFAULT_DOWNLOAD_DIR', rtrim(MODELS_ROOT, '/') . '/printables');
-// MakerWorld saves into its own sibling folder so each source lives side by side
-// (printables/, makerworld/, …) and shows up independently on the home page.
-define('MAKERWORLD_DOWNLOAD_DIR', rtrim(MODELS_ROOT, '/') . '/makerworld');
+define('DEFAULT_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/printables');
+// Each source gets its own sibling folder: printables/, makerworld/, thingiverse/, myminifactory/
+define('MAKERWORLD_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/makerworld');
+define('THINGIVERSE_DOWNLOAD_DIR',   rtrim(MODELS_ROOT, '/') . '/thingiverse');
+define('MYMINIFACTORY_DOWNLOAD_DIR', rtrim(MODELS_ROOT, '/') . '/myminifactory');
 
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
@@ -440,10 +441,16 @@ function cfg_defaults(): array
         'paused'         => false,
         'keep_zip'       => true,
         'overwrite'      => false,
-        'makerworld_token'        => (string) (getenv('FETCHER_MAKERWORLD_TOKEN') ?: ''),
-        'makerworld_refresh_token'=> '',
-        'makerworld_download_dir' => '',
-        'makerworld_delay'        => (int) (getenv('FETCHER_MAKERWORLD_DELAY') ?: 45),
+        'makerworld_token'           => (string) (getenv('FETCHER_MAKERWORLD_TOKEN') ?: ''),
+        'makerworld_refresh_token'   => '',
+        'makerworld_download_dir'    => '',
+        'makerworld_delay'           => (int) (getenv('FETCHER_MAKERWORLD_DELAY') ?: 45),
+        'thingiverse_token'          => (string) (getenv('FETCHER_THINGIVERSE_TOKEN') ?: ''),
+        'thingiverse_download_dir'   => '',
+        'thingiverse_delay'          => 60,
+        'myminifactory_token'        => (string) (getenv('FETCHER_MMF_TOKEN') ?: ''),
+        'myminifactory_download_dir' => '',
+        'myminifactory_delay'        => 60,
     ];
 }
 
@@ -506,8 +513,25 @@ function cfg_save(array $patch): bool
         $current['makerworld_download_dir'] = trim((string) $patch['makerworld_download_dir']);
     }
     if (isset($patch['makerworld_delay'])) {
-        // Hard floor 30s; the UI warns below 45s (MakerWorld's anti-bot threshold).
         $current['makerworld_delay'] = max(30, min(3600, (int) $patch['makerworld_delay']));
+    }
+    if (array_key_exists('thingiverse_token', $patch)) {
+        $current['thingiverse_token'] = trim((string) $patch['thingiverse_token']);
+    }
+    if (array_key_exists('thingiverse_download_dir', $patch)) {
+        $current['thingiverse_download_dir'] = trim((string) $patch['thingiverse_download_dir']);
+    }
+    if (isset($patch['thingiverse_delay'])) {
+        $current['thingiverse_delay'] = max(30, min(3600, (int) $patch['thingiverse_delay']));
+    }
+    if (array_key_exists('myminifactory_token', $patch)) {
+        $current['myminifactory_token'] = trim((string) $patch['myminifactory_token']);
+    }
+    if (array_key_exists('myminifactory_download_dir', $patch)) {
+        $current['myminifactory_download_dir'] = trim((string) $patch['myminifactory_download_dir']);
+    }
+    if (isset($patch['myminifactory_delay'])) {
+        $current['myminifactory_delay'] = max(30, min(3600, (int) $patch['myminifactory_delay']));
     }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
@@ -520,18 +544,27 @@ function cfg_save(array $patch): bool
 
 // Backward-compatible constant: existing code (worker.php) reads this directly.
 // Now sourced from the config layer instead of a fixed env value.
-define('DOWNLOAD_DELAY_SECONDS', (int) cfg('download_delay'));
-// MakerWorld paces separately (its anti-bot trips around <45s; default 45).
-define('MAKERWORLD_DELAY_SECONDS', (int) cfg('makerworld_delay'));
+define('DOWNLOAD_DELAY_SECONDS',       (int) cfg('download_delay'));
+define('MAKERWORLD_DELAY_SECONDS',     (int) cfg('makerworld_delay'));
+define('THINGIVERSE_DELAY_SECONDS',    (int) cfg('thingiverse_delay'));
+define('MYMINIFACTORY_DELAY_SECONDS',  (int) cfg('myminifactory_delay'));
 
-/**
- * MakerWorld download directory: the configured override if set, else the
- * sibling makerworld/ folder under the models root.
- */
 function get_makerworld_dir(): string
 {
     $v = trim((string) cfg('makerworld_download_dir'));
     return $v !== '' ? $v : MAKERWORLD_DOWNLOAD_DIR;
+}
+
+function get_thingiverse_dir(): string
+{
+    $v = trim((string) cfg('thingiverse_download_dir'));
+    return $v !== '' ? $v : THINGIVERSE_DOWNLOAD_DIR;
+}
+
+function get_myminifactory_dir(): string
+{
+    $v = trim((string) cfg('myminifactory_download_dir'));
+    return $v !== '' ? $v : MYMINIFACTORY_DOWNLOAD_DIR;
 }
 
 // ---- Database (SQLite via PDO) --------------------------------------------
