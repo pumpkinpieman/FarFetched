@@ -70,38 +70,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- Printables ---------------------------------------------------------
     elseif ($action === 'save_printables_token') {
-        $tok = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['printables_token'] ?? ''))) ?? '';
-        $tok = preg_replace('/^auth\.(refresh|access)_token=/', '', $tok) ?? $tok;
-        if ($tok === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste a token first.'];
-        } elseif (jwt_claims($tok) === null) {
-            $notice = ['type' => 'err', 'text' => 'Does not look like a JWT token.'];
+        $refresh = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['printables_refresh'] ?? ''))) ?? '';
+        $refresh = preg_replace('/^auth\.refresh_token=/', '', $refresh) ?? $refresh;
+        $access  = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['printables_access'] ?? ''))) ?? '';
+        $access  = preg_replace('/^auth\.access_token=/', '', $access) ?? $access;
+
+        if ($refresh === '' && $access === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste at least one token.'];
         } else {
-            $type = jwt_token_type($tok);
-            if ($type === 'refresh') {
-                if (!set_refresh_token($tok)) {
-                    $notice = ['type' => 'err', 'text' => 'Could not write token store.'];
+            $saved = false;
+            if ($refresh !== '') {
+                if (jwt_claims($refresh) === null) {
+                    $notice = ['type' => 'err', 'text' => 'Refresh token does not look like a JWT.'];
                 } else {
-                    if (is_file(TOKEN_STORE)) { @unlink(TOKEN_STORE); }
-                    $v = validate_printables();
-                    $notice = $v['ok']
-                        ? ['type' => 'ok', 'text' => 'Printables connected (auto-renewing). ' . $v['msg']]
-                        : ['type' => 'err', 'text' => 'Saved, but refresh failed: ' . $v['msg']];
+                    set_refresh_token($refresh);
+                    $saved = true;
                 }
-            } else {
-                $ts = token_status_for($tok);
-                if ($ts['state'] === 'expired') {
-                    $notice = ['type' => 'err', 'text' => 'Access token already expired — grab a fresh one.'];
-                } elseif (!set_token($tok)) {
-                    $notice = ['type' => 'err', 'text' => 'Could not write token store.'];
+            }
+            if ($access !== '') {
+                if (jwt_claims($access) === null) {
+                    $notice = ['type' => 'err', 'text' => 'Access token does not look like a JWT.'];
                 } else {
-                    if (is_file(REFRESH_STORE)) { @unlink(REFRESH_STORE); }
-                    $v    = validate_printables();
-                    $life = human_duration((int) ($ts['seconds'] ?? 0));
-                    $notice = $v['ok']
-                        ? ['type' => 'ok', 'text' => 'Printables connected (access-token mode, valid ' . $life . '). Tip: paste auth.refresh_token to auto-renew monthly.']
-                        : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $v['msg']];
+                    $ts = token_status_for($access);
+                    if ($ts['state'] === 'expired') {
+                        $notice = ['type' => 'err', 'text' => 'Access token is already expired — grab a fresh one.'];
+                    } else {
+                        set_token($access);
+                        $saved = true;
+                    }
                 }
+            }
+            if ($saved && !isset($notice)) {
+                $v = validate_printables();
+                $notice = $v['ok']
+                    ? ['type' => 'ok', 'text' => 'Printables connected. ' . $v['msg']]
+                    : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $v['msg']];
             }
         }
     }
@@ -363,8 +366,10 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
-            <label for="printables_token"><?= ($hasRefresh||$hasTok)?'Replace token':'Paste token' ?></label>
-            <textarea id="printables_token" name="printables_token" placeholder="eyJ… paste auth.refresh_token or auth.access_token cookie"></textarea>
+            <label for="printables_refresh">Refresh token <span style="font-weight:400;text-transform:none;">(auto-renews for ~2 months)</span></label>
+            <textarea id="printables_refresh" name="printables_refresh" placeholder="eyJ… paste auth.refresh_token cookie value"></textarea>
+            <label for="printables_access" style="margin-top:10px;">Access token <span style="font-weight:400;text-transform:none;">(optional — valid ~2h, auto-minted from refresh)</span></label>
+            <textarea id="printables_access" name="printables_access" placeholder="eyJ… paste auth.access_token cookie value"></textarea>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_printables_token">Save &amp; Connect</button>
               <?php if ($hasRefresh||$hasTok): ?>
@@ -373,7 +378,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
               <?php endif; ?>
             </div>
           </form>
-          <p class="hint">printables.com → DevTools → Application → Cookies. Paste <code>auth.refresh_token</code> (auto-renews) or <code>auth.access_token</code> (expires in ~2h).</p>
+          <p class="hint">printables.com → DevTools → Application → Cookies. Paste <code>auth.refresh_token</code> — it auto-renews every ~2 months. Optionally also paste <code>auth.access_token</code> so it works immediately without waiting for the first refresh. The app detects which is which automatically.</p>
         </div>
         <div class="src-body">
           <form method="post">
