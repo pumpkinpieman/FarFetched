@@ -51,8 +51,7 @@ final class Cults3DService
         int    $limit    = 20,
         int    $page     = 1,
         bool   $freeOnly = false,
-        string $category = '',
-        string $sort     = 'RECENTLY_PUBLISHED'
+        string $category = ''
     ): array {
         $this->lastError = '';
         $this->lastTotal = 0;
@@ -78,9 +77,9 @@ final class Cults3DService
                   id
                   slug
                   name
-                  free
                   illustrationImageUrl
                   images { url }
+                  category { slug }
                   creator { nick }
                   files { size }
                 }
@@ -91,11 +90,10 @@ final class Cults3DService
             if ($data === null) return [];
             $items = $data['creationsSearchBatch']['results'] ?? [];
         } else {
-            // Browse: creationsBatch(limit:, offset:, onlyFree:, categorySlug:, sort:)
+            // Browse: creationsBatch(limit:, offset:, onlyFree:, categorySlug:)
             $args = [];
             if ($freeOnly)        $args[] = 'onlyFree: true';
             if ($category !== '') $args[] = 'categorySlug: ' . json_encode($category);
-            if ($sort !== '')     $args[] = 'sort: ' . $sort;
             if ($limit > 0)       $args[] = 'limit: ' . min(20, $limit);
             if ($page > 1)        $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
 
@@ -107,9 +105,9 @@ final class Cults3DService
                   id
                   slug
                   name
-                  free
                   illustrationImageUrl
                   images { url }
+                  category { slug }
                   creator { nick }
                   files { size }
                 }
@@ -284,6 +282,10 @@ final class Cults3DService
         foreach ($items as $it) {
             if (!is_array($it)) continue;
 
+            // Hard filter: exclude anything in the "naughties" category.
+            $catSlug = strtolower((string)($it['category']['slug'] ?? ''));
+            if (str_contains($catSlug, 'naughti')) continue;
+
             $thumb = (string)($it['illustrationImageUrl'] ?? $it['thumbnailUrl'] ?? '');
 
             $images = $thumb !== '' ? [$thumb] : [];
@@ -298,10 +300,6 @@ final class Cults3DService
             $size = 0;
             foreach (($it['files'] ?? []) as $f) { $size += (int)($f['size'] ?? 0); }
 
-            $free  = (bool)($it['free'] ?? false);
-            $cents = (int)($it['price']['cents'] ?? 0);
-            $price = $free ? 0.0 : ($cents / 100);
-
             $id   = (string)($it['id']   ?? '');
             $slug = (string)($it['slug'] ?? '');
             $name = (string)($it['name'] ?? 'Untitled');
@@ -314,8 +312,6 @@ final class Cults3DService
                 'thumb'   => $thumb,
                 'images'  => array_values(array_filter($images)),
                 'size'    => $size,
-                'price'   => $price,
-                'free'    => $free,
                 'source'  => 'cults3d',
             ];
         }
