@@ -250,7 +250,17 @@ foreach ($sources as $s) {
       } else { // 3mf — try the official loader, fall back to a robust parser
         new ThreeMFLoader().load(url, (object) => {
           clearModel();
-          object.traverse(o => { if (o.isMesh) o.material = material; });
+          object.traverse(o => {
+            if (o.isMesh) {
+              // Strip embedded vertex/face colors — they override material color
+              // and often render black when the slicer color extension isn't supported.
+              if (o.geometry && o.geometry.attributes.color) {
+                delete o.geometry.attributes.color;
+                o.geometry.attributes.color = undefined;
+              }
+              o.material = material;
+            }
+          });
           scene.add(object);
           current = object;
           frameObject(object);
