@@ -161,14 +161,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- Thingiverse --------------------------------------------------------
     elseif ($action === 'save_tv_token') {
-        $tok = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['tv_token'] ?? ''))) ?? '';
-        if ($tok === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your Thingiverse token first.'];
+        $clientId  = trim((string) ($_POST['tv_client_id']  ?? ''));
+        $clientSec = trim((string) ($_POST['tv_client_sec'] ?? ''));
+        $apiKey    = trim((string) ($_POST['tv_api_key']    ?? ''));
+        if ($clientId === '' && $apiKey === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your Thingiverse API key.'];
         } else {
-            $ok = cfg_save(['thingiverse_token' => $tok]);
-            $notice = $ok
-                ? ['type' => 'ok', 'text' => 'Thingiverse token saved.']
-                : ['type' => 'err', 'text' => 'Could not write config.'];
+            cfg_save([
+                'thingiverse_token'      => $apiKey,
+                'thingiverse_client_id'  => $clientId,
+                'thingiverse_client_sec' => $clientSec,
+            ]);
+            $notice = ['type' => 'ok', 'text' => 'Thingiverse credentials saved.'];
         }
     }
     elseif ($action === 'clear_tv_token') {
@@ -186,21 +190,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- MyMiniFactory ------------------------------------------------------
     elseif ($action === 'save_mmf_token') {
-        $sessId     = trim((string) ($_POST['mmf_token'] ?? ''));
-        $rememberMe = trim((string) ($_POST['mmf_remember_me'] ?? ''));
-        // Strip "PHPSESSID=" or "REMEMBERME=" prefixes if pasted as cookie pairs
-        $sessId     = preg_replace('/^PHPSESSID=/', '', $sessId) ?? $sessId;
-        $rememberMe = preg_replace('/^REMEMBERME=/', '', $rememberMe) ?? $rememberMe;
-        if ($sessId === '' && $rememberMe === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste at least one cookie value.'];
+        $clientId  = trim((string) ($_POST['mmf_client_id']  ?? ''));
+        $clientSec = trim((string) ($_POST['mmf_client_sec'] ?? ''));
+        $apiKey    = trim((string) ($_POST['mmf_api_key']    ?? ''));
+        if ($clientId === '' && $apiKey === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your MyMiniFactory API key.'];
         } else {
-            $ok = cfg_save([
-                'myminifactory_token'       => $sessId,
-                'myminifactory_remember_me' => $rememberMe,
+            cfg_save([
+                'myminifactory_token'      => $apiKey,
+                'myminifactory_client_id'  => $clientId,
+                'myminifactory_client_sec' => $clientSec,
             ]);
-            $notice = $ok
-                ? ['type' => 'ok', 'text' => 'MyMiniFactory cookies saved.' . ($rememberMe !== '' ? ' REMEMBERME will keep you logged in for ~30 days.' : ' Only PHPSESSID stored — paste REMEMBERME too for persistence.')]
-                : ['type' => 'err', 'text' => 'Could not write config.'];
+            $notice = ['type' => 'ok', 'text' => 'MyMiniFactory credentials saved.'];
         }
     }
     elseif ($action === 'clear_mmf_token') {
@@ -335,6 +336,20 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
   .panel label{margin-top:12px;}
   .panel label:first-of-type{margin-top:0;}
 
+  .oauth-steps{display:flex;flex-direction:column;gap:8px;}
+  .step{display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.5;}
+  .step a{color:var(--clay-deep);text-decoration:none;} .step a:hover{text-decoration:underline;}
+  .step-n{background:var(--clay);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px;}
+
+  /* Modal */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:16px;padding:28px;max-width:480px;width:calc(100% - 40px);position:relative;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+  .modal h3{font-family:ui-serif,Georgia,serif;font-size:18px;font-weight:600;margin-bottom:12px;}
+  .modal p{font-size:14px;line-height:1.6;color:var(--muted);margin-bottom:10px;}
+  .modal p strong{color:var(--ink);}
+  .modal-close{position:absolute;top:14px;right:16px;background:none;border:none;font-size:22px;cursor:pointer;color:var(--muted);line-height:1;padding:4px;}
+  .modal-close:hover{color:var(--ink);}
   pre.log{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:0;max-height:300px;overflow:auto;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
 </style>
 </head>
@@ -464,25 +479,40 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
       </div>
 
       <!-- Thingiverse -->
+      <?php
+        $tvClientId = (string) cfg('thingiverse_client_id');
+        $tvApiKey   = (string) cfg('thingiverse_token');
+        $tvReady    = $tvApiKey !== '';
+      ?>
       <div class="src-card">
         <div class="src-head">
           <span class="src-name">Thingiverse</span>
-          <span class="status" style="margin:0;"><span class="dot <?= $tvTok!==''?'on':'off' ?>"></span><?= $tvTok!==''?'Token stored':'Not connected' ?></span>
+          <span style="display:flex;align-items:center;gap:10px;">
+            <button type="button" class="btn-ghost btn-sm" onclick="openModal('tv')">More info</button>
+            <span class="status" style="margin:0;"><span class="dot <?= $tvReady?'on':'off' ?>"></span><?= $tvReady?'Connected':'Not connected' ?></span>
+          </span>
         </div>
         <div class="src-body">
-          <form method="post">
+          <div class="oauth-steps">
+            <div class="step"><span class="step-n">1</span>Go to <a href="https://www.thingiverse.com/apps/create" target="_blank">thingiverse.com/apps/create</a></div>
+            <div class="step"><span class="step-n">2</span>Fill in Name, Client Key (slug), Homepage URL, Redirect URI — any values work</div>
+            <div class="step"><span class="step-n">3</span>Save → copy the generated <strong>App Token</strong></div>
+            <div class="step"><span class="step-n">4</span>Paste it below</div>
+          </div>
+          <form method="post" style="margin-top:14px;">
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
-            <label for="tv_token"><?= $tvTok!==''?'Replace token':'Paste token' ?></label>
-            <textarea id="tv_token" name="tv_token" placeholder="paste Bearer token from api.thingiverse.com request headers"></textarea>
+            <label for="tv_client_id">Client ID <span style="font-weight:400;text-transform:none;">(optional — for OAuth downloads)</span></label>
+            <input type="text" id="tv_client_id" name="tv_client_id" value="<?= e($tvClientId) ?>" placeholder="your-app-client-id">
+            <label for="tv_api_key" style="margin-top:10px;">App Token / API Key</label>
+            <input type="text" id="tv_api_key" name="tv_api_key" value="<?= e($tvApiKey) ?>" placeholder="paste your Thingiverse app token">
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_tv_token">Save &amp; Connect</button>
-              <?php if ($tvTok !== ''): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_tv_token" onclick="return confirm('Clear Thingiverse token?')">Clear</button>
+              <?php if ($tvReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_tv_token" onclick="return confirm('Clear Thingiverse credentials?')">Clear</button>
               <?php endif; ?>
             </div>
           </form>
-          <p class="hint">thingiverse.com → DevTools → Network → any <code>api.thingiverse.com</code> request → copy the <code>Authorization</code> header value (without "Bearer ").</p>
         </div>
         <div class="src-body">
           <form method="post">
@@ -511,28 +541,40 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
       </div>
 
       <!-- MyMiniFactory -->
-      <?php $mmfHasRemember = (string)cfg('myminifactory_remember_me') !== ''; ?>
+      <?php
+        $mmfClientId = (string) cfg('myminifactory_client_id');
+        $mmfApiKey   = (string) cfg('myminifactory_token');
+        $mmfReady    = $mmfApiKey !== '';
+      ?>
       <div class="src-card">
         <div class="src-head">
           <span class="src-name">MyMiniFactory</span>
-          <span class="status" style="margin:0;"><span class="dot <?= $mmfTok!==''?'on':'off' ?>"></span><?= $mmfTok!==''?'Cookies stored':'Not connected' ?></span>
+          <span style="display:flex;align-items:center;gap:10px;">
+            <button type="button" class="btn-ghost btn-sm" onclick="openModal('mmf')">More info</button>
+            <span class="status" style="margin:0;"><span class="dot <?= $mmfReady?'on':'off' ?>"></span><?= $mmfReady?'Connected':'Not connected' ?></span>
+          </span>
         </div>
         <div class="src-body">
-          <form method="post">
+          <div class="oauth-steps">
+            <div class="step"><span class="step-n">1</span>Go to <a href="https://www.myminifactory.com/settings/api" target="_blank">myminifactory.com/settings/api</a></div>
+            <div class="step"><span class="step-n">2</span>Under <strong>Register your own MMF application</strong> — fill in Name, Client Key, Homepage URL, Redirect URI</div>
+            <div class="step"><span class="step-n">3</span>Save → click <strong>Generate new API key</strong></div>
+            <div class="step"><span class="step-n">4</span>Paste the API key below</div>
+          </div>
+          <form method="post" style="margin-top:14px;">
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
-            <label for="mmf_sessid">PHPSESSID <span style="font-weight:400;text-transform:none;">(session cookie)</span></label>
-            <textarea id="mmf_sessid" name="mmf_token" placeholder="cc0335178b7afb2d777ce265a6b705e0"></textarea>
-            <label for="mmf_remember" style="margin-top:10px;">REMEMBERME <span style="font-weight:400;text-transform:none;">(persistent ~30 days)</span></label>
-            <textarea id="mmf_remember" name="mmf_remember_me" placeholder="MyMini.UserBundle.Entity.User…"></textarea>
+            <label for="mmf_client_id">Client ID <span style="font-weight:400;text-transform:none;">(optional — for OAuth downloads)</span></label>
+            <input type="text" id="mmf_client_id" name="mmf_client_id" value="<?= e($mmfClientId) ?>" placeholder="your-app-client-id">
+            <label for="mmf_api_key" style="margin-top:10px;">API Key</label>
+            <input type="text" id="mmf_api_key" name="mmf_api_key" value="<?= e($mmfApiKey) ?>" placeholder="paste your MyMiniFactory API key">
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_mmf_token">Save &amp; Connect</button>
-              <?php if ($mmfTok !== ''): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_mmf_token" onclick="return confirm('Clear MyMiniFactory cookies?')">Clear</button>
+              <?php if ($mmfReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_mmf_token" onclick="return confirm('Clear MyMiniFactory credentials?')">Clear</button>
               <?php endif; ?>
             </div>
           </form>
-          <p class="hint">myminifactory.com → log in (check "Remember me") → DevTools → Application → Cookies → copy <code>PHPSESSID</code> and <code>REMEMBERME</code> values. REMEMBERME lasts ~30 days and re-establishes your session automatically.</p>
         </div>
         <div class="src-body">
           <form method="post">
@@ -641,14 +683,69 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
 
 </main>
 
+<!-- More info modals -->
+<div class="modal-overlay" id="modal-tv" onclick="if(event.target===this)closeModal('tv')">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('tv')" aria-label="Close">&times;</button>
+    <h3>Why does Thingiverse require this?</h3>
+    <p>Printables and MakerWorld provide simple cookie-based tokens you can copy directly from your browser — no app registration needed.</p>
+    <p><strong>Thingiverse uses OAuth2</strong>, which means they don't expose a simple persistent token in your browser cookies. Instead, access is granted through an app registration tied to your account.</p>
+    <p>This is a one-time setup per user. Your credentials are stored only on your own FarFetched instance — they are never shared with anyone.</p>
+    <p><strong>Steps:</strong></p>
+    <div class="oauth-steps" style="margin-top:8px;">
+      <div class="step"><span class="step-n">1</span>Go to <a href="https://www.thingiverse.com/apps/create" target="_blank">thingiverse.com/apps/create</a></div>
+      <div class="step"><span class="step-n">2</span>Fill in any Name and Client Key (slug). For Homepage URL and Redirect URI, use <code>http://localhost</code> — these aren't used by FarFetched</div>
+      <div class="step"><span class="step-n">3</span>Save the app — Thingiverse will generate an <strong>App Token</strong></div>
+      <div class="step"><span class="step-n">4</span>Copy that token and paste it into the field on this page</div>
+    </div>
+    <p style="margin-top:14px;font-size:12px;">The App Token is long-lived and tied to your Thingiverse account. It stays valid until you revoke the app.</p>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-mmf" onclick="if(event.target===this)closeModal('mmf')">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('mmf')" aria-label="Close">&times;</button>
+    <h3>Why does MyMiniFactory require this?</h3>
+    <p>Printables and MakerWorld provide simple cookie-based tokens you can copy directly from your browser — no app registration needed.</p>
+    <p><strong>MyMiniFactory uses OAuth2</strong>, particularly for users who sign in via Google SSO. There is no persistent browser cookie we can extract — access must be granted through an app registration.</p>
+    <p>This is a one-time setup per user. Your credentials are stored only on your own FarFetched instance — they are never shared with anyone.</p>
+    <p><strong>Steps:</strong></p>
+    <div class="oauth-steps" style="margin-top:8px;">
+      <div class="step"><span class="step-n">1</span>Go to <a href="https://www.myminifactory.com/settings/api" target="_blank">myminifactory.com/settings/api</a></div>
+      <div class="step"><span class="step-n">2</span>Under <strong>Register your own MMF application</strong> — fill in Name, Client Key, Homepage URL and Redirect URI. Use <code>http://localhost</code> for the URLs</div>
+      <div class="step"><span class="step-n">3</span>Save → click <strong>Generate new API key</strong></div>
+      <div class="step"><span class="step-n">4</span>Copy the API key and paste it into the field on this page</div>
+    </div>
+    <p style="margin-top:14px;font-size:12px;">The API key is tied to your MyMiniFactory account and stays valid until revoked. Works with Google SSO accounts.</p>
+  </div>
+</div>
+
 <script>
 function switchTab(t) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.querySelector('#tab-' + t).classList.add('active');
-  document.querySelectorAll('.tab-btn').forEach(b => { if (b.textContent.trim().toLowerCase().startsWith(t)) b.classList.add('active'); });
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    if (b.textContent.trim().toLowerCase().startsWith(t)) b.classList.add('active');
+  });
   history.replaceState(null, '', '?tab=' + t);
 }
+function openModal(id) {
+  document.getElementById('modal-' + id).classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+function closeModal(id) {
+  document.getElementById('modal-' + id).classList.remove('open');
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m => {
+      m.classList.remove('open');
+      document.body.style.overflow = '';
+    });
+  }
+});
 </script>
 </body>
 </html>

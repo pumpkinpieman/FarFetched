@@ -446,9 +446,13 @@ function cfg_defaults(): array
         'makerworld_download_dir'    => '',
         'makerworld_delay'           => (int) (getenv('FETCHER_MAKERWORLD_DELAY') ?: 45),
         'thingiverse_token'          => (string) (getenv('FETCHER_THINGIVERSE_TOKEN') ?: ''),
+        'thingiverse_client_id'      => '',
+        'thingiverse_client_sec'     => '',
         'thingiverse_download_dir'   => '',
         'thingiverse_delay'          => 60,
         'myminifactory_token'        => (string) (getenv('FETCHER_MMF_TOKEN') ?: ''),
+        'myminifactory_client_id'    => '',
+        'myminifactory_client_sec'   => '',
         'myminifactory_remember_me'  => '',
         'myminifactory_download_dir' => '',
         'myminifactory_delay'        => 60,
@@ -519,14 +523,23 @@ function cfg_save(array $patch): bool
     if (array_key_exists('thingiverse_token', $patch)) {
         $current['thingiverse_token'] = trim((string) $patch['thingiverse_token']);
     }
-    if (array_key_exists('thingiverse_download_dir', $patch)) {
-        $current['thingiverse_download_dir'] = trim((string) $patch['thingiverse_download_dir']);
+    if (array_key_exists('thingiverse_client_id', $patch)) {
+        $current['thingiverse_client_id'] = trim((string) $patch['thingiverse_client_id']);
+    }
+    if (array_key_exists('thingiverse_client_sec', $patch)) {
+        $current['thingiverse_client_sec'] = trim((string) $patch['thingiverse_client_sec']);
     }
     if (isset($patch['thingiverse_delay'])) {
         $current['thingiverse_delay'] = max(30, min(3600, (int) $patch['thingiverse_delay']));
     }
     if (array_key_exists('myminifactory_token', $patch)) {
         $current['myminifactory_token'] = trim((string) $patch['myminifactory_token']);
+    }
+    if (array_key_exists('myminifactory_client_id', $patch)) {
+        $current['myminifactory_client_id'] = trim((string) $patch['myminifactory_client_id']);
+    }
+    if (array_key_exists('myminifactory_client_sec', $patch)) {
+        $current['myminifactory_client_sec'] = trim((string) $patch['myminifactory_client_sec']);
     }
     if (array_key_exists('myminifactory_remember_me', $patch)) {
         $current['myminifactory_remember_me'] = trim((string) $patch['myminifactory_remember_me']);
