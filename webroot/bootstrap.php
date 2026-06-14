@@ -524,12 +524,6 @@ function cfg_save(array $patch): bool
     if (isset($patch['thingiverse_delay'])) {
         $current['thingiverse_delay'] = max(30, min(3600, (int) $patch['thingiverse_delay']));
     }
-    }
-    }
-    }
-    }
-    }
-    }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
     if (file_put_contents(CONFIG_STORE, $payload, LOCK_EX) === false) {
