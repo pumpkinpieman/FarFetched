@@ -180,9 +180,10 @@ $csrf = csrf_token();
     </form>
 
     <div class="navlabel">Categories</div>
-    <nav>
+    <nav id="pbCatNav">
       <?php foreach (CATEGORIES as $slug => $label): ?>
-        <a href="?cat=<?= e($slug) ?>&type=<?= e($fileType) ?>" class="<?= $slug === $active ? 'active' : '' ?>"><?= e($label) ?></a>
+        <a href="#" data-pbcat="<?= e($slug) ?>" data-pblabel="<?= e($label) ?>"
+           class="<?= $slug === $active ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
     <?php endif; ?>
@@ -407,6 +408,7 @@ $csrf = csrf_token();
   const MW_CAT = <?= json_encode($mwCat) ?>;
   const MW_BROWSE = <?= json_encode($mwBrowse) ?>;
   let mwCatActive = '';    // current MakerWorld category id while browsing
+  let pbCatActive = ACTIVE_CAT; // current Printables category slug (mutable)
 
   function hasMore() { return mode === 'search' ? (searchNext !== null) : !!nextCursor; }
 
@@ -422,7 +424,7 @@ $csrf = csrf_token();
           '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
           (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
           (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '')
-        : 'browse_more.php?cat=' + encodeURIComponent(ACTIVE_CAT) +
+        : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
           '&cursor=' + encodeURIComponent(nextCursor || '');
       const res = await fetch(url);
       const data = await res.json();
@@ -517,7 +519,7 @@ $csrf = csrf_token();
       return;
     }
     // Return to the category browse the page loaded with.
-    location.href = '?cat=' + encodeURIComponent(ACTIVE_CAT) + '&type=' + encodeURIComponent(FILE_TYPE);
+    location.href = '?cat=' + encodeURIComponent(pbCatActive) + '&type=' + encodeURIComponent(FILE_TYPE);
   }
   if (searchGo) searchGo.addEventListener('click', runSearch);
   if (searchClear) searchClear.addEventListener('click', clearSearch);
@@ -556,6 +558,35 @@ $csrf = csrf_token();
       mwCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
       link.classList.add('active');
       browseCategory(link.dataset.mwcat, link.dataset.mwlabel);
+    });
+  }
+
+  // Printables category nav — same pattern: JS browse, no page reload.
+  async function browsePrintablesCategory(catSlug, label) {
+    pbCatActive = catSlug;
+    mode = 'browse';
+    searchQuery = '';
+    searchNext = null;
+    nextCursor = null;
+    mwCatActive = '';
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'All Models';
+    if (searchClear) searchClear.style.display = 'none';
+    refresh();
+    loading = false;
+    await loadMore();
+  }
+
+  const pbCatNav = document.getElementById('pbCatNav');
+  if (pbCatNav) {
+    pbCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-pbcat]');
+      if (!link) return;
+      e.preventDefault();
+      pbCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browsePrintablesCategory(link.dataset.pbcat, link.dataset.pblabel);
     });
   }
 

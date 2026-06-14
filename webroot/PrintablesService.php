@@ -236,6 +236,7 @@ final class PrintablesService
         };
         $baseFields = 'id slug name user { publicUsername } image { filePath }';
         $sizeFields = $baseFields . ' stls { fileSize } otherFiles { fileSize }';
+        $imageFields = 'id slug name user { publicUsername } image { filePath } images(limit:8) { filePath } stls { fileSize } otherFiles { fileSize }';
 
         $vars = [
             'limit'      => max(1, min($limit, 100)),
@@ -244,8 +245,12 @@ final class PrintablesService
             'ordering'   => 'trending',
         ];
 
-        // Attempt the rich (size-bearing) query first; fall back to plain on failure.
-        $data = $this->gql($build($sizeFields), $vars);
+        // Attempt gallery+size query first; fall back to size-only, then base.
+        $data = $this->gql($build($imageFields), $vars);
+        if ($data === null) {
+            $this->lastError = '';
+            $data = $this->gql($build($sizeFields), $vars);
+        }
         if ($data === null) {
             $this->lastError = '';
             $data = $this->gql($build($baseFields), $vars);
@@ -268,6 +273,20 @@ final class PrintablesService
             if ($thumb !== '' && !preg_match('#^https?://#', $thumb)) {
                 $thumb = 'https://media.printables.com/' . ltrim($thumb, '/'); // [S3] verify prefix
             }
+            // Gallery images for hover slider.
+            $images = [];
+            foreach (($it['images'] ?? []) as $img) {
+                $fp = (string) ($img['filePath'] ?? '');
+                if ($fp === '') continue;
+                if (!preg_match('#^https?://#', $fp)) {
+                    $fp = 'https://media.printables.com/' . ltrim($fp, '/');
+                }
+                if (!in_array($fp, $images, true)) $images[] = $fp;
+            }
+            if ($thumb !== '' && (empty($images) || $images[0] !== $thumb)) {
+                array_unshift($images, $thumb);
+                $images = array_slice(array_unique($images), 0, 8);
+            }
             // Sum file sizes when present (0 = unknown, e.g. plain-query fallback).
             $size = 0;
             foreach (['stls', 'otherFiles'] as $grp) {
@@ -283,6 +302,7 @@ final class PrintablesService
                 'name'    => (string) ($it['name'] ?? 'Untitled'),
                 'creator' => (string) ($it['user']['publicUsername'] ?? 'unknown'),
                 'thumb'   => (string) $thumb,
+                'images'  => $images,
                 'size'    => $size,
             ];
         }, $items);
@@ -321,6 +341,7 @@ final class PrintablesService
         };
         $baseFields = 'id slug name image { filePath } user { publicUsername } price club: premium';
         $sizeFields = $baseFields . ' stls { fileSize } otherFiles { fileSize }';
+        $imageFields = 'id slug name image { filePath } images(limit:8) { filePath } user { publicUsername } price club: premium stls { fileSize } otherFiles { fileSize }';
 
         $vars = [
             'query'    => $query,
@@ -330,7 +351,11 @@ final class PrintablesService
             'ordering' => null,                // null = Printables' default (relevance)
         ];
 
-        $data = $this->gql($build($sizeFields), $vars);
+        $data = $this->gql($build($imageFields), $vars);
+        if ($data === null) {
+            $this->lastError = '';
+            $data = $this->gql($build($sizeFields), $vars);
+        }
         if ($data === null) {
             $this->lastError = '';
             $data = $this->gql($build($baseFields), $vars);
@@ -351,6 +376,20 @@ final class PrintablesService
             if ($thumb !== '' && !preg_match('#^https?://#', $thumb)) {
                 $thumb = 'https://media.printables.com/' . ltrim($thumb, '/');
             }
+            // Gallery images for hover slider.
+            $images = [];
+            foreach (($it['images'] ?? []) as $img) {
+                $fp = (string) ($img['filePath'] ?? '');
+                if ($fp === '') continue;
+                if (!preg_match('#^https?://#', $fp)) {
+                    $fp = 'https://media.printables.com/' . ltrim($fp, '/');
+                }
+                if (!in_array($fp, $images, true)) $images[] = $fp;
+            }
+            if ($thumb !== '' && (empty($images) || $images[0] !== $thumb)) {
+                array_unshift($images, $thumb);
+                $images = array_slice(array_unique($images), 0, 8);
+            }
             $size = 0;
             foreach (['stls', 'otherFiles'] as $grp) {
                 if (!empty($it[$grp]) && is_array($it[$grp])) {
@@ -365,6 +404,7 @@ final class PrintablesService
                 'name'    => (string) ($it['name'] ?? 'Untitled'),
                 'creator' => (string) ($it['user']['publicUsername'] ?? 'unknown'),
                 'thumb'   => (string) $thumb,
+                'images'  => $images,
                 'size'    => $size,
                 'price'   => (float) ($it['price'] ?? 0),
                 'club'    => (bool) ($it['club'] ?? false),
