@@ -62,39 +62,65 @@ final class Cults3DService
             return [];
         }
 
-        // Build GraphQL query — correct field is creationsBatch with query/categorySlug args
-        $args = [];
-        if (trim($query) !== '')  $args[] = 'query: ' . json_encode(trim($query));
-        if ($freeOnly)            $args[] = 'free: true';
-        if ($category !== '')     $args[] = 'categorySlug: ' . json_encode($category);
-        if ($sort !== '')         $args[] = 'sort: ' . $sort;
-        if ($limit > 0)           $args[] = 'limit: ' . min(20, $limit);
-        if ($page > 1)            $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
+        // Two separate endpoints: keyword search vs browse
+        if (trim($query) !== '') {
+            // Keyword search: creationsSearchBatch(query:, limit:, offset:)
+            $args   = [];
+            $args[] = 'query: ' . json_encode(trim($query));
+            if ($limit > 0) $args[] = 'limit: ' . min(20, $limit);
+            if ($page > 1)  $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
 
-        $argStr = $args !== [] ? '(' . implode(', ', $args) . ')' : '';
-
-        $gql = <<<GQL
-        {
-          creationsBatch{$argStr} {
-            results {
-              id
-              slug
-              name
-              free
-              price(currency: USD) { cents }
-              illustrationImageUrl
-              images { url }
-              creator { nick }
-              files { size }
+            $argStr = '(' . implode(', ', $args) . ')';
+            $gql = <<<GQL
+            {
+              creationsSearchBatch{$argStr} {
+                results {
+                  id
+                  slug
+                  name
+                  free
+                  illustrationImageUrl
+                  images { url }
+                  creator { nick }
+                  files { size }
+                }
+              }
             }
-          }
+            GQL;
+            $data  = $this->gql($gql);
+            if ($data === null) return [];
+            $items = $data['creationsSearchBatch']['results'] ?? [];
+        } else {
+            // Browse: creationsBatch(limit:, offset:, onlyFree:, categorySlug:, sort:)
+            $args = [];
+            if ($freeOnly)        $args[] = 'onlyFree: true';
+            if ($category !== '') $args[] = 'categorySlug: ' . json_encode($category);
+            if ($sort !== '')     $args[] = 'sort: ' . $sort;
+            if ($limit > 0)       $args[] = 'limit: ' . min(20, $limit);
+            if ($page > 1)        $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
+
+            $argStr = $args !== [] ? '(' . implode(', ', $args) . ')' : '';
+            $gql = <<<GQL
+            {
+              creationsBatch{$argStr} {
+                results {
+                  id
+                  slug
+                  name
+                  free
+                  illustrationImageUrl
+                  images { url }
+                  creator { nick }
+                  files { size }
+                }
+              }
+            }
+            GQL;
+            $data  = $this->gql($gql);
+            if ($data === null) return [];
+            $items = $data['creationsBatch']['results'] ?? [];
         }
-        GQL;
 
-        $data = $this->gql($gql);
-        if ($data === null) return [];
-
-        $items = $data['creationsBatch']['results'] ?? [];
         $this->lastTotal = count($items); // Cults doesn't return total counts
         return $this->normalize($items);
     }

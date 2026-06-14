@@ -199,9 +199,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             cfg_save(['cults3d_username' => $username, 'cults3d_token' => $apiKey]);
             // Quick validation
             $c = new Cults3DService($username, $apiKey);
-            $r = $c->gqlPublic('{ myself { nick } }');
-            $notice = ($r !== null && isset($r['myself']['nick']))
-                ? ['type' => 'ok', 'text' => 'Cults3D connected as ' . $r['myself']['nick'] . '.']
+            $r = $c->gqlPublic('{ categories { slug } }');
+            $notice = ($r !== null && !empty($r['categories']))
+                ? ['type' => 'ok', 'text' => 'Cults3D connected successfully.']
                 : ['type' => 'err', 'text' => 'Saved but validation failed: ' . $c->lastError];
         }
     }
