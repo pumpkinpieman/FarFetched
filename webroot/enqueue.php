@@ -110,3 +110,13 @@ try {
 }
 
 echo json_encode(['ok' => true, 'queued' => $queued, 'skipped' => $skipped]);
+
+// Kick the worker immediately so the first job starts without waiting for cron.
+// Runs detached (fire-and-forget); cron overlap is safe — worker uses a lock file.
+if ($queued > 0) {
+    $worker = __DIR__ . '/worker.php';
+    $log    = dirname(__DIR__) . '/private/worker.log';
+    if (PHP_OS_FAMILY !== 'Windows' && is_file($worker)) {
+        @exec('php ' . escapeshellarg($worker) . ' >> ' . escapeshellarg($log) . ' 2>&1 &');
+    }
+}

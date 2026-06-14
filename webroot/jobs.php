@@ -312,10 +312,30 @@ $badge = static function (string $s): string {
       }
     }
 
+    let pollTimer = null;
+    let lastQueueEmpty = false;
+
+    function startPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(poll, 1500);
+    }
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
     async function poll() {
       try {
         const r = await fetch('jobs_status.php', { cache: 'no-store' });
-        render(await r.json());
+        const data = await r.json();
+        const hasJobs = (data.counts.by && (data.counts.by.queued || data.counts.by.working || data.counts.by.failed));
+        render(data);
+        if (!hasJobs) {
+          stopPolling();
+          lastQueueEmpty = true;
+        } else {
+          lastQueueEmpty = false;
+          startPolling();
+        }
       } catch (e) { /* transient; next tick retries */ }
     }
 
@@ -354,7 +374,7 @@ $badge = static function (string $s): string {
     });
 
     poll();
-    setInterval(poll, 1500);
+    startPolling();
   })();
   </script>
 </body>
