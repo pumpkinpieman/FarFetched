@@ -371,7 +371,6 @@ final class PrintablesService
                 'club'    => (bool) ($it['club'] ?? false),
             ];
         }, $items);
-        }, $items);
     }
 
     /**
