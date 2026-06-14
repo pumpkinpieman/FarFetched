@@ -186,7 +186,7 @@ $csrf = csrf_token();
     <div class="navlabel">MakerWorld Categories</div>
     <nav id="mwCatNav">
       <?php foreach (MW_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
-        <a href="#" data-mwcat="<?= e($cid) ?>" data-mwlabel="<?= e($label) ?>"
+        <a href="javascript:void(0)" data-mwcat="<?= e($cid) ?>" data-mwlabel="<?= e($label) ?>"
            class="<?= ($mwBrowse && $cid === $mwCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
@@ -194,7 +194,7 @@ $csrf = csrf_token();
     <div class="navlabel">Thingiverse</div>
     <nav id="tvCatNav">
       <?php foreach (TV_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
-        <a href="#" data-tvcat="<?= e($cid) ?>" data-tvlabel="<?= e($label) ?>"
+        <a href="javascript:void(0)" data-tvcat="<?= e($cid) ?>" data-tvlabel="<?= e($label) ?>"
            class="<?= ($tvBrowse && $cid === $tvCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
@@ -211,7 +211,7 @@ $csrf = csrf_token();
     <div class="navlabel">Categories</div>
     <nav id="pbCatNav">
       <?php foreach (CATEGORIES as $slug => $label): ?>
-        <a href="#" data-pbcat="<?= e($slug) ?>" data-pblabel="<?= e($label) ?>"
+        <a href="javascript:void(0)" data-pbcat="<?= e($slug) ?>" data-pblabel="<?= e($label) ?>"
            class="<?= $slug === $active ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
