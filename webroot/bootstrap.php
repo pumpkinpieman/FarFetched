@@ -62,10 +62,8 @@ define('THUMBS_DIR',  PRIVATE_DIR . '/thumbs');
 // 'printables' subfolder so every source lives side by side.
 define('MODELS_ROOT', getenv('FETCHER_DOWNLOAD_DIR') ?: '/mnt/user/Downloads/models');
 define('DEFAULT_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/printables');
-// Each source gets its own sibling folder: printables/, makerworld/, thingiverse/, myminifactory/
 define('MAKERWORLD_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/makerworld');
 define('THINGIVERSE_DOWNLOAD_DIR',   rtrim(MODELS_ROOT, '/') . '/thingiverse');
-define('MYMINIFACTORY_DOWNLOAD_DIR', rtrim(MODELS_ROOT, '/') . '/myminifactory');
 
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
@@ -450,12 +448,6 @@ function cfg_defaults(): array
         'thingiverse_client_sec'     => '',
         'thingiverse_download_dir'   => '',
         'thingiverse_delay'          => 60,
-        'myminifactory_token'        => (string) (getenv('FETCHER_MMF_TOKEN') ?: ''),
-        'myminifactory_client_id'    => '',
-        'myminifactory_client_sec'   => '',
-        'myminifactory_remember_me'  => '',
-        'myminifactory_download_dir' => '',
-        'myminifactory_delay'        => 60,
     ];
 }
 
@@ -532,23 +524,11 @@ function cfg_save(array $patch): bool
     if (isset($patch['thingiverse_delay'])) {
         $current['thingiverse_delay'] = max(30, min(3600, (int) $patch['thingiverse_delay']));
     }
-    if (array_key_exists('myminifactory_token', $patch)) {
-        $current['myminifactory_token'] = trim((string) $patch['myminifactory_token']);
     }
-    if (array_key_exists('myminifactory_client_id', $patch)) {
-        $current['myminifactory_client_id'] = trim((string) $patch['myminifactory_client_id']);
     }
-    if (array_key_exists('myminifactory_client_sec', $patch)) {
-        $current['myminifactory_client_sec'] = trim((string) $patch['myminifactory_client_sec']);
     }
-    if (array_key_exists('myminifactory_remember_me', $patch)) {
-        $current['myminifactory_remember_me'] = trim((string) $patch['myminifactory_remember_me']);
     }
-    if (array_key_exists('myminifactory_download_dir', $patch)) {
-        $current['myminifactory_download_dir'] = trim((string) $patch['myminifactory_download_dir']);
     }
-    if (isset($patch['myminifactory_delay'])) {
-        $current['myminifactory_delay'] = max(30, min(3600, (int) $patch['myminifactory_delay']));
     }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
@@ -564,7 +544,6 @@ function cfg_save(array $patch): bool
 define('DOWNLOAD_DELAY_SECONDS',       (int) cfg('download_delay'));
 define('MAKERWORLD_DELAY_SECONDS',     (int) cfg('makerworld_delay'));
 define('THINGIVERSE_DELAY_SECONDS',    (int) cfg('thingiverse_delay'));
-define('MYMINIFACTORY_DELAY_SECONDS',  (int) cfg('myminifactory_delay'));
 
 function get_makerworld_dir(): string
 {
@@ -578,10 +557,7 @@ function get_thingiverse_dir(): string
     return $v !== '' ? $v : THINGIVERSE_DOWNLOAD_DIR;
 }
 
-function get_myminifactory_dir(): string
 {
-    $v = trim((string) cfg('myminifactory_download_dir'));
-    return $v !== '' ? $v : MYMINIFACTORY_DOWNLOAD_DIR;
 }
 
 // ---- Database (SQLite via PDO) --------------------------------------------

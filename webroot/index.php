@@ -602,7 +602,6 @@ $csrf = csrf_token();
     const lbl = (document.querySelector('aside nav a.active') || {}).textContent || 'All Models';
     browseCategory(MW_CAT, lbl);
   }
-  // Thingiverse / MMF: auto-load popular on browse=all landing.
   if (SOURCE === 'thingiverse' && TV_BROWSE) {
     window._tvCatActive = TV_CAT;
     const lbl = (document.querySelector('#tvCatNav a.active') || {}).textContent || 'All Models';

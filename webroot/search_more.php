@@ -67,17 +67,7 @@ if ($source === 'thingiverse') {
     exit;
 }
 
-// ---- MyMiniFactory ----------------------------------------------------------
-if ($source === 'myminifactory') {
-    $mmf    = new MyMiniFactoryService();
-    $limit  = 20;
-    $models = $mmf->search($q, $limit, $page, $showNsfw);
-    if ($mmf->lastError !== '') { echo json_encode(['ok' => false, 'error' => $mmf->lastError]); exit; }
-    $total      = $mmf->lastTotal;
-    $nextOffset = (count($models) >= $limit) ? $offset + $limit : null;
-    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $total, 'source' => 'myminifactory']);
-    exit;
-}
+
 
 // ---- Printables -------------------------------------------------------------
 $svc = new PrintablesService();

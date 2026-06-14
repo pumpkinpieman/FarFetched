@@ -60,7 +60,7 @@ if (!in_array($source, ['printables', 'makerworld', 'thingiverse'], true)) {
 if ($source === 'makerworld') {
     $fileType = 'PACK';
 }
-// Thingiverse and MMF use ZIP (whole-thing download).
+// Thingiverse uses ZIP (whole-thing download).
 if ($source === 'thingiverse') {
     $fileType = 'PACK';
 }

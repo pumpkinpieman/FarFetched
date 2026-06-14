@@ -513,16 +513,12 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
       <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">More Sources</h2>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
         <div style="background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:16px;opacity:.7;">
-          <div style="font-size:14px;font-weight:600;margin-bottom:4px;">MyMiniFactory</div>
-          <div style="font-size:12px;color:var(--muted);line-height:1.5;">Removed — OAuth2 + Google SSO incompatibility. May return in a future release.</div>
-        </div>
-        <div style="background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:16px;opacity:.7;">
           <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Cults3D</div>
           <div style="font-size:12px;color:var(--muted);line-height:1.5;">Planned — artistic & unique designs not found elsewhere.</div>
         </div>
         <div style="background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:16px;opacity:.7;">
           <div style="font-size:14px;font-weight:600;margin-bottom:4px;">YouMagine</div>
-          <div style="font-size:12px;color:var(--muted);line-height:1.5;">Planned — now under MyMiniFactory umbrella.</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.5;">Planned — now owned by the same company as Thingiverse.</div>
         </div>
       </div>
     </div>
