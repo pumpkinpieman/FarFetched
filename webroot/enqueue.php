@@ -52,15 +52,14 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
     $fileType = 'STL';
 }
 
-// Source selector. MakerWorld is always a whole-model ZIP, which the worker
-// treats as PACK-equivalent — normalize its file_type so the unique key and
-// the queue UI stay consistent.
 $source = strtolower(trim((string) ($in['source'] ?? 'printables')));
 if (!in_array($source, ['printables', 'makerworld'], true)) {
     $source = 'printables';
 }
-if ($source === 'makerworld') {
-    $fileType = 'PACK';
+// MakerWorld supports STL and 3MF — pass the user's selection through.
+// PACK is still accepted for legacy paste-ID jobs from the no-token flow.
+if ($source === 'makerworld' && !in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
+    $fileType = 'STL';
 }
 
 $models = $in['models'] ?? null;

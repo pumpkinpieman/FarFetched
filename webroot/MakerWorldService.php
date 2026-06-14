@@ -196,26 +196,33 @@ final class MakerWorldService
         $wantStl = (strtoupper($fileType) === 'STL');
 
         if ($wantStl) {
-            // STL path: /f3mf with fileType=3mfstl tells MakerWorld to return the
-            // _stls.zip signed CDN URL instead of the BambuStudio 3MF pack.
-            // Confirmed from browser network trace: same endpoint, different param.
+            // STL path: fileType=3mfstl asks MakerWorld for the _stls.zip.
+            // For 3MF-only models MakerWorld ignores the param and returns a .3mf
+            // URL instead — we detect that and fall through with a clear error.
+            // devModelName is omitted (varies per printer; MakerWorld picks a default).
             $instanceId = $this->findInstanceId($designId);
             if ($instanceId !== '') {
-                $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/f3mf?type=download&fileType=3mfstl&devModelName=N1');
+                $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/f3mf?type=download&fileType=3mfstl');
                 if ($url !== '') {
-                    return $url;
+                    // Confirm MakerWorld actually returned an STL zip, not a 3MF file.
+                    if (str_contains($url, '_stls.zip')) {
+                        return $url;
+                    }
+                    // Model has no STL export — MakerWorld returned 3MF despite the param.
+                    $this->lastError = 'Model has no STL export on MakerWorld (3MF only). Select 3MF to download it.';
+                    return '';
                 }
             }
             $firstErr = $this->lastError;
 
             // Fallback: plain model download doc sometimes carries an _stls link.
             $url = $this->mintFrom(self::API . '/design-service/design/' . $designId . '/model?type=download&fileType=3mfstl');
-            if ($url !== '') {
+            if ($url !== '' && str_contains($url, '_stls.zip')) {
                 return $url;
             }
 
             $this->lastError = $firstErr !== '' ? $firstErr
-                : ($this->lastError !== '' ? $this->lastError : 'No STL download found for this MakerWorld model.');
+                : ($this->lastError !== '' ? $this->lastError : 'No STL export available for this MakerWorld model. Try 3MF instead.');
             return '';
         }
 

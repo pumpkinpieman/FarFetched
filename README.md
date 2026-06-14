@@ -60,6 +60,25 @@ Add via **Docker → Add Container** (or Compose Manager): map a host port to
 container `80`, bind a host share to `/downloads`, and create/keep the
 `private` volume. No template needed beyond that.
 
+## Publishing to GitHub
+
+`private/` and all secrets/state are gitignored, so a fresh clone starts clean.
+Before you push:
+- This is framed **personal-use / educational**. The Printables API calls are
+  reverse-engineered and unverified; the README and pacing defaults stay
+  conservative on purpose. Don't market it as "download everything."
+- Add a `LICENSE` if you want one (MIT is typical for a tool like this).
+- `verify.php` is a diagnostic that exposes raw API output — fine in the repo,
+  but block or delete it on any long-lived deployment.
+
+```bash
+git init && git add . && git commit -m "Initial commit: FarFetched"
+git branch -M main
+git remote add origin https://github.com/pumpkinpieman/farfetched.git
+git push -u origin main
+```
+
+
 ## Layout
 
 ```
@@ -181,3 +200,5 @@ amber/not-writable, ensure the Apache/PHP process user can write there
 - Pace: `DOWNLOAD_DELAY_SECONDS` in `bootstrap.php` (default 120).
 - Retry cap: `MAX_ATTEMPTS` in `worker.php` (default 3).
 - Batch cap: 2000 models per submit (`enqueue.php`).
+
+
