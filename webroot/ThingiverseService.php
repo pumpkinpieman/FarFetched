@@ -67,10 +67,12 @@ final class ThingiverseService
             'type'     => 'things',
         ];
         if ($categoryId !== null && $categoryId !== '') {
-            $params['category_id'] = $categoryId;
+            // Category search: /categories/{id}/things?q=...
+            $params['q'] = $query;
+            $url = self::API . '/categories/' . rawurlencode($categoryId) . '/things?' . http_build_query($params);
+        } else {
+            $url = self::API . '/search/' . rawurlencode($query) . '?' . http_build_query($params);
         }
-
-        $url  = self::API . '/search/' . rawurlencode($query) . '?' . http_build_query($params);
 
         $json = $this->apiGet($url);
         if ($json === null) return [];
@@ -100,11 +102,13 @@ final class ThingiverseService
             'per_page' => max(1, min(30, $limit)),
             'page'     => max(1, $page),
         ];
+        // /popular ignores category_id — use /categories/{id}/things instead.
         if ($categoryId !== null && $categoryId !== '') {
-            $params['category_id'] = $categoryId;
+            $url = self::API . '/categories/' . rawurlencode($categoryId) . '/things?' . http_build_query($params);
+        } else {
+            $url = self::API . '/popular?' . http_build_query($params);
         }
-        $url  = self::API . '/popular?' . http_build_query($params);
-        $json = $this->apiGet($url);
+        $json  = $this->apiGet($url);
         if ($json === null) return [];
         $items = is_array($json) && isset($json[0]) ? $json : ($json['results'] ?? []);
         return $this->normalize($items);
