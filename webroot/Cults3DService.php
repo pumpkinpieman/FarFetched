@@ -78,7 +78,6 @@ final class Cults3DService
                   slug
                   name
                   illustrationImageUrl
-                  images { url }
                   category { slug }
                   creator { nick }
                   files { size }
@@ -93,7 +92,7 @@ final class Cults3DService
             // Browse: creationsBatch(limit:, offset:, onlyFree:, categorySlug:)
             $args = [];
             if ($freeOnly)        $args[] = 'onlyFree: true';
-            if ($category !== '') $args[] = 'categorySlug: ' . json_encode($category);
+            if ($category !== '') $args[] = 'categorySlugEn: ' . json_encode($category);
             if ($limit > 0)       $args[] = 'limit: ' . min(20, $limit);
             if ($page > 1)        $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
 
@@ -106,7 +105,6 @@ final class Cults3DService
                   slug
                   name
                   illustrationImageUrl
-                  images { url }
                   category { slug }
                   creator { nick }
                   files { size }
@@ -286,16 +284,8 @@ final class Cults3DService
             $catSlug = strtolower((string)($it['category']['slug'] ?? ''));
             if (str_contains($catSlug, 'naughti')) continue;
 
-            $thumb = (string)($it['illustrationImageUrl'] ?? $it['thumbnailUrl'] ?? '');
-
+            $thumb  = (string)($it['illustrationImageUrl'] ?? '');
             $images = $thumb !== '' ? [$thumb] : [];
-            if (isset($it['images']) && is_array($it['images'])) {
-                foreach ($it['images'] as $img) {
-                    $u = is_array($img) ? (string)($img['url'] ?? '') : (string)$img;
-                    if ($u !== '' && !in_array($u, $images, true)) $images[] = $u;
-                }
-                $images = array_slice($images, 0, 8);
-            }
 
             $size = 0;
             foreach (($it['files'] ?? []) as $f) { $size += (int)($f['size'] ?? 0); }
