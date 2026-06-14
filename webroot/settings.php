@@ -34,9 +34,14 @@ function validate_printables(): array
     curl_close($ch);
     $user = json_decode((string) $body, true)['data']['me'] ?? null;
     $ts   = token_status();
+    $rs   = refresh_token_status();
     if ($status === 200 && !empty($user['id'])) {
-        return ['ok' => true, 'msg' => 'Authenticated as ' . ($user['publicUsername'] ?? $user['id'])
-            . ' — access valid ' . human_duration((int) ($ts['seconds'] ?? 0)) . '.'];
+        $msg = 'Authenticated as ' . ($user['publicUsername'] ?? $user['id'])
+            . ' — access valid ' . human_duration((int) ($ts['seconds'] ?? 0));
+        if ($rs['state'] === 'valid' || $rs['state'] === 'expiring') {
+            $msg .= ', refresh valid ' . human_duration((int) ($rs['seconds'] ?? 0)) . ' (auto-renews)';
+        }
+        return ['ok' => true, 'msg' => $msg . '.'];
     }
     return ['ok' => false, 'msg' => 'Token rejected (HTTP ' . $status . ').'];
 }
@@ -101,9 +106,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             if ($saved && !isset($notice)) {
-                $v = validate_printables();
+                $v  = validate_printables();
+                $rs = refresh_token_status();
+                $refreshNote = ($rs['state'] === 'valid' || $rs['state'] === 'expiring')
+                    ? ' Refresh token valid ' . human_duration((int) ($rs['seconds'] ?? 0)) . ' — auto-renews.'
+                    : '';
                 $notice = $v['ok']
-                    ? ['type' => 'ok', 'text' => 'Printables connected. ' . $v['msg']]
+                    ? ['type' => 'ok', 'text' => 'Printables connected. ' . $v['msg'] . $refreshNote]
                     : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $v['msg']];
             }
         }
@@ -360,7 +369,12 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
       <div class="src-card">
         <div class="src-head">
           <span class="src-name">Printables</span>
-          <span class="status" style="margin:0;"><span class="dot <?= $pbDot ?>"></span><?= e($pbTxt) ?></span>
+          <span class="status" style="margin:0;flex-direction:column;align-items:flex-end;gap:3px;">
+            <span><span class="dot <?= $pbDot ?>"></span> <?= e($pbTxt) ?></span>
+            <?php if ($hasRefresh): $rs = refresh_token_status(); ?>
+            <span style="font-size:11.5px;color:var(--muted);">Refresh: <?= human_duration((int)($rs['seconds']??0)) ?> left</span>
+            <?php endif; ?>
+          </span>
         </div>
         <div class="src-body">
           <form method="post">
