@@ -449,6 +449,7 @@ function cfg_defaults(): array
         'thingiverse_download_dir'   => '',
         'thingiverse_delay'          => 60,
         'myminifactory_token'        => (string) (getenv('FETCHER_MMF_TOKEN') ?: ''),
+        'myminifactory_remember_me'  => '',
         'myminifactory_download_dir' => '',
         'myminifactory_delay'        => 60,
     ];
@@ -526,6 +527,9 @@ function cfg_save(array $patch): bool
     }
     if (array_key_exists('myminifactory_token', $patch)) {
         $current['myminifactory_token'] = trim((string) $patch['myminifactory_token']);
+    }
+    if (array_key_exists('myminifactory_remember_me', $patch)) {
+        $current['myminifactory_remember_me'] = trim((string) $patch['myminifactory_remember_me']);
     }
     if (array_key_exists('myminifactory_download_dir', $patch)) {
         $current['myminifactory_download_dir'] = trim((string) $patch['myminifactory_download_dir']);

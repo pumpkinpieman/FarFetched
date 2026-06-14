@@ -4,43 +4,58 @@ declare(strict_types=1);
 /**
  * MyMiniFactoryService
  *
- * MyMiniFactory REST API v2 client.
- * Docs: https://www.myminifactory.com/api/v2
+ * Auth: Cookie-based (reverse-engineered from browser traffic).
+ * Two cookies are needed:
+ *   PHPSESSID   — session cookie (short-lived, re-established by REMEMBERME)
+ *   REMEMBERME  — persistent login token (~30 days)
  *
- * Confirmed endpoints:
- *   Search  : GET /v2/search?q=&per_page=&page=
- *             Returns {"items":{"hits":N,"results":[{id,name,
- *             mainImage:{thumbnail:{url}},designer:{username},
- *             files:[{size}]}]}}
- *   Object  : GET /v2/objects/{id}
- *   Files   : GET /v2/objects/{id}/files
- *             Returns {"items":[{download_url,filename,size}]}
+ * Stored in config as:
+ *   myminifactory_token         = PHPSESSID value
+ *   myminifactory_remember_me   = REMEMBERME value
  *
- * Auth: API key as `Authorization: Bearer {key}` header.
- *   myminifactory.com → Account → API → Generate key.
+ * How to get them:
+ *   myminifactory.com → log in (check "Remember me") → DevTools →
+ *   Application → Cookies → copy PHPSESSID and REMEMBERME values.
+ *
+ * API base: https://www.myminifactory.com/api/v2
+ * Search  : GET /v2/search?q=&per_page=&page=&type=objects
+ * Object  : GET /v2/objects/{id}
+ * Files   : GET /v2/objects/{id}/files
  */
 final class MyMiniFactoryService
 {
-    private const API = 'https://www.myminifactory.com/api/v2';
-    private const UA  = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FarFetched/1.0';
+    private const API  = 'https://www.myminifactory.com/api/v2';
+    private const HOST = 'https://www.myminifactory.com';
+    private const UA   = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0';
 
     public string $lastError = '';
     public int    $lastTotal = 0;
 
-    private string $token;
+    private string $sessId;
+    private string $rememberMe;
 
-    public function __construct(?string $token = null)
+    public function __construct(?string $sessId = null, ?string $rememberMe = null)
     {
-        $this->token = $token ?? (function_exists('cfg') ? (string) cfg('myminifactory_token') : '');
-        $this->token = trim($this->token);
+        $this->sessId     = trim($sessId     ?? (function_exists('cfg') ? (string) cfg('myminifactory_token')       : ''));
+        $this->rememberMe = trim($rememberMe ?? (function_exists('cfg') ? (string) cfg('myminifactory_remember_me') : ''));
     }
 
-    public function isAuthed(): bool { return $this->token !== ''; }
+    public function isAuthed(): bool
+    {
+        // Either cookie is sufficient to attempt auth; REMEMBERME is preferred.
+        return $this->sessId !== '' || $this->rememberMe !== '';
+    }
+
+    private function cookieHeader(): string
+    {
+        $parts = [];
+        if ($this->sessId     !== '') $parts[] = 'PHPSESSID=' . $this->sessId;
+        if ($this->rememberMe !== '') $parts[] = 'REMEMBERME=' . $this->rememberMe;
+        return implode('; ', $parts);
+    }
 
     /**
-     * Keyword search. Returns normalized model rows:
-     * [id, slug, name, creator, thumb, images, size, source=>'myminifactory']
-     *
+     * Keyword search or featured browse (empty query).
      * @return array<int,array<string,mixed>>
      */
     public function search(string $query, int $limit = 20, int $page = 1, bool $showNsfw = false): array
@@ -49,26 +64,27 @@ final class MyMiniFactoryService
         $this->lastTotal = 0;
 
         if (!$this->isAuthed()) {
-            $this->lastError = 'MyMiniFactory token not set (paste it in Settings).';
+            $this->lastError = 'MyMiniFactory cookies not set (paste them in Settings).';
             return [];
         }
 
-        $endpoint = trim($query) !== ''
-            ? self::API . '/search?' . http_build_query([
-                'q'        => trim($query),
-                'per_page' => max(1, min(30, $limit)),
-                'page'     => max(1, $page),
-            ])
-            : self::API . '/objects?' . http_build_query([
-                'per_page' => max(1, min(30, $limit)),
-                'page'     => max(1, $page),
-                'featured' => 1,
-            ]);
+        $params = [
+            'per_page' => max(1, min(30, $limit)),
+            'page'     => max(1, $page),
+        ];
+
+        if (trim($query) !== '') {
+            $params['q']    = trim($query);
+            $params['type'] = 'objects';
+            $endpoint = self::API . '/search?' . http_build_query($params);
+        } else {
+            $params['featured'] = 1;
+            $endpoint = self::API . '/objects?' . http_build_query($params);
+        }
 
         $json = $this->apiGet($endpoint);
         if ($json === null) return [];
 
-        // Search wraps in items{}; object listing is direct
         $hits    = $json['items'] ?? $json;
         $this->lastTotal = (int) ($hits['hits'] ?? $hits['total_count'] ?? 0);
         $results = $hits['results'] ?? $hits['objects'] ?? $hits ?? [];
@@ -113,7 +129,7 @@ final class MyMiniFactoryService
     }
 
     /**
-     * Download a file URL to disk.
+     * Download a file URL to disk with cookie auth.
      */
     public function downloadToFile(string $url, string $destPath, ?callable $onProgress = null): bool
     {
@@ -138,9 +154,11 @@ final class MyMiniFactoryService
         ]);
         if ($onProgress !== null) {
             curl_setopt($ch, CURLOPT_NOPROGRESS, false);
-            curl_setopt($ch, CURLOPT_XFERINFOFUNCTION, static function ($ch, $dt, $dn, $ut, $un) use ($onProgress) {
-                $onProgress((int)$dt, (int)$dn); return 0;
-            });
+            curl_setopt($ch, CURLOPT_XFERINFOFUNCTION,
+                static function ($ch, $dt, $dn, $ut, $un) use ($onProgress) {
+                    $onProgress((int)$dt, (int)$dn); return 0;
+                }
+            );
         }
         $ok     = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -173,6 +191,10 @@ final class MyMiniFactoryService
         curl_close($ch);
 
         if ($body === false) { $this->lastError = 'Network error: ' . $cerr; return null; }
+        if ($st === 401 || $st === 403) {
+            $this->lastError = 'MyMiniFactory auth failed (HTTP ' . $st . ') — re-paste cookies in Settings.';
+            return null;
+        }
         if ($st >= 400) {
             $j   = json_decode((string)$body, true);
             $msg = is_array($j) ? ((string)($j['message'] ?? $j['error'] ?? '')) : '';
@@ -195,9 +217,11 @@ final class MyMiniFactoryService
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_ENCODING       => '',
             CURLOPT_HTTPHEADER     => [
-                'Authorization: Bearer ' . $this->token,
                 'User-Agent: ' . self::UA,
                 'Accept: application/json',
+                'Cookie: ' . $this->cookieHeader(),
+                'Referer: ' . self::HOST . '/',
+                'DNT: 1',
             ],
         ]);
         return $ch;
@@ -210,7 +234,6 @@ final class MyMiniFactoryService
         foreach ($items as $it) {
             if (!is_array($it)) continue;
 
-            // Thumbnail
             $thumb = (string) (
                 $it['mainImage']['thumbnail']['url'] ??
                 $it['thumbnail_url'] ??
@@ -218,7 +241,6 @@ final class MyMiniFactoryService
                 ''
             );
 
-            // Gallery
             $images = $thumb !== '' ? [$thumb] : [];
             if (isset($it['images']) && is_array($it['images'])) {
                 foreach ($it['images'] as $img) {
@@ -228,7 +250,6 @@ final class MyMiniFactoryService
                 $images = array_slice($images, 0, 8);
             }
 
-            // Size
             $size = 0;
             if (isset($it['files']) && is_array($it['files'])) {
                 foreach ($it['files'] as $f) { $size += (int)($f['size'] ?? 0); }

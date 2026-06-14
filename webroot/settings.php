@@ -186,19 +186,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- MyMiniFactory ------------------------------------------------------
     elseif ($action === 'save_mmf_token') {
-        $tok = preg_replace('/^Bearer\s+/i', '', trim((string) ($_POST['mmf_token'] ?? ''))) ?? '';
-        if ($tok === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your MyMiniFactory API key first.'];
+        $sessId     = trim((string) ($_POST['mmf_token'] ?? ''));
+        $rememberMe = trim((string) ($_POST['mmf_remember_me'] ?? ''));
+        // Strip "PHPSESSID=" or "REMEMBERME=" prefixes if pasted as cookie pairs
+        $sessId     = preg_replace('/^PHPSESSID=/', '', $sessId) ?? $sessId;
+        $rememberMe = preg_replace('/^REMEMBERME=/', '', $rememberMe) ?? $rememberMe;
+        if ($sessId === '' && $rememberMe === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste at least one cookie value.'];
         } else {
-            $ok = cfg_save(['myminifactory_token' => $tok]);
+            $ok = cfg_save([
+                'myminifactory_token'       => $sessId,
+                'myminifactory_remember_me' => $rememberMe,
+            ]);
             $notice = $ok
-                ? ['type' => 'ok', 'text' => 'MyMiniFactory API key saved.']
+                ? ['type' => 'ok', 'text' => 'MyMiniFactory cookies saved.' . ($rememberMe !== '' ? ' REMEMBERME will keep you logged in for ~30 days.' : ' Only PHPSESSID stored — paste REMEMBERME too for persistence.')]
                 : ['type' => 'err', 'text' => 'Could not write config.'];
         }
     }
     elseif ($action === 'clear_mmf_token') {
-        cfg_save(['myminifactory_token' => '']);
-        $notice = ['type' => 'ok', 'text' => 'MyMiniFactory API key cleared.'];
+        cfg_save(['myminifactory_token' => '', 'myminifactory_remember_me' => '']);
+        $notice = ['type' => 'ok', 'text' => 'MyMiniFactory cookies cleared.'];
     }
     elseif ($action === 'save_mmf_dir') {
         $r = apply_source_dir((string) ($_POST['mmf_dir'] ?? ''), 'myminifactory');
@@ -504,25 +511,28 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
       </div>
 
       <!-- MyMiniFactory -->
+      <?php $mmfHasRemember = (string)cfg('myminifactory_remember_me') !== ''; ?>
       <div class="src-card">
         <div class="src-head">
           <span class="src-name">MyMiniFactory</span>
-          <span class="status" style="margin:0;"><span class="dot <?= $mmfTok!==''?'on':'off' ?>"></span><?= $mmfTok!==''?'API key stored':'Not connected' ?></span>
+          <span class="status" style="margin:0;"><span class="dot <?= $mmfTok!==''?'on':'off' ?>"></span><?= $mmfTok!==''?'Cookies stored':'Not connected' ?></span>
         </div>
         <div class="src-body">
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
-            <label for="mmf_token"><?= $mmfTok!==''?'Replace API key':'Paste API key' ?></label>
-            <textarea id="mmf_token" name="mmf_token" placeholder="paste your MyMiniFactory API key"></textarea>
+            <label for="mmf_sessid">PHPSESSID <span style="font-weight:400;text-transform:none;">(session cookie)</span></label>
+            <textarea id="mmf_sessid" name="mmf_token" placeholder="cc0335178b7afb2d777ce265a6b705e0"></textarea>
+            <label for="mmf_remember" style="margin-top:10px;">REMEMBERME <span style="font-weight:400;text-transform:none;">(persistent ~30 days)</span></label>
+            <textarea id="mmf_remember" name="mmf_remember_me" placeholder="MyMini.UserBundle.Entity.User…"></textarea>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_mmf_token">Save &amp; Connect</button>
               <?php if ($mmfTok !== ''): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_mmf_token" onclick="return confirm('Clear MyMiniFactory key?')">Clear</button>
+              <button class="btn-ghost btn-sm" name="action" value="clear_mmf_token" onclick="return confirm('Clear MyMiniFactory cookies?')">Clear</button>
               <?php endif; ?>
             </div>
           </form>
-          <p class="hint">myminifactory.com → Account → Settings → API → Generate key. Paste the key directly (no "Bearer " prefix needed).</p>
+          <p class="hint">myminifactory.com → log in (check "Remember me") → DevTools → Application → Cookies → copy <code>PHPSESSID</code> and <code>REMEMBERME</code> values. REMEMBERME lasts ~30 days and re-establishes your session automatically.</p>
         </div>
         <div class="src-body">
           <form method="post">
