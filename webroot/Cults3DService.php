@@ -62,30 +62,31 @@ final class Cults3DService
             return [];
         }
 
-        // Build GraphQL query
+        // Build GraphQL query — correct field is creationsBatch with query/categorySlug args
         $args = [];
-        if (trim($query) !== '')  $args[] = 'q: ' . json_encode(trim($query));
-        if ($limit > 0)           $args[] = 'limit: ' . min(20, $limit);
-        if ($page > 1)            $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
+        if (trim($query) !== '')  $args[] = 'query: ' . json_encode(trim($query));
         if ($freeOnly)            $args[] = 'free: true';
         if ($category !== '')     $args[] = 'categorySlug: ' . json_encode($category);
         if ($sort !== '')         $args[] = 'sort: ' . $sort;
+        if ($limit > 0)           $args[] = 'limit: ' . min(20, $limit);
+        if ($page > 1)            $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
 
         $argStr = $args !== [] ? '(' . implode(', ', $args) . ')' : '';
 
         $gql = <<<GQL
         {
-          creations{$argStr} {
-            id
-            slug
-            name
-            free
-            price { amountInCents currencyCode }
-            thumbnailUrl
-            illustrationImageUrl
-            images { url }
-            creator { nick avatarUrl }
-            files { size }
+          creationsBatch{$argStr} {
+            results {
+              id
+              slug
+              name
+              free
+              price(currency: USD) { cents }
+              illustrationImageUrl
+              images { url }
+              creator { nick }
+              files { size }
+            }
           }
         }
         GQL;
@@ -93,7 +94,7 @@ final class Cults3DService
         $data = $this->gql($gql);
         if ($data === null) return [];
 
-        $items = $data['creations'] ?? [];
+        $items = $data['creationsBatch']['results'] ?? [];
         $this->lastTotal = count($items); // Cults doesn't return total counts
         return $this->normalize($items);
     }
@@ -193,6 +194,12 @@ final class Cults3DService
 
     // ---- internals -----------------------------------------------------------
 
+    /** Public wrapper for use by settings validation. */
+    public function gqlPublic(string $query): ?array
+    {
+        return $this->gql($query);
+    }
+
     /** @return array<string,mixed>|null */
     private function gql(string $query): ?array
     {
@@ -266,7 +273,7 @@ final class Cults3DService
             foreach (($it['files'] ?? []) as $f) { $size += (int)($f['size'] ?? 0); }
 
             $free  = (bool)($it['free'] ?? false);
-            $cents = (int)($it['price']['amountInCents'] ?? 0);
+            $cents = (int)($it['price']['cents'] ?? 0);
             $price = $free ? 0.0 : ($cents / 100);
 
             $id   = (string)($it['id']   ?? '');
