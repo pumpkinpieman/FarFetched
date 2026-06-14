@@ -167,14 +167,20 @@ final class MakerWorldService
     }
 
     /**
-     * Mint a signed download URL for a design (auth required). Tries, in order:
-     *   1. the combined whole-model pack  (design/{id}/model?modelType=all&type=download)
-     *   2. the same call without modelType (some models expose per-instance only)
-     *   3. the default print profile's STL/3MF zip (instance/{profileId}/f3mf?type=download)
+     * Mint a signed download URL for a design (auth required).
+     *
+     * STL mode (fileType='STL') — tries, in order:
+     *   1. instance/{id}/stl?type=download  → _stls.zip  (flat STL files)
+     *   2. design/{id}/model?type=download  → fallback combined pack
+     *
+     * 3MF mode (fileType='3MF', default) — tries, in order:
+     *   1. design/{id}/model?modelType=all&type=download  → BambuStudio/3MF pack
+     *   2. design/{id}/model?type=download                → plain download doc
+     *   3. instance/{id}/f3mf?type=download               → per-instance 3MF zip
+     *
      * Returns the first signed makerworld.bblmw.com .zip URL found, or '' on failure.
-     * This handles models that have no combined "all" pack (which 404 on step 1).
      */
-    public function getModelZipLink(string $designId): string
+    public function getModelZipLink(string $designId, string $fileType = '3MF'): string
     {
         $this->lastError = '';
         $designId = preg_replace('/[^0-9]/', '', $designId);
@@ -187,6 +193,31 @@ final class MakerWorldService
             return '';
         }
 
+        $wantStl = (strtoupper($fileType) === 'STL');
+
+        if ($wantStl) {
+            // STL path: resolve instance id first, hit the /stl endpoint directly.
+            $instanceId = $this->findInstanceId($designId);
+            if ($instanceId !== '') {
+                $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/stl?type=download');
+                if ($url !== '') {
+                    return $url;
+                }
+            }
+            $firstErr = $this->lastError;
+
+            // Fallback: the plain model download doc sometimes carries an _stls link.
+            $url = $this->mintFrom(self::API . '/design-service/design/' . $designId . '/model?type=download');
+            if ($url !== '') {
+                return $url;
+            }
+
+            $this->lastError = $firstErr !== '' ? $firstErr
+                : ($this->lastError !== '' ? $this->lastError : 'No STL download found for this MakerWorld model.');
+            return '';
+        }
+
+        // 3MF path (original logic).
         // 1) combined whole-model pack
         $url = $this->mintFrom(self::API . '/design-service/design/' . $designId . '/model?modelType=all&type=download');
         if ($url !== '') {
@@ -200,7 +231,7 @@ final class MakerWorldService
             return $url;
         }
 
-        // 3) default profile's STL/3MF zip via the instance route
+        // 3) default profile's 3MF zip via the instance route
         $instanceId = $this->findInstanceId($designId);
         if ($instanceId !== '') {
             $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/f3mf?type=download');
@@ -209,7 +240,6 @@ final class MakerWorldService
             }
         }
 
-        // Report the most informative error (the original pack attempt).
         $this->lastError = $firstErr !== '' ? $firstErr
             : ($this->lastError !== '' ? $this->lastError : 'No downloadable files found for this MakerWorld model.');
         return '';

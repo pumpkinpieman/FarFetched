@@ -189,10 +189,10 @@ while (true) {
 
     logln("Job #$jobId  model=$modelId  type=$fileTy  ($slug)");
 
-    // ---- MakerWorld: always a whole-model ZIP ------------------------------
+    // ---- MakerWorld: whole-model ZIP (STL or 3MF per job file_type) ----------
     if (($job['source'] ?? 'printables') === 'makerworld') {
         try {
-            $link = $mw->getModelZipLink($modelId);
+            $link = $mw->getModelZipLink($modelId, $fileTy);
             if ($link === '') {
                 $msg = $mw->lastError !== '' ? $mw->lastError : 'No MakerWorld download available.';
                 // Auth-ish failures halt the run (so the user re-pastes the token);
@@ -233,7 +233,7 @@ while (true) {
             // between mint and fetch. Re-mint once and retry — cheap recovery.
             if (!$okDl && preg_match('/\b(401|403)\b/', $mw->lastError)) {
                 logln('  Signed URL stale (' . trim($mw->lastError) . ') — re-minting and retrying.');
-                $link2 = $mw->getModelZipLink($modelId);
+                $link2 = $mw->getModelZipLink($modelId, $fileTy);
                 if ($link2 !== '') {
                     $okDl = $mw->downloadToFile($link2, $dest, progress_writer($jobId, basename($dest)));
                 }
