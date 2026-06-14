@@ -57,7 +57,7 @@ if ($source === 'makerworld') {
 // ---- Thingiverse ------------------------------------------------------------
 if ($source === 'thingiverse') {
     $tv     = new ThingiverseService();
-    $tvCat  = preg_replace('/[^0-9]/', '', (string) ($_GET['tvcat'] ?? '')) ?: null;
+    $tvCat  = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['tvcat'] ?? ''))) ?: null;
     $limit  = 20;
     $models = $tv->search($q, $limit, $page, $showNsfw, $tvCat);
     if ($tv->lastError !== '') { echo json_encode(['ok' => false, 'error' => $tv->lastError]); exit; }

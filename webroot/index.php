@@ -44,19 +44,19 @@ const MW_CATEGORIES = [
     '2000' => 'Generative 3D Model',
 ];
 
-// Thingiverse categories (id => label).
+// Thingiverse categories (slug => label).
 const TV_CATEGORIES = [
-    ''   => 'All Models',
-    '73' => '3D Printing',
-    '63' => 'Art',
-    '64' => 'Fashion',
-    '65' => 'Gadgets',
-    '66' => 'Hobby',
-    '67' => 'Household',
-    '69' => 'Learning',
-    '70' => 'Models',
-    '71' => 'Tools',
-    '72' => 'Toys & Games',
+    ''              => 'All Models',
+    '3d-printing'   => '3D Printing',
+    'art'           => 'Art',
+    'fashion'       => 'Fashion',
+    'gadgets'       => 'Gadgets',
+    'hobby'         => 'Hobby',
+    'household'     => 'Household',
+    'learning'      => 'Learning',
+    'models'        => 'Models',
+    'tools'         => 'Tools',
+    'toys-and-games' => 'Toys & Games',
 ];
 
 $active = $_GET['cat'] ?? 'all';
@@ -85,7 +85,7 @@ $mwBrowse = $source === 'makerworld' && (isset($_GET['mwcat']) || isset($_GET['b
 if (!array_key_exists($mwCat, MW_CATEGORIES)) { $mwCat = ''; }
 
 // Thingiverse category browse state.
-$tvCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['tvcat'] ?? '')) ?? '';
+$tvCat    = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['tvcat'] ?? '')));
 $tvBrowse = $source === 'thingiverse' && (isset($_GET['tvcat']) || isset($_GET['browse']));
 if (!array_key_exists($tvCat, TV_CATEGORIES)) { $tvCat = ''; }
 
