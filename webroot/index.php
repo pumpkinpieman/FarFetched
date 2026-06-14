@@ -59,6 +59,22 @@ const TV_CATEGORIES = [
     'toys-and-games' => 'Toys & Games',
 ];
 
+// Cults3D categories (slug => label).
+const CULTS3D_CATEGORIES = [
+    ''                    => 'All Models',
+    '3d-printing'         => '3D Printing',
+    'art'                 => 'Art',
+    'fashion-accessories' => 'Fashion',
+    'gadget'              => 'Gadgets',
+    'hobby'               => 'Hobby',
+    'home'                => 'Household',
+    'miniature-figure'    => 'Miniatures',
+    'architecture'        => 'Architecture',
+    'toy-game'            => 'Toys & Games',
+    'tool'                => 'Tools',
+    'jewelry'             => 'Jewelry',
+];
+
 $active = $_GET['cat'] ?? 'all';
 $isRawId = false;
 if (!array_key_exists($active, CATEGORIES)) {
@@ -75,7 +91,7 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower($_GET['src'] ?? 'printables');
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d'], true)) {
     $source = 'printables';
 }
 
@@ -88,6 +104,11 @@ if (!array_key_exists($mwCat, MW_CATEGORIES)) { $mwCat = ''; }
 $tvCat    = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['tvcat'] ?? '')));
 $tvBrowse = $source === 'thingiverse' && (isset($_GET['tvcat']) || isset($_GET['browse']));
 if (!array_key_exists($tvCat, TV_CATEGORIES)) { $tvCat = ''; }
+
+// Cults3D category browse state.
+$cultsCat    = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['cultscat'] ?? '')));
+$cultsBrowse = $source === 'cults3d' && (isset($_GET['cultscat']) || isset($_GET['browse']));
+if (!array_key_exists($cultsCat, CULTS3D_CATEGORIES)) { $cultsCat = ''; }
 
 if ($source === 'makerworld') {
     $svc           = null;
@@ -109,6 +130,14 @@ if ($source === 'makerworld') {
     $banner        = $tvReady
         ? 'Thingiverse — type a keyword to search, or scroll to browse popular.'
         : 'Thingiverse — add your token in Settings to browse and download.';
+} elseif ($source === 'cults3d') {
+    $svc           = null;
+    $models        = [];
+    $initialCursor = null;
+    $cultsReady    = (string) cfg('cults3d_username') !== '' && (string) cfg('cults3d_token') !== '';
+    $banner        = $cultsReady
+        ? 'Cults3D — type a keyword to search, or pick a category on the left.'
+        : 'Cults3D — add your username and API key in Settings to browse and download.';
 } else {
     $svc    = new PrintablesService();
     $models = $svc->isAuthed() ? $svc->searchModels($active) : [];
@@ -198,6 +227,14 @@ $csrf = csrf_token();
            class="<?= ($tvBrowse && $cid === $tvCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
+    <?php elseif ($source === 'cults3d'): ?>
+    <div class="navlabel">Cults3D</div>
+    <nav id="cultsCatNav">
+      <?php foreach (CULTS3D_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
+        <a href="javascript:void(0)" data-cultscat="<?= e($cid) ?>" data-cultslabel="<?= e($label) ?>"
+           class="<?= ($cultsBrowse && $cid === $cultsCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+      <?php endforeach; ?>
+    </nav>
     <?php else: ?>
     <div class="navlabel">Category ID</div>
     <form method="get" style="padding:0 8px 6px;">
@@ -233,6 +270,7 @@ $csrf = csrf_token();
           <a href="?cat=<?= e($active) ?>&type=<?= e($fileType) ?>" class="srcBtn <?= $source==='printables'?'active':'' ?>">Printables</a>
           <a href="?src=makerworld&browse=all" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
           <a href="?src=thingiverse&browse=all" class="srcBtn <?= $source==='thingiverse'?'active':'' ?>">Thingiverse</a>
+          <a href="?src=cults3d&browse=all" class="srcBtn <?= $source==='cults3d'?'active':'' ?>">Cults3D</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
@@ -467,8 +505,10 @@ $csrf = csrf_token();
   let searchNext = null;   // next offset to fetch, or null when exhausted
   const MW_CAT = <?= json_encode($mwCat) ?>;
   const MW_BROWSE = <?= json_encode($mwBrowse) ?>;
-  const TV_CAT = <?= json_encode($tvCat) ?>;
+  const TV_CAT    = <?= json_encode($tvCat) ?>;
   const TV_BROWSE = <?= json_encode($tvBrowse) ?>;
+  const CULTS_CAT    = <?= json_encode($cultsCat) ?>;
+  const CULTS_BROWSE = <?= json_encode($cultsBrowse) ?>;
   let mwCatActive = '';
   let pbCatActive = ACTIVE_CAT;
 
@@ -487,7 +527,9 @@ $csrf = csrf_token();
         (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
         (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '') +
         (SOURCE === 'thingiverse' && (window._tvCatActive ?? TV_CAT) !== '' ? '&tvcat=' + encodeURIComponent(window._tvCatActive ?? TV_CAT) : '') +
-        (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '')
+        (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '') +
+        (SOURCE === 'cults3d' && (window._cultsCatActive ?? CULTS_CAT) !== '' ? '&cultscat=' + encodeURIComponent(window._cultsCatActive ?? CULTS_CAT) : '') +
+        (SOURCE === 'cults3d' && searchQuery === '' ? '&browse=1' : '')
       : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
         '&cursor=' + encodeURIComponent(nextCursor || '');
 
@@ -588,14 +630,9 @@ $csrf = csrf_token();
     await loadMore();
   }
   function clearSearch() {
-    if (SOURCE === 'makerworld') {
-      location.href = '?src=makerworld&browse=all';
-      return;
-    }
-    if (SOURCE === 'thingiverse') {
-      location.href = '?src=thingiverse&browse=all';
-      return;
-    }
+    if (SOURCE === 'makerworld')  { location.href = '?src=makerworld&browse=all';  return; }
+    if (SOURCE === 'thingiverse') { location.href = '?src=thingiverse&browse=all'; return; }
+    if (SOURCE === 'cults3d')     { location.href = '?src=cults3d&browse=all';     return; }
     location.href = '?cat=' + encodeURIComponent(pbCatActive) + '&type=' + encodeURIComponent(FILE_TYPE);
   }
   if (searchGo) searchGo.addEventListener('click', runSearch);
@@ -628,6 +665,12 @@ $csrf = csrf_token();
     window._tvCatActive = TV_CAT;
     const lbl = (document.querySelector('#tvCatNav a.active') || {}).textContent || 'All Models';
     browseTVCategory(TV_CAT, lbl);
+  }
+
+  if (SOURCE === 'cults3d' && CULTS_BROWSE) {
+    window._cultsCatActive = CULTS_CAT;
+    const lbl = (document.querySelector('#cultsCatNav a.active') || {}).textContent || 'All Models';
+    browseCultsCategory(CULTS_CAT, lbl);
   }
 
   // MW category nav
@@ -666,6 +709,32 @@ $csrf = csrf_token();
     refresh();
     loading = false;
     window._tvCatActive = catId;
+    await loadMore();
+  }
+
+  // Cults3D category nav
+  const cultsCatNav = document.getElementById('cultsCatNav');
+  if (cultsCatNav) {
+    cultsCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-cultslabel]');
+      if (!link) return;
+      e.preventDefault();
+      cultsCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browseCultsCategory(link.dataset.cultscat, link.dataset.cultslabel);
+    });
+  }
+
+  async function browseCultsCategory(catId, label) {
+    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
+    mwCatActive = '';
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'Cults3D';
+    if (searchClear) searchClear.style.display = 'none';
+    refresh();
+    loading = false;
+    window._cultsCatActive = catId;
     await loadMore();
   }
 

@@ -64,6 +64,7 @@ define('MODELS_ROOT', getenv('FETCHER_DOWNLOAD_DIR') ?: '/mnt/user/Downloads/mod
 define('DEFAULT_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/printables');
 define('MAKERWORLD_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/makerworld');
 define('THINGIVERSE_DOWNLOAD_DIR',   rtrim(MODELS_ROOT, '/') . '/thingiverse');
+define('CULTS3D_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/cults3d');
 
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
@@ -448,6 +449,10 @@ function cfg_defaults(): array
         'thingiverse_client_sec'     => '',
         'thingiverse_download_dir'   => '',
         'thingiverse_delay'          => 60,
+        'cults3d_username'           => (string) (getenv('FETCHER_CULTS3D_USERNAME') ?: ''),
+        'cults3d_token'              => (string) (getenv('FETCHER_CULTS3D_TOKEN') ?: ''),
+        'cults3d_download_dir'       => '',
+        'cults3d_delay'              => 60,
     ];
 }
 
@@ -524,6 +529,18 @@ function cfg_save(array $patch): bool
     if (isset($patch['thingiverse_delay'])) {
         $current['thingiverse_delay'] = max(30, min(3600, (int) $patch['thingiverse_delay']));
     }
+    if (array_key_exists('cults3d_username', $patch)) {
+        $current['cults3d_username'] = trim((string) $patch['cults3d_username']);
+    }
+    if (array_key_exists('cults3d_token', $patch)) {
+        $current['cults3d_token'] = trim((string) $patch['cults3d_token']);
+    }
+    if (array_key_exists('cults3d_download_dir', $patch)) {
+        $current['cults3d_download_dir'] = trim((string) $patch['cults3d_download_dir']);
+    }
+    if (isset($patch['cults3d_delay'])) {
+        $current['cults3d_delay'] = max(30, min(3600, (int) $patch['cults3d_delay']));
+    }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
     if (file_put_contents(CONFIG_STORE, $payload, LOCK_EX) === false) {
@@ -538,6 +555,7 @@ function cfg_save(array $patch): bool
 define('DOWNLOAD_DELAY_SECONDS',       (int) cfg('download_delay'));
 define('MAKERWORLD_DELAY_SECONDS',     (int) cfg('makerworld_delay'));
 define('THINGIVERSE_DELAY_SECONDS',    (int) cfg('thingiverse_delay'));
+define('CULTS3D_DELAY_SECONDS',        (int) cfg('cults3d_delay'));
 
 function get_makerworld_dir(): string
 {
@@ -551,7 +569,10 @@ function get_thingiverse_dir(): string
     return $v !== '' ? $v : THINGIVERSE_DOWNLOAD_DIR;
 }
 
+function get_cults3d_dir(): string
 {
+    $v = trim((string) cfg('cults3d_download_dir'));
+    return $v !== '' ? $v : CULTS3D_DOWNLOAD_DIR;
 }
 
 // ---- Database (SQLite via PDO) --------------------------------------------

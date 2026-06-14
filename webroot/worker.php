@@ -30,6 +30,7 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
+require_once __DIR__ . '/Cults3DService.php';
 
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
@@ -95,6 +96,7 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
 $svc  = new PrintablesService();
 $mw   = new MakerWorldService();
 $tv   = new ThingiverseService();
+$cults = new Cults3DService();
 
 // Per-source readiness. A source that isn't configured simply has its jobs wait
 // in the queue (they're filtered out of the claim query below) rather than
@@ -118,10 +120,16 @@ logln($thingiverseReady
     ? 'Thingiverse token present.'
     : 'Thingiverse token absent — Thingiverse jobs will wait.');
 
+$cultsReady = $cults->isAuthed();
+logln($cultsReady
+    ? 'Cults3D credentials present.'
+    : 'Cults3D credentials absent — Cults3D jobs will wait.');
+
 $readySources = [];
 if ($printablesReady)  { $readySources[] = 'printables'; }
 if ($makerworldReady)  { $readySources[] = 'makerworld'; }
 if ($thingiverseReady) { $readySources[] = 'thingiverse'; }
+if ($cultsReady)       { $readySources[] = 'cults3d'; }
 
 if ($readySources === []) {
     logerr('error', 'No source configured — paste at least one token in Settings. Exiting.');
@@ -349,6 +357,40 @@ while (true) {
         }
         $GLOBALS['ACTIVE_JOB_ID'] = null;
         pace(THINGIVERSE_DELAY_SECONDS);
+        continue;
+    }
+
+    // ---- Cults3D: per-file downloads ----------------------------------------
+    if (($job['source'] ?? '') === 'cults3d') {
+        try {
+            $files = $cults->getFiles($slug ?: $modelId);
+            if (empty($files)) {
+                $msg = $cults->lastError !== '' ? $cults->lastError : 'No files found for this Cults3D creation.';
+                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Skipped: ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(CULTS3D_DELAY_SECONDS);
+                continue;
+            }
+            $destDir = rtrim(get_cults3d_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+            if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+            $anyOk = false;
+            foreach ($files as $f) {
+                $fname = safe_segment($f['name']);
+                $dest  = $destDir . '/' . $fname;
+                if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $anyOk = true; continue; }
+                $ok = $cults->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
+                if ($ok) { logln('  Saved: ' . $fname); $anyOk = true; }
+                else { logln('  Failed: ' . $fname . ' — ' . $cults->lastError); }
+                pace(CULTS3D_DELAY_SECONDS);
+            }
+            $upd->execute([':st' => $anyOk?'done':'error', ':inc' => 1, ':err' => $anyOk?'':$cults->lastError, ':path' => $anyOk?$destDir:'', ':id' => $jobId]);
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  Cults3D error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(CULTS3D_DELAY_SECONDS);
         continue;
     }
 

@@ -122,9 +122,9 @@ $badge = static function (string $s): string {
 
     <div class="stats">
       <?php foreach (['queued','working','done','failed','skipped'] as $s): ?>
-        <div class="stat"><div class="n"><?= (int)($counts[$s] ?? 0) ?></div><div class="l"><?= $s ?></div></div>
+        <div class="stat"><div class="n" id="stat-<?= $s ?>"><?= (int)($counts[$s] ?? 0) ?></div><div class="l"><?= ucfirst($s) ?></div></div>
       <?php endforeach; ?>
-      <div class="stat"><div class="n"><?= $total ?></div><div class="l">total</div></div>
+      <div class="stat"><div class="n" id="stat-total"><?= $total ?></div><div class="l">Total</div></div>
     </div>
 
     <div class="toolbar">
@@ -240,6 +240,14 @@ $badge = static function (string $s): string {
       const total = data.counts.total, done = data.counts.done;
       ovDone.textContent = done; ovTotal.textContent = total;
       ovFill.style.width = (total > 0 ? Math.floor(done / total * 100) : 0) + '%';
+      // Update stat cards
+      const by = data.counts.by || {};
+      ['queued','working','done','failed','skipped'].forEach(s => {
+        const el = document.getElementById('stat-' + s);
+        if (el) el.textContent = by[s] ?? 0;
+      });
+      const elTotal = document.getElementById('stat-total');
+      if (elTotal) elTotal.textContent = total;
 
       // Live status line
       if (active && active.phase === 'downloading') {

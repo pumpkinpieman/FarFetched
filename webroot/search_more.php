@@ -16,6 +16,7 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
+require_once __DIR__ . '/Cults3DService.php';
 
 header('Content-Type: application/json');
 
@@ -25,7 +26,7 @@ $page   = max(1, (int) ($offset / 20) + 1);
 $paid   = (string) ($_GET['paid'] ?? 'all');
 if (!in_array($paid, ['all', 'free', 'paid'], true)) { $paid = 'all'; }
 $source = strtolower((string) ($_GET['src'] ?? 'printables'));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d'], true)) {
     $source = 'printables';
 }
 $showNsfw = ($_GET['nsfw'] ?? '') === '1';
@@ -33,7 +34,8 @@ $mwCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['mwcat'] ?? '')) ?? '';
 $mwBrowse = ($_GET['browse'] ?? '') === '1';
 
 $allowEmptyQ = ($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))
-    || $source === 'thingiverse';
+    || $source === 'thingiverse'
+    || $source === 'cults3d';
 
 if ($q === '' && !$allowEmptyQ) {
     echo json_encode(['ok' => false, 'error' => 'Empty search.']);
@@ -68,6 +70,19 @@ if ($source === 'thingiverse') {
 }
 
 
+
+// ---- Cults3D ----------------------------------------------------------------
+if ($source === 'cults3d') {
+    $cults    = new Cults3DService();
+    $cultsCat = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['cultscat'] ?? '')));
+    $freeOnly = ($paid === 'free');
+    $limit    = 20;
+    $models   = $cults->search($q, $limit, $page, $freeOnly, $cultsCat);
+    if ($cults->lastError !== '') { echo json_encode(['ok' => false, 'error' => $cults->lastError]); exit; }
+    $nextOffset = (count($models) >= $limit) ? $offset + $limit : null;
+    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $cults->lastTotal, 'source' => 'cults3d']);
+    exit;
+}
 
 // ---- Printables -------------------------------------------------------------
 $svc = new PrintablesService();

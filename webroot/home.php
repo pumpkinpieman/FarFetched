@@ -21,6 +21,7 @@ $fetchSources = [
     'printables'  => ['label' => 'Printables',  'desc' => 'Browse & download free models from printables.com',            'href' => 'index.php'],
     'makerworld'  => ['label' => 'MakerWorld',  'desc' => 'Browse & download whole-model ZIPs from makerworld.com',       'href' => 'index.php?src=makerworld&browse=all'],
     'thingiverse' => ['label' => 'Thingiverse', 'desc' => 'Browse & download from the world\'s largest 3D model archive', 'href' => 'index.php?src=thingiverse&browse=all'],
+    'cults3d'     => ['label' => 'Cults3D',     'desc' => 'Artistic & unique designs from the cults3d.com community',    'href' => 'index.php?src=cults3d&browse=all'],
 ];
 
 // Library labels for known non-fetch folders.

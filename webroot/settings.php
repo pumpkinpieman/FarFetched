@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
+require_once __DIR__ . '/Cults3DService.php';
 csrf_token();
 
 // ---- Helpers ----------------------------------------------------------------
@@ -188,6 +189,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notice = ['type' => 'ok', 'text' => 'Thingiverse pacing saved.'];
     }
 
+    // ---- Cults3D ------------------------------------------------------------
+    elseif ($action === 'save_cults_token') {
+        $username = trim((string) ($_POST['cults_username'] ?? ''));
+        $apiKey   = trim((string) ($_POST['cults_api_key'] ?? ''));
+        if ($username === '' || $apiKey === '') {
+            $notice = ['type' => 'err', 'text' => 'Both username and API key are required.'];
+        } else {
+            cfg_save(['cults3d_username' => $username, 'cults3d_token' => $apiKey]);
+            // Quick validation
+            $c = new Cults3DService($username, $apiKey);
+            $r = $c->search('test', 1);
+            $notice = $c->lastError === ''
+                ? ['type' => 'ok', 'text' => 'Cults3D connected successfully.']
+                : ['type' => 'err', 'text' => 'Saved but validation failed: ' . $c->lastError];
+        }
+    }
+    elseif ($action === 'clear_cults_token') {
+        cfg_save(['cults3d_username' => '', 'cults3d_token' => '']);
+        $notice = ['type' => 'ok', 'text' => 'Cults3D credentials cleared.'];
+    }
+    elseif ($action === 'save_cults_dir') {
+        $r = apply_source_dir((string) ($_POST['cults_dir'] ?? ''), 'cults3d');
+        $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
+    }
+    elseif ($action === 'save_cults_delay') {
+        cfg_save(['cults3d_delay' => (int) ($_POST['cults_delay'] ?? 60)]);
+        $notice = ['type' => 'ok', 'text' => 'Cults3D pacing saved.'];
+    }
+
     // ---- Worker -------------------------------------------------------------
     elseif ($action === 'save_config') {
         $ok = cfg_save([
@@ -233,6 +263,13 @@ $tvTok   = (string) cfg('thingiverse_token');
 $tvDir   = get_thingiverse_dir();
 $tvWrite = is_dir($tvDir) && is_writable($tvDir);
 $tvDelay = (int) cfg('thingiverse_delay');
+
+$cultsUser  = (string) cfg('cults3d_username');
+$cultsTok   = (string) cfg('cults3d_token');
+$cultsDir   = get_cults3d_dir();
+$cultsWrite = is_dir($cultsDir) && is_writable($cultsDir);
+$cultsDelay = (int) cfg('cults3d_delay');
+$cultsReady = $cultsUser !== '' && $cultsTok !== '';
 
 
 // Active tab
@@ -507,18 +544,65 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
         </div>
       </div>
 
+      <!-- Cults3D -->
+      <div class="src-card">
+        <div class="src-head">
+          <span class="src-name">Cults3D</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $cultsReady?'on':'off' ?>"></span><?= $cultsReady?'Connected':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_username">Cults3D Username</label>
+            <input type="text" id="cults_username" name="cults_username" value="<?= e($cultsUser) ?>" placeholder="your-cults3d-username">
+            <label for="cults_api_key" style="margin-top:10px;">API Key</label>
+            <input type="text" id="cults_api_key" name="cults_api_key" value="<?= e($cultsTok) ?>" placeholder="paste your Cults3D API key">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_token">Save &amp; Connect</button>
+              <?php if ($cultsReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_cults_token" onclick="return confirm('Clear Cults3D credentials?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">cults3d.com → Account → Settings → API → Generate key. Enter your username and the generated key.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_dir">Download folder</label>
+            <input type="text" id="cults_dir" name="cults_dir" value="<?= e($cultsDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $cultsWrite?'on':'off' ?>"></span><?= $cultsWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(CULTS3D_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="cults_delay" name="cults_delay" inputmode="numeric" value="<?= e((string)$cultsDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_delay">Save</button>
+            </div>
+          </form>
+          <p class="hint">Cults3D rate limit: ~500 requests/day. Keep ≥ 60s to stay well within limits.</p>
+        </div>
+      </div>
+
     </div><!-- /.src-grid -->
+
 
     <div style="margin-top:24px;">
       <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">More Sources</h2>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
         <div style="background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:16px;opacity:.7;">
-          <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Cults3D</div>
-          <div style="font-size:12px;color:var(--muted);line-height:1.5;">Planned — artistic & unique designs not found elsewhere.</div>
-        </div>
-        <div style="background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:16px;opacity:.7;">
-          <div style="font-size:14px;font-weight:600;margin-bottom:4px;">YouMagine</div>
-          <div style="font-size:12px;color:var(--muted);line-height:1.5;">Planned — now owned by the same company as Thingiverse.</div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Thangs</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.5;">Planned — no public API yet.</div>
         </div>
       </div>
     </div>

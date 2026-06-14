@@ -1,0 +1,291 @@
+<?php
+declare(strict_types=1);
+
+/**
+ * Cults3DService
+ *
+ * Cults3D GraphQL API client.
+ * Docs: https://cults3d.com/en/pages/graphql
+ *
+ * Auth: HTTP Basic — base64(username:api_key)
+ *   cults3d.com → Account → Settings → API → Generate key
+ *   Stored as: cults3d_username + cults3d_token (api key)
+ *
+ * Endpoint: POST https://cults3d.com/graphql
+ * Rate limit: ~60 req/30s, ~500 req/day
+ */
+final class Cults3DService
+{
+    private const ENDPOINT = 'https://cults3d.com/graphql';
+    private const UA        = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FarFetched/1.0';
+    private const CDN       = 'files.cults3d.com';
+
+    public string $lastError = '';
+    public int    $lastTotal = 0;
+
+    private string $username;
+    private string $apiKey;
+
+    public function __construct(?string $username = null, ?string $apiKey = null)
+    {
+        $this->username = trim($username ?? (function_exists('cfg') ? (string) cfg('cults3d_username') : ''));
+        $this->apiKey   = trim($apiKey   ?? (function_exists('cfg') ? (string) cfg('cults3d_token')    : ''));
+    }
+
+    public function isAuthed(): bool
+    {
+        return $this->username !== '' && $this->apiKey !== '';
+    }
+
+    private function authHeader(): string
+    {
+        return 'Authorization: Basic ' . base64_encode($this->username . ':' . $this->apiKey);
+    }
+
+    /**
+     * Search or browse creations.
+     * @return array<int,array<string,mixed>>
+     */
+    public function search(
+        string $query    = '',
+        int    $limit    = 20,
+        int    $page     = 1,
+        bool   $freeOnly = false,
+        string $category = '',
+        string $sort     = 'RECENTLY_PUBLISHED'
+    ): array {
+        $this->lastError = '';
+        $this->lastTotal = 0;
+
+        if (!$this->isAuthed()) {
+            $this->lastError = 'Cults3D credentials not set (paste username + API key in Settings).';
+            return [];
+        }
+
+        // Build GraphQL query
+        $args = [];
+        if (trim($query) !== '')  $args[] = 'q: ' . json_encode(trim($query));
+        if ($limit > 0)           $args[] = 'limit: ' . min(20, $limit);
+        if ($page > 1)            $args[] = 'offset: ' . (($page - 1) * min(20, $limit));
+        if ($freeOnly)            $args[] = 'free: true';
+        if ($category !== '')     $args[] = 'categorySlug: ' . json_encode($category);
+        if ($sort !== '')         $args[] = 'sort: ' . $sort;
+
+        $argStr = $args !== [] ? '(' . implode(', ', $args) . ')' : '';
+
+        $gql = <<<GQL
+        {
+          creations{$argStr} {
+            id
+            slug
+            name
+            free
+            price { amountInCents currencyCode }
+            thumbnailUrl
+            illustrationImageUrl
+            images { url }
+            creator { nick avatarUrl }
+            files { size }
+          }
+        }
+        GQL;
+
+        $data = $this->gql($gql);
+        if ($data === null) return [];
+
+        $items = $data['creations'] ?? [];
+        $this->lastTotal = count($items); // Cults doesn't return total counts
+        return $this->normalize($items);
+    }
+
+    /**
+     * List available categories (slugs + labels).
+     * @return array<string,string>
+     */
+    public function categories(): array
+    {
+        if (!$this->isAuthed()) return [];
+        $data = $this->gql('{ categories { slug name } }');
+        if ($data === null) return [];
+        $out = ['' => 'All Models'];
+        foreach (($data['categories'] ?? []) as $c) {
+            $slug = (string)($c['slug'] ?? '');
+            $name = (string)($c['name'] ?? '');
+            if ($slug !== '' && $name !== '') $out[$slug] = $name;
+        }
+        return $out;
+    }
+
+    /**
+     * Get download URLs for a creation's files.
+     * @return array<int,array{name:string,url:string,size:int}>
+     */
+    public function getFiles(string $slug): array
+    {
+        if (!$this->isAuthed()) return [];
+        $gql = '{ creation(slug: ' . json_encode($slug) . ') { files { name size url } } }';
+        $data = $this->gql($gql);
+        if ($data === null) return [];
+        $files = $data['creation']['files'] ?? [];
+        $out   = [];
+        foreach ($files as $f) {
+            $url = (string)($f['url'] ?? '');
+            if ($url === '') continue;
+            $out[] = [
+                'name' => (string)($f['name'] ?? 'file'),
+                'url'  => $url,
+                'size' => (int)($f['size'] ?? 0),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Download a file to disk.
+     */
+    public function downloadToFile(string $url, string $destPath, ?callable $onProgress = null): bool
+    {
+        $this->lastError = '';
+        $dir = dirname($destPath);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            $this->lastError = 'Cannot create destination dir: ' . $dir;
+            return false;
+        }
+        $tmp = $destPath . '.part';
+        $fh  = @fopen($tmp, 'wb');
+        if ($fh === false) { $this->lastError = 'Cannot open temp file.'; return false; }
+
+        $ch = $this->baseCurl($url);
+        curl_setopt_array($ch, [
+            CURLOPT_FILE           => $fh,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 300,
+            CURLOPT_CONNECTTIMEOUT => 20,
+            CURLOPT_FAILONERROR    => true,
+        ]);
+        if ($onProgress !== null) {
+            curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+            curl_setopt($ch, CURLOPT_XFERINFOFUNCTION,
+                static function ($ch, $dt, $dn, $ut, $un) use ($onProgress) {
+                    $onProgress((int)$dt, (int)$dn); return 0;
+                }
+            );
+        }
+        $ok     = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $cerr   = curl_error($ch);
+        curl_close($ch);
+        fclose($fh);
+
+        if ($ok === false || $status >= 400) {
+            @unlink($tmp);
+            $this->lastError = $cerr !== '' ? 'Download error: ' . $cerr : 'HTTP ' . $status;
+            return false;
+        }
+        if (!@rename($tmp, $destPath)) {
+            @unlink($tmp);
+            $this->lastError = 'Could not finalize file (rename failed).';
+            return false;
+        }
+        return true;
+    }
+
+    // ---- internals -----------------------------------------------------------
+
+    /** @return array<string,mixed>|null */
+    private function gql(string $query): ?array
+    {
+        $ch   = $this->baseCurl(self::ENDPOINT);
+        curl_setopt_array($ch, [
+            CURLOPT_POST       => true,
+            CURLOPT_POSTFIELDS => json_encode(['query' => $query]),
+        ]);
+        $body = curl_exec($ch);
+        $st   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $cerr = curl_error($ch);
+        curl_close($ch);
+
+        if ($body === false) { $this->lastError = 'Network error: ' . $cerr; return null; }
+        if ($st === 401 || $st === 403) {
+            $this->lastError = 'Cults3D auth failed (HTTP ' . $st . ') — check username and API key in Settings.';
+            return null;
+        }
+        if ($st >= 400) {
+            $this->lastError = 'Cults3D HTTP ' . $st;
+            return null;
+        }
+        $json = json_decode((string)$body, true);
+        if (!is_array($json)) { $this->lastError = 'Non-JSON response from Cults3D.'; return null; }
+        if (!empty($json['errors'])) {
+            $this->lastError = (string)($json['errors'][0]['message'] ?? 'GraphQL error');
+            return null;
+        }
+        return $json['data'] ?? null;
+    }
+
+    private function baseCurl(string $url): \CurlHandle
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_HTTPHEADER     => [
+                $this->authHeader(),
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'User-Agent: ' . self::UA,
+            ],
+        ]);
+        return $ch;
+    }
+
+    /** @param array<int,mixed> $items */
+    private function normalize(array $items): array
+    {
+        $out = [];
+        foreach ($items as $it) {
+            if (!is_array($it)) continue;
+
+            $thumb = (string)($it['illustrationImageUrl'] ?? $it['thumbnailUrl'] ?? '');
+
+            $images = $thumb !== '' ? [$thumb] : [];
+            if (isset($it['images']) && is_array($it['images'])) {
+                foreach ($it['images'] as $img) {
+                    $u = is_array($img) ? (string)($img['url'] ?? '') : (string)$img;
+                    if ($u !== '' && !in_array($u, $images, true)) $images[] = $u;
+                }
+                $images = array_slice($images, 0, 8);
+            }
+
+            $size = 0;
+            foreach (($it['files'] ?? []) as $f) { $size += (int)($f['size'] ?? 0); }
+
+            $free  = (bool)($it['free'] ?? false);
+            $cents = (int)($it['price']['amountInCents'] ?? 0);
+            $price = $free ? 0.0 : ($cents / 100);
+
+            $id   = (string)($it['id']   ?? '');
+            $slug = (string)($it['slug'] ?? '');
+            $name = (string)($it['name'] ?? 'Untitled');
+
+            $out[] = [
+                'id'      => $id,
+                'slug'    => $slug,
+                'name'    => $name,
+                'creator' => (string)($it['creator']['nick'] ?? 'unknown'),
+                'thumb'   => $thumb,
+                'images'  => array_values(array_filter($images)),
+                'size'    => $size,
+                'price'   => $price,
+                'free'    => $free,
+                'source'  => 'cults3d',
+            ];
+        }
+        return $out;
+    }
+}
