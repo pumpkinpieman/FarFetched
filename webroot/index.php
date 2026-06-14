@@ -467,63 +467,63 @@ $csrf = csrf_token();
     loading = true;
     if (loadMoreBtn) loadMoreBtn.disabled = true;
     loadStatus.textContent = 'Loading…';
-    try {
-      const url = (mode === 'search')
-        ? 'search_more.php?q=' + encodeURIComponent(searchQuery) +
-          '&offset=' + encodeURIComponent(searchNext) + '&paid=all' +
-          '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
-          (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
-          (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '') +
-          (SOURCE === 'thingiverse' && (window._tvCatActive ?? TV_CAT) ? '&tvcat=' + encodeURIComponent(window._tvCatActive ?? TV_CAT) : '') +
-          (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '')
-        : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
-          '&cursor=' + encodeURIComponent(nextCursor || '');
-    let data;
+
+    const url = (mode === 'search')
+      ? 'search_more.php?q=' + encodeURIComponent(searchQuery) +
+        '&offset=' + encodeURIComponent(searchNext) + '&paid=all' +
+        '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
+        (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
+        (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '') +
+        (SOURCE === 'thingiverse' && (window._tvCatActive ?? TV_CAT) !== '' ? '&tvcat=' + encodeURIComponent(window._tvCatActive ?? TV_CAT) : '') +
+        (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '')
+      : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
+        '&cursor=' + encodeURIComponent(nextCursor || '');
+
+    let data = null;
     try {
       const res = await fetch(url);
-      try {
-        data = await res.json();
-      } catch (e) {
-        searchNext = null; nextCursor = null;
-        loadStatus.textContent = 'Server error — check Activity log in Settings.';
-        if (loadMoreBtn) loadMoreBtn.disabled = false;
-        loading = false;
-        return;
+      const ct  = res.headers.get('content-type') || '';
+      if (!ct.includes('json')) {
+        throw new Error('Non-JSON response (HTTP ' + res.status + ')');
       }
-      if (!data.ok) {
-        searchNext = null; nextCursor = null;
-        loadStatus.textContent = 'Error: ' + (data.error || 'unknown');
-        if (loadMoreBtn) loadMoreBtn.disabled = false;
-        loading = false;
-        return;
-      }
-      for (const m of data.models) grid.appendChild(makeCard(m));
-
-      if (mode === 'search') {
-        searchNext = data.nextOffset; // null when exhausted
-      } else {
-        nextCursor = (data.cursor && data.models.length) ? data.cursor : null;
-      }
-
-      if (hasMore()) {
-        if (loadMoreBtn) loadMoreBtn.disabled = false;
-        loadStatus.textContent = '';
-      } else {
-        if (loadMoreBtn) loadMoreBtn.style.display = 'none';
-        loadStatus.textContent = (mode === 'search')
-          ? ('That\u2019s all ' + (data.total || grid.querySelectorAll('.card').length) + ' results.')
-          : 'No more models in this category.';
-      }
+      data = await res.json();
     } catch (err) {
-      loadStatus.textContent = 'Network error: ' + err.message;
+      searchNext = null; nextCursor = null;
+      loadStatus.textContent = 'Error: ' + err.message + ' — check Activity log in Settings.';
       if (loadMoreBtn) loadMoreBtn.disabled = false;
+      loading = false;
+      return;
     }
+
+    if (!data || !data.ok) {
+      searchNext = null; nextCursor = null;
+      loadStatus.textContent = 'Error: ' + (data?.error || 'unknown');
+      if (loadMoreBtn) loadMoreBtn.disabled = false;
+      loading = false;
+      return;
+    }
+
+    for (const m of data.models) grid.appendChild(makeCard(m));
+
+    if (mode === 'search') {
+      searchNext = data.nextOffset ?? null;
+    } else {
+      nextCursor = (data.cursor && data.models.length) ? data.cursor : null;
+    }
+
+    if (hasMore()) {
+      if (loadMoreBtn) loadMoreBtn.disabled = false;
+      loadStatus.textContent = '';
+    } else {
+      if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+      loadStatus.textContent = (mode === 'search')
+        ? ('That\u2019s all ' + (data.total || grid.querySelectorAll('.card').length) + ' results.')
+        : 'No more models in this category.';
+    }
+
     loading = false;
 
-    // Only continue auto-loading if we actually got models this page AND
-    // the sentinel is still visible. Prevents infinite loop when pages are
-    // small or the server returns empty results.
-    if (hasMore() && sentinelInView() && data && data.models && data.models.length > 0) {
+    if (hasMore() && sentinelInView() && data.models.length > 0) {
       requestAnimationFrame(loadMore);
     }
   }
