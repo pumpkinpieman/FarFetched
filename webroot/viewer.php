@@ -252,11 +252,8 @@ foreach ($sources as $s) {
           clearModel();
           object.traverse(o => {
             if (o.isMesh) {
-              // Strip embedded vertex/face colors — they override material color
-              // and often render black when the slicer color extension isn't supported.
-              if (o.geometry && o.geometry.attributes.color) {
-                delete o.geometry.attributes.color;
-                o.geometry.attributes.color = undefined;
+              if (o.geometry?.attributes?.color) {
+                o.geometry.deleteAttribute('color');
               }
               o.material = material;
             }
