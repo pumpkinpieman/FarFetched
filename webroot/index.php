@@ -9,6 +9,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
+require_once __DIR__ . '/STLFlixService.php';
 
 const CATEGORIES = [
     'all'         => 'All Categories',
@@ -91,7 +92,7 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower($_GET['src'] ?? 'printables');
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix'], true)) {
     $source = 'printables';
 }
 
@@ -109,6 +110,14 @@ if (!array_key_exists($tvCat, TV_CATEGORIES)) { $tvCat = ''; }
 $cultsCat    = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['cultscat'] ?? '')));
 $cultsBrowse = $source === 'cults3d' && (isset($_GET['cultscat']) || isset($_GET['browse']));
 if (!array_key_exists($cultsCat, CULTS3D_CATEGORIES)) { $cultsCat = ''; }
+
+$stlflixCategories = ['' => 'All Models'];
+$stlCat = preg_replace('/[^0-9]/', '', (string) ($_GET['stlcat'] ?? ''));
+$stlBrowse = $source === 'stlflix' && (isset($_GET['stlcat']) || isset($_GET['browse']));
+if ($source === 'stlflix') {
+    $stlflixCategories = (new STLFlixService())->categories();
+    if (!array_key_exists($stlCat, $stlflixCategories)) { $stlCat = ''; }
+}
 
 if ($source === 'makerworld') {
     $svc           = null;
@@ -138,6 +147,14 @@ if ($source === 'makerworld') {
     $banner        = $cultsReady
         ? 'Cults3D — type a keyword to search, or pick a category on the left.'
         : 'Cults3D — add your username and API key in Settings to browse and download.';
+} elseif ($source === 'stlflix') {
+    $svc           = null;
+    $models        = [];
+    $initialCursor = null;
+    $stlReady      = (string) cfg('stlflix_token') !== '';
+    $banner        = $stlReady
+        ? 'STLFlix - pick a category on the left, or type a keyword above to search.'
+        : 'STLFlix - add your jwt token in Settings to pull categories and browse models.';
 } else {
     $svc    = new PrintablesService();
     $models = $svc->isAuthed() ? $svc->searchModels($active) : [];
@@ -235,6 +252,14 @@ $csrf = csrf_token();
            class="<?= ($cultsBrowse && $cid === $cultsCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
+    <?php elseif ($source === 'stlflix'): ?>
+    <div class="navlabel">STLFlix</div>
+    <nav id="stlCatNav">
+      <?php foreach ($stlflixCategories as $cid => $label): $cid = (string) $cid; ?>
+        <a href="javascript:void(0)" data-stlcat="<?= e($cid) ?>" data-stllabel="<?= e($label) ?>"
+           class="<?= ($stlBrowse && $cid === $stlCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+      <?php endforeach; ?>
+    </nav>
     <?php else: ?>
     <div class="navlabel">Category ID</div>
     <form method="get" style="padding:0 8px 6px;">
@@ -271,6 +296,7 @@ $csrf = csrf_token();
           <a href="?src=makerworld&browse=all" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
           <a href="?src=thingiverse&browse=all" class="srcBtn <?= $source==='thingiverse'?'active':'' ?>">Thingiverse</a>
           <a href="?src=cults3d&browse=all" class="srcBtn <?= $source==='cults3d'?'active':'' ?>">Cults3D</a>
+          <a href="?src=stlflix&browse=all" class="srcBtn <?= $source==='stlflix'?'active':'' ?>">STLFlix</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
@@ -509,6 +535,8 @@ $csrf = csrf_token();
   const TV_BROWSE = <?= json_encode($tvBrowse) ?>;
   const CULTS_CAT    = <?= json_encode($cultsCat) ?>;
   const CULTS_BROWSE = <?= json_encode($cultsBrowse) ?>;
+  const STL_CAT    = <?= json_encode($stlCat) ?>;
+  const STL_BROWSE = <?= json_encode($stlBrowse) ?>;
   let mwCatActive = '';
   let pbCatActive = ACTIVE_CAT;
 
@@ -529,7 +557,9 @@ $csrf = csrf_token();
         (SOURCE === 'thingiverse' && (window._tvCatActive ?? TV_CAT) !== '' ? '&tvcat=' + encodeURIComponent(window._tvCatActive ?? TV_CAT) : '') +
         (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '') +
         (SOURCE === 'cults3d' && (window._cultsCatActive ?? CULTS_CAT) !== '' ? '&cultscat=' + encodeURIComponent(window._cultsCatActive ?? CULTS_CAT) : '') +
-        (SOURCE === 'cults3d' && searchQuery === '' ? '&browse=1' : '')
+        (SOURCE === 'cults3d' && searchQuery === '' ? '&browse=1' : '') +
+        (SOURCE === 'stlflix' && (window._stlCatActive ?? STL_CAT) !== '' ? '&stlcat=' + encodeURIComponent(window._stlCatActive ?? STL_CAT) : '') +
+        (SOURCE === 'stlflix' && searchQuery === '' ? '&browse=1' : '')
       : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
         '&cursor=' + encodeURIComponent(nextCursor || '');
 
@@ -633,6 +663,7 @@ $csrf = csrf_token();
     if (SOURCE === 'makerworld')  { location.href = '?src=makerworld&browse=all';  return; }
     if (SOURCE === 'thingiverse') { location.href = '?src=thingiverse&browse=all'; return; }
     if (SOURCE === 'cults3d')     { location.href = '?src=cults3d&browse=all';     return; }
+    if (SOURCE === 'stlflix')     { location.href = '?src=stlflix&browse=all';     return; }
     location.href = '?cat=' + encodeURIComponent(pbCatActive) + '&type=' + encodeURIComponent(FILE_TYPE);
   }
   if (searchGo) searchGo.addEventListener('click', runSearch);
@@ -671,6 +702,12 @@ $csrf = csrf_token();
     window._cultsCatActive = CULTS_CAT;
     const lbl = (document.querySelector('#cultsCatNav a.active') || {}).textContent || 'All Models';
     browseCultsCategory(CULTS_CAT, lbl);
+  }
+
+  if (SOURCE === 'stlflix' && STL_BROWSE) {
+    window._stlCatActive = STL_CAT;
+    const lbl = (document.querySelector('#stlCatNav a.active') || {}).textContent || 'All Models';
+    browseSTLFlixCategory(STL_CAT, lbl);
   }
 
   // MW category nav
@@ -735,6 +772,32 @@ $csrf = csrf_token();
     refresh();
     loading = false;
     window._cultsCatActive = catId;
+    await loadMore();
+  }
+
+  // STLFlix category nav
+  const stlCatNav = document.getElementById('stlCatNav');
+  if (stlCatNav) {
+    stlCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-stllabel]');
+      if (!link) return;
+      e.preventDefault();
+      stlCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browseSTLFlixCategory(link.dataset.stlcat, link.dataset.stllabel);
+    });
+  }
+
+  async function browseSTLFlixCategory(catId, label) {
+    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
+    mwCatActive = '';
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'STLFlix';
+    if (searchClear) searchClear.style.display = 'none';
+    refresh();
+    loading = false;
+    window._stlCatActive = catId;
     await loadMore();
   }
 

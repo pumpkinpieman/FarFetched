@@ -65,6 +65,7 @@ define('DEFAULT_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/printables');
 define('MAKERWORLD_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/makerworld');
 define('THINGIVERSE_DOWNLOAD_DIR',   rtrim(MODELS_ROOT, '/') . '/thingiverse');
 define('CULTS3D_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/cults3d');
+define('STLFLIX_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/stlflix');
 
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
@@ -453,6 +454,9 @@ function cfg_defaults(): array
         'cults3d_token'              => (string) (getenv('FETCHER_CULTS3D_TOKEN') ?: ''),
         'cults3d_download_dir'       => '',
         'cults3d_delay'              => 60,
+        'stlflix_token'              => (string) (getenv('FETCHER_STLFLIX_TOKEN') ?: ''),
+        'stlflix_download_dir'       => '',
+        'stlflix_delay'              => 60,
     ];
 }
 
@@ -541,6 +545,15 @@ function cfg_save(array $patch): bool
     if (isset($patch['cults3d_delay'])) {
         $current['cults3d_delay'] = max(30, min(3600, (int) $patch['cults3d_delay']));
     }
+    if (array_key_exists('stlflix_token', $patch)) {
+        $current['stlflix_token'] = trim((string) $patch['stlflix_token']);
+    }
+    if (array_key_exists('stlflix_download_dir', $patch)) {
+        $current['stlflix_download_dir'] = trim((string) $patch['stlflix_download_dir']);
+    }
+    if (isset($patch['stlflix_delay'])) {
+        $current['stlflix_delay'] = max(30, min(3600, (int) $patch['stlflix_delay']));
+    }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
     if (file_put_contents(CONFIG_STORE, $payload, LOCK_EX) === false) {
@@ -556,6 +569,7 @@ define('DOWNLOAD_DELAY_SECONDS',       (int) cfg('download_delay'));
 define('MAKERWORLD_DELAY_SECONDS',     (int) cfg('makerworld_delay'));
 define('THINGIVERSE_DELAY_SECONDS',    (int) cfg('thingiverse_delay'));
 define('CULTS3D_DELAY_SECONDS',        (int) cfg('cults3d_delay'));
+define('STLFLIX_DELAY_SECONDS',        (int) cfg('stlflix_delay'));
 
 function get_makerworld_dir(): string
 {
@@ -573,6 +587,12 @@ function get_cults3d_dir(): string
 {
     $v = trim((string) cfg('cults3d_download_dir'));
     return $v !== '' ? $v : CULTS3D_DOWNLOAD_DIR;
+}
+
+function get_stlflix_dir(): string
+{
+    $v = trim((string) cfg('stlflix_download_dir'));
+    return $v !== '' ? $v : STLFLIX_DOWNLOAD_DIR;
 }
 
 // ---- Database (SQLite via PDO) --------------------------------------------

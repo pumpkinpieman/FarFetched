@@ -9,6 +9,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/Cults3DService.php';
+require_once __DIR__ . '/STLFlixService.php';
 csrf_token();
 
 // ---- Helpers ----------------------------------------------------------------
@@ -218,6 +219,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notice = ['type' => 'ok', 'text' => 'Cults3D pacing saved.'];
     }
 
+    // ---- STLFlix ------------------------------------------------------------
+    elseif ($action === 'save_stlflix_token') {
+        $tok = trim((string) ($_POST['stlflix_token'] ?? ''));
+        $tok = preg_replace('/^Bearer\s+/i', '', $tok) ?? $tok;
+        $tok = preg_replace('/^jwt=/', '', $tok) ?? $tok;
+        if ($tok === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save - paste your STLFlix jwt first.'];
+        } else {
+            cfg_save(['stlflix_token' => $tok]);
+            $svc = new STLFlixService($tok);
+            $notice = $svc->validate()
+                ? ['type' => 'ok', 'text' => 'STLFlix connected successfully.']
+                : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $svc->lastError];
+        }
+    }
+    elseif ($action === 'clear_stlflix_token') {
+        cfg_save(['stlflix_token' => '']);
+        $notice = ['type' => 'ok', 'text' => 'STLFlix token cleared.'];
+    }
+    elseif ($action === 'save_stlflix_dir') {
+        $r = apply_source_dir((string) ($_POST['stlflix_dir'] ?? ''), 'stlflix');
+        $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
+    }
+    elseif ($action === 'save_stlflix_delay') {
+        cfg_save(['stlflix_delay' => (int) ($_POST['stlflix_delay'] ?? 60)]);
+        $notice = ['type' => 'ok', 'text' => 'STLFlix pacing saved.'];
+    }
+
     // ---- Worker -------------------------------------------------------------
     elseif ($action === 'save_config') {
         $ok = cfg_save([
@@ -270,6 +299,12 @@ $cultsDir   = get_cults3d_dir();
 $cultsWrite = is_dir($cultsDir) && is_writable($cultsDir);
 $cultsDelay = (int) cfg('cults3d_delay');
 $cultsReady = $cultsUser !== '' && $cultsTok !== '';
+
+$stlflixTok   = (string) cfg('stlflix_token');
+$stlflixDir   = get_stlflix_dir();
+$stlflixWrite = is_dir($stlflixDir) && is_writable($stlflixDir);
+$stlflixDelay = (int) cfg('stlflix_delay');
+$stlflixReady = $stlflixTok !== '';
 
 
 // Active tab
@@ -591,6 +626,53 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
             </div>
           </form>
           <p class="hint">Cults3D rate limit: ~500 requests/day. Keep ≥ 60s to stay well within limits.</p>
+        </div>
+      </div>
+
+      <!-- STLFlix -->
+      <div class="src-card">
+        <div class="src-head">
+          <span class="src-name">STLFlix</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $stlflixReady?'on':'off' ?>"></span><?= $stlflixReady?'Connected':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="stlflix_token"><?= $stlflixReady?'Replace jwt':'Paste jwt' ?></label>
+            <textarea id="stlflix_token" name="stlflix_token" placeholder="paste the jwt value from platform.stlflix.com local storage"></textarea>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_stlflix_token">Save &amp; Connect</button>
+              <?php if ($stlflixReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_stlflix_token" onclick="return confirm('Clear STLFlix token?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">platform.stlflix.com → DevTools → Application → Local Storage → copy <code>jwt</code>. Re-paste when STLFlix asks you to log in again.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="stlflix_dir">Download folder</label>
+            <input type="text" id="stlflix_dir" name="stlflix_dir" value="<?= e($stlflixDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_stlflix_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $stlflixWrite?'on':'off' ?>"></span><?= $stlflixWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(STLFLIX_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="stlflix_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="stlflix_delay" name="stlflix_delay" inputmode="numeric" value="<?= e((string)$stlflixDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_stlflix_delay">Save</button>
+            </div>
+          </form>
         </div>
       </div>
 

@@ -17,6 +17,7 @@ require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
 require_once __DIR__ . '/Cults3DService.php';
+require_once __DIR__ . '/STLFlixService.php';
 
 header('Content-Type: application/json');
 
@@ -26,7 +27,7 @@ $page   = max(1, (int) ($offset / 20) + 1);
 $paid   = (string) ($_GET['paid'] ?? 'all');
 if (!in_array($paid, ['all', 'free', 'paid'], true)) { $paid = 'all'; }
 $source = strtolower((string) ($_GET['src'] ?? 'printables'));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix'], true)) {
     $source = 'printables';
 }
 $showNsfw = ($_GET['nsfw'] ?? '') === '1';
@@ -35,7 +36,8 @@ $mwBrowse = ($_GET['browse'] ?? '') === '1';
 
 $allowEmptyQ = ($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))
     || $source === 'thingiverse'
-    || $source === 'cults3d';
+    || $source === 'cults3d'
+    || $source === 'stlflix';
 
 if ($q === '' && !$allowEmptyQ) {
     echo json_encode(['ok' => false, 'error' => 'Empty search.']);
@@ -81,6 +83,18 @@ if ($source === 'cults3d') {
     if ($cults->lastError !== '') { echo json_encode(['ok' => false, 'error' => $cults->lastError]); exit; }
     $nextOffset = (count($models) >= $limit) ? $offset + $limit : null;
     echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $cults->lastTotal, 'source' => 'cults3d']);
+    exit;
+}
+
+// ---- STLFlix ----------------------------------------------------------------
+if ($source === 'stlflix') {
+    $stlflix = new STLFlixService();
+    $stlCat  = preg_replace('/[^0-9]/', '', (string) ($_GET['stlcat'] ?? ''));
+    $limit   = 20;
+    $models  = $stlflix->search($q, $limit, $offset, $stlCat);
+    if ($stlflix->lastError !== '') { echo json_encode(['ok' => false, 'error' => $stlflix->lastError]); exit; }
+    $nextOffset = (($offset + $limit) < $stlflix->lastTotal) ? $offset + $limit : null;
+    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $stlflix->lastTotal, 'source' => 'stlflix']);
     exit;
 }
 

@@ -53,11 +53,11 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower(trim((string) ($in['source'] ?? 'printables')));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix'], true)) {
     $source = 'printables';
 }
 if ($source === 'makerworld') { $fileType = 'PACK'; }
-if ($source === 'thingiverse' || $source === 'cults3d') { $fileType = 'PACK'; }
+if ($source === 'thingiverse' || $source === 'cults3d' || $source === 'stlflix') { $fileType = 'PACK'; }
 
 $models = $in['models'] ?? null;
 if (!is_array($models) || $models === []) {
