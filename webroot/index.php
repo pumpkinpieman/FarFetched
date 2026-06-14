@@ -478,9 +478,20 @@ $csrf = csrf_token();
           (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '')
         : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
           '&cursor=' + encodeURIComponent(nextCursor || '');
+    let data;
+    try {
       const res = await fetch(url);
-      const data = await res.json();
+      try {
+        data = await res.json();
+      } catch (e) {
+        searchNext = null; nextCursor = null;
+        loadStatus.textContent = 'Server error — check Activity log in Settings.';
+        if (loadMoreBtn) loadMoreBtn.disabled = false;
+        loading = false;
+        return;
+      }
       if (!data.ok) {
+        searchNext = null; nextCursor = null;
         loadStatus.textContent = 'Error: ' + (data.error || 'unknown');
         if (loadMoreBtn) loadMoreBtn.disabled = false;
         loading = false;
@@ -509,11 +520,10 @@ $csrf = csrf_token();
     }
     loading = false;
 
-    // IntersectionObserver only fires on a not-visible→visible transition. When
-    // a page of results doesn't push the sentinel back out of view (e.g. 20 tall
-    // cards still inside the 600px prefetch zone), that transition never happens
-    // and auto-load stalls. Keep loading while the sentinel stays in range.
-    if (hasMore() && sentinelInView()) {
+    // Only continue auto-loading if we actually got models this page AND
+    // the sentinel is still visible. Prevents infinite loop when pages are
+    // small or the server returns empty results.
+    if (hasMore() && sentinelInView() && data && data.models && data.models.length > 0) {
       requestAnimationFrame(loadMore);
     }
   }

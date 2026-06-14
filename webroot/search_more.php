@@ -33,7 +33,7 @@ $mwCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['mwcat'] ?? '')) ?? '';
 $mwBrowse = ($_GET['browse'] ?? '') === '1';
 
 $allowEmptyQ = ($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))
-    || $source === 'thingiverse'
+    || $source === 'thingiverse';
 
 if ($q === '' && !$allowEmptyQ) {
     echo json_encode(['ok' => false, 'error' => 'Empty search.']);
