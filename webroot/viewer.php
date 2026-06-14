@@ -417,6 +417,9 @@ foreach ($sources as $s) {
                           '<span>' + f.name.replace(/</g, '&lt;') + '</span>' +
                           '<span class="sz">' + fmtSize(f.size) + '</span>';
           btn.addEventListener('click', () => {
+            if (f.size > 5 * 1024 * 1024) {
+              if (!confirm('This is a large file: ' + fmtSize(f.size) + '\n\nAre you sure you want to load it?')) return;
+            }
             document.querySelectorAll('.filebtn.active').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             const url = 'model_file.php?src=' + encodeURIComponent(src) +
