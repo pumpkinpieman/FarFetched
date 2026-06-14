@@ -196,18 +196,20 @@ final class MakerWorldService
         $wantStl = (strtoupper($fileType) === 'STL');
 
         if ($wantStl) {
-            // STL path: resolve instance id first, hit the /stl endpoint directly.
+            // STL path: /f3mf with fileType=3mfstl tells MakerWorld to return the
+            // _stls.zip signed CDN URL instead of the BambuStudio 3MF pack.
+            // Confirmed from browser network trace: same endpoint, different param.
             $instanceId = $this->findInstanceId($designId);
             if ($instanceId !== '') {
-                $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/stl?type=download');
+                $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/f3mf?type=download&fileType=3mfstl&devModelName=N1');
                 if ($url !== '') {
                     return $url;
                 }
             }
             $firstErr = $this->lastError;
 
-            // Fallback: the plain model download doc sometimes carries an _stls link.
-            $url = $this->mintFrom(self::API . '/design-service/design/' . $designId . '/model?type=download');
+            // Fallback: plain model download doc sometimes carries an _stls link.
+            $url = $this->mintFrom(self::API . '/design-service/design/' . $designId . '/model?type=download&fileType=3mfstl');
             if ($url !== '') {
                 return $url;
             }
