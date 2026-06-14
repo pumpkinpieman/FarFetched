@@ -53,7 +53,7 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower(trim((string) ($in['source'] ?? 'printables')));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'myminifactory'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse'], true)) {
     $source = 'printables';
 }
 // MakerWorld always downloads the whole-model pack (all formats included).
@@ -61,7 +61,7 @@ if ($source === 'makerworld') {
     $fileType = 'PACK';
 }
 // Thingiverse and MMF use ZIP (whole-thing download).
-if ($source === 'thingiverse' || $source === 'myminifactory') {
+if ($source === 'thingiverse') {
     $fileType = 'PACK';
 }
 

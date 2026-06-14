@@ -16,7 +16,6 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
-require_once __DIR__ . '/MyMiniFactoryService.php';
 
 header('Content-Type: application/json');
 
@@ -26,7 +25,7 @@ $page   = max(1, (int) ($offset / 20) + 1);
 $paid   = (string) ($_GET['paid'] ?? 'all');
 if (!in_array($paid, ['all', 'free', 'paid'], true)) { $paid = 'all'; }
 $source = strtolower((string) ($_GET['src'] ?? 'printables'));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'myminifactory'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse'], true)) {
     $source = 'printables';
 }
 $showNsfw = ($_GET['nsfw'] ?? '') === '1';
@@ -35,7 +34,6 @@ $mwBrowse = ($_GET['browse'] ?? '') === '1';
 
 $allowEmptyQ = ($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))
     || $source === 'thingiverse'
-    || $source === 'myminifactory';
 
 if ($q === '' && !$allowEmptyQ) {
     echo json_encode(['ok' => false, 'error' => 'Empty search.']);

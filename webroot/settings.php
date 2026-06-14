@@ -188,35 +188,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notice = ['type' => 'ok', 'text' => 'Thingiverse pacing saved.'];
     }
 
-    // ---- MyMiniFactory ------------------------------------------------------
-    elseif ($action === 'save_mmf_token') {
-        $clientId  = trim((string) ($_POST['mmf_client_id']  ?? ''));
-        $clientSec = trim((string) ($_POST['mmf_client_sec'] ?? ''));
-        $apiKey    = trim((string) ($_POST['mmf_api_key']    ?? ''));
-        if ($clientId === '' && $apiKey === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your MyMiniFactory API key.'];
-        } else {
-            cfg_save([
-                'myminifactory_token'      => $apiKey,
-                'myminifactory_client_id'  => $clientId,
-                'myminifactory_client_sec' => $clientSec,
-            ]);
-            $notice = ['type' => 'ok', 'text' => 'MyMiniFactory credentials saved.'];
-        }
-    }
-    elseif ($action === 'clear_mmf_token') {
-        cfg_save(['myminifactory_token' => '', 'myminifactory_remember_me' => '']);
-        $notice = ['type' => 'ok', 'text' => 'MyMiniFactory cookies cleared.'];
-    }
-    elseif ($action === 'save_mmf_dir') {
-        $r = apply_source_dir((string) ($_POST['mmf_dir'] ?? ''), 'myminifactory');
-        $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
-    }
-    elseif ($action === 'save_mmf_delay') {
-        cfg_save(['myminifactory_delay' => (int) ($_POST['mmf_delay'] ?? 60)]);
-        $notice = ['type' => 'ok', 'text' => 'MyMiniFactory pacing saved.'];
-    }
-
     // ---- Worker -------------------------------------------------------------
     elseif ($action === 'save_config') {
         $ok = cfg_save([
@@ -263,10 +234,6 @@ $tvDir   = get_thingiverse_dir();
 $tvWrite = is_dir($tvDir) && is_writable($tvDir);
 $tvDelay = (int) cfg('thingiverse_delay');
 
-$mmfTok   = (string) cfg('myminifactory_token');
-$mmfDir   = get_myminifactory_dir();
-$mmfWrite = is_dir($mmfDir) && is_writable($mmfDir);
-$mmfDelay = (int) cfg('myminifactory_delay');
 
 // Active tab
 $tab = (string) ($_GET['tab'] ?? $_POST['_tab'] ?? 'sources');
@@ -540,68 +507,6 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
         </div>
       </div>
 
-      <!-- MyMiniFactory -->
-      <?php
-        $mmfClientId = (string) cfg('myminifactory_client_id');
-        $mmfApiKey   = (string) cfg('myminifactory_token');
-        $mmfReady    = $mmfApiKey !== '';
-      ?>
-      <div class="src-card">
-        <div class="src-head">
-          <span class="src-name">MyMiniFactory</span>
-          <span style="display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn-ghost btn-sm" onclick="openModal('mmf')">More info</button>
-            <span class="status" style="margin:0;"><span class="dot <?= $mmfReady?'on':'off' ?>"></span><?= $mmfReady?'Connected':'Not connected' ?></span>
-          </span>
-        </div>
-        <div class="src-body">
-          <div class="oauth-steps">
-            <div class="step"><span class="step-n">1</span>Go to <a href="https://www.myminifactory.com/settings/api" target="_blank">myminifactory.com/settings/api</a></div>
-            <div class="step"><span class="step-n">2</span>Under <strong>Register your own MMF application</strong> — fill in Name, Client Key, Homepage URL, Redirect URI</div>
-            <div class="step"><span class="step-n">3</span>Save → click <strong>Generate new API key</strong></div>
-            <div class="step"><span class="step-n">4</span>Paste the API key below</div>
-          </div>
-          <form method="post" style="margin-top:14px;">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="mmf_client_id">Client ID <span style="font-weight:400;text-transform:none;">(optional — for OAuth downloads)</span></label>
-            <input type="text" id="mmf_client_id" name="mmf_client_id" value="<?= e($mmfClientId) ?>" placeholder="your-app-client-id">
-            <label for="mmf_api_key" style="margin-top:10px;">API Key</label>
-            <input type="text" id="mmf_api_key" name="mmf_api_key" value="<?= e($mmfApiKey) ?>" placeholder="paste your MyMiniFactory API key">
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_mmf_token">Save &amp; Connect</button>
-              <?php if ($mmfReady): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_mmf_token" onclick="return confirm('Clear MyMiniFactory credentials?')">Clear</button>
-              <?php endif; ?>
-            </div>
-          </form>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="mmf_dir">Download folder</label>
-            <input type="text" id="mmf_dir" name="mmf_dir" value="<?= e($mmfDir) ?>">
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_mmf_dir">Save &amp; Create</button>
-              <span class="status" style="margin:0;"><span class="dot <?= $mmfWrite?'on':'off' ?>"></span><?= $mmfWrite?'Writable':'Not found / not writable' ?></span>
-            </div>
-          </form>
-          <p class="hint">Default: <code><?= e(MYMINIFACTORY_DOWNLOAD_DIR) ?></code></p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="mmf_delay">Delay between downloads (seconds)</label>
-            <div class="row">
-              <input type="text" class="short" id="mmf_delay" name="mmf_delay" inputmode="numeric" value="<?= e((string)$mmfDelay) ?>">
-              <button class="btn-primary btn-sm" name="action" value="save_mmf_delay">Save</button>
-            </div>
-          </form>
-        </div>
-      </div>
-
     </div><!-- /.src-grid -->
   </div>
 
@@ -699,24 +604,6 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
       <div class="step"><span class="step-n">4</span>Copy that token and paste it into the field on this page</div>
     </div>
     <p style="margin-top:14px;font-size:12px;">The App Token is long-lived and tied to your Thingiverse account. It stays valid until you revoke the app.</p>
-  </div>
-</div>
-
-<div class="modal-overlay" id="modal-mmf" onclick="if(event.target===this)closeModal('mmf')">
-  <div class="modal">
-    <button class="modal-close" onclick="closeModal('mmf')" aria-label="Close">&times;</button>
-    <h3>Why does MyMiniFactory require this?</h3>
-    <p>Printables and MakerWorld provide simple cookie-based tokens you can copy directly from your browser — no app registration needed.</p>
-    <p><strong>MyMiniFactory uses OAuth2</strong>, particularly for users who sign in via Google SSO. There is no persistent browser cookie we can extract — access must be granted through an app registration.</p>
-    <p>This is a one-time setup per user. Your credentials are stored only on your own FarFetched instance — they are never shared with anyone.</p>
-    <p><strong>Steps:</strong></p>
-    <div class="oauth-steps" style="margin-top:8px;">
-      <div class="step"><span class="step-n">1</span>Go to <a href="https://www.myminifactory.com/settings/api" target="_blank">myminifactory.com/settings/api</a></div>
-      <div class="step"><span class="step-n">2</span>Under <strong>Register your own MMF application</strong> — fill in Name, Client Key, Homepage URL and Redirect URI. Use <code>http://localhost</code> for the URLs</div>
-      <div class="step"><span class="step-n">3</span>Save → click <strong>Generate new API key</strong></div>
-      <div class="step"><span class="step-n">4</span>Copy the API key and paste it into the field on this page</div>
-    </div>
-    <p style="margin-top:14px;font-size:12px;">The API key is tied to your MyMiniFactory account and stays valid until revoked. Works with Google SSO accounts.</p>
   </div>
 </div>
 

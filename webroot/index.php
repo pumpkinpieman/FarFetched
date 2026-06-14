@@ -60,7 +60,7 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower($_GET['src'] ?? 'printables');
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'myminifactory'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse'], true)) {
     $source = 'printables';
 }
 
@@ -91,14 +91,6 @@ if ($source === 'makerworld') {
     $banner        = $tvReady
         ? 'Thingiverse — type a keyword to search, or scroll to browse popular.'
         : 'Thingiverse — add your token in Settings to browse and download.';
-} elseif ($source === 'myminifactory') {
-    $svc           = null;
-    $models        = [];
-    $initialCursor = null;
-    $mmfReady      = (string) cfg('myminifactory_token') !== '';
-    $banner        = $mmfReady
-        ? 'MyMiniFactory — type a keyword to search.'
-        : 'MyMiniFactory — add your API key in Settings to browse and download.';
 } else {
     $svc    = new PrintablesService();
     $models = $svc->isAuthed() ? $svc->searchModels($active) : [];
@@ -220,7 +212,6 @@ $csrf = csrf_token();
           <a href="?cat=<?= e($active) ?>&type=<?= e($fileType) ?>" class="srcBtn <?= $source==='printables'?'active':'' ?>">Printables</a>
           <a href="?src=makerworld&browse=all" class="srcBtn <?= $source==='makerworld'?'active':'' ?>">MakerWorld</a>
           <a href="?src=thingiverse&browse=all" class="srcBtn <?= $source==='thingiverse'?'active':'' ?>">Thingiverse</a>
-          <a href="?src=myminifactory&browse=all" class="srcBtn <?= $source==='myminifactory'?'active':'' ?>">MyMiniFactory</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
@@ -460,7 +451,7 @@ $csrf = csrf_token();
           '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
           (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
           (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '') +
-          ((SOURCE === 'thingiverse' || SOURCE === 'myminifactory') && searchQuery === '' ? '&browse=1' : '')
+          ((SOURCE === 'thingiverse') && searchQuery === '' ? '&browse=1' : '')
         : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
           '&cursor=' + encodeURIComponent(nextCursor || '');
       const res = await fetch(url);
@@ -559,11 +550,6 @@ $csrf = csrf_token();
       location.href = '?src=thingiverse&browse=all';
       return;
     }
-    if (SOURCE === 'myminifactory') {
-      location.href = '?src=myminifactory&browse=all';
-      return;
-    }
-    // Return to the category browse the page loaded with.
     location.href = '?cat=' + encodeURIComponent(pbCatActive) + '&type=' + encodeURIComponent(FILE_TYPE);
   }
   if (searchGo) searchGo.addEventListener('click', runSearch);
@@ -593,9 +579,9 @@ $csrf = csrf_token();
     browseCategory(MW_CAT, lbl);
   }
   // Thingiverse / MMF: auto-load popular on browse=all landing.
-  if ((SOURCE === 'thingiverse' || SOURCE === 'myminifactory') && <?= json_encode(isset($_GET['browse'])) ?>) {
+  if ((SOURCE === 'thingiverse') && <?= json_encode(isset($_GET['browse'])) ?>) {
     mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
-    if (pageTitle) pageTitle.textContent = SOURCE === 'thingiverse' ? 'Thingiverse' : 'MyMiniFactory';
+    if (pageTitle) pageTitle.textContent = 'Thingiverse';
     loadMore();
   }
 

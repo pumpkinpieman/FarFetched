@@ -30,7 +30,6 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
-require_once __DIR__ . '/MyMiniFactoryService.php';
 
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
@@ -96,7 +95,6 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
 $svc  = new PrintablesService();
 $mw   = new MakerWorldService();
 $tv   = new ThingiverseService();
-$mmf  = new MyMiniFactoryService();
 
 // Per-source readiness. A source that isn't configured simply has its jobs wait
 // in the queue (they're filtered out of the claim query below) rather than
@@ -120,16 +118,10 @@ logln($thingiverseReady
     ? 'Thingiverse token present.'
     : 'Thingiverse token absent — Thingiverse jobs will wait.');
 
-$mmfReady = $mmf->isAuthed();
-logln($mmfReady
-    ? 'MyMiniFactory token present.'
-    : 'MyMiniFactory token absent — MyMiniFactory jobs will wait.');
-
 $readySources = [];
 if ($printablesReady)  { $readySources[] = 'printables'; }
 if ($makerworldReady)  { $readySources[] = 'makerworld'; }
 if ($thingiverseReady) { $readySources[] = 'thingiverse'; }
-if ($mmfReady)         { $readySources[] = 'myminifactory'; }
 
 if ($readySources === []) {
     logerr('error', 'No source configured — paste at least one token in Settings. Exiting.');
@@ -357,40 +349,6 @@ while (true) {
         }
         $GLOBALS['ACTIVE_JOB_ID'] = null;
         pace(THINGIVERSE_DELAY_SECONDS);
-        continue;
-    }
-
-    // ---- MyMiniFactory: individual file downloads --------------------------
-    if (($job['source'] ?? '') === 'myminifactory') {
-        try {
-            $files = $mmf->getFiles($modelId);
-            if (empty($files)) {
-                $msg = $mmf->lastError !== '' ? $mmf->lastError : 'No files found for this MyMiniFactory object.';
-                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logerr('warn', '  Skipped: ' . $msg);
-                $GLOBALS['ACTIVE_JOB_ID'] = null;
-                pace(MYMINIFACTORY_DELAY_SECONDS);
-                continue;
-            }
-            $destDir = rtrim(get_myminifactory_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
-            if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
-            $anyOk = false;
-            foreach ($files as $f) {
-                $fname = safe_segment($f['name']);
-                $dest  = $destDir . '/' . $fname;
-                if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $anyOk = true; continue; }
-                $ok = $mmf->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
-                if ($ok) { logln('  Saved: ' . $fname); $anyOk = true; }
-                else { logln('  Failed: ' . $fname . ' — ' . $mmf->lastError); }
-                pace(MYMINIFACTORY_DELAY_SECONDS);
-            }
-            $upd->execute([':st' => $anyOk?'done':'error', ':inc' => 1, ':err' => $anyOk?'':$mmf->lastError, ':path' => $anyOk?$destDir:'', ':id' => $jobId]);
-        } catch (Throwable $e) {
-            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
-            logln('  MyMiniFactory error: ' . $e->getMessage());
-        }
-        $GLOBALS['ACTIVE_JOB_ID'] = null;
-        pace(MYMINIFACTORY_DELAY_SECONDS);
         continue;
     }
 
