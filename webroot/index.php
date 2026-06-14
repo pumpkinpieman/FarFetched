@@ -44,6 +44,21 @@ const MW_CATEGORIES = [
     '2000' => 'Generative 3D Model',
 ];
 
+// Thingiverse categories (id => label).
+const TV_CATEGORIES = [
+    ''   => 'All Models',
+    '73' => '3D Printing',
+    '63' => 'Art',
+    '64' => 'Fashion',
+    '65' => 'Gadgets',
+    '66' => 'Hobby',
+    '67' => 'Household',
+    '69' => 'Learning',
+    '70' => 'Models',
+    '71' => 'Tools',
+    '72' => 'Toys & Games',
+];
+
 $active = $_GET['cat'] ?? 'all';
 $isRawId = false;
 if (!array_key_exists($active, CATEGORIES)) {
@@ -67,9 +82,12 @@ if (!in_array($source, ['printables', 'makerworld', 'thingiverse'], true)) {
 // MakerWorld category browse state.
 $mwCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['mwcat'] ?? '')) ?? '';
 $mwBrowse = $source === 'makerworld' && (isset($_GET['mwcat']) || isset($_GET['browse']));
-if (!array_key_exists($mwCat, MW_CATEGORIES)) {
-    $mwCat = '';
-}
+if (!array_key_exists($mwCat, MW_CATEGORIES)) { $mwCat = ''; }
+
+// Thingiverse category browse state.
+$tvCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['tvcat'] ?? '')) ?? '';
+$tvBrowse = $source === 'thingiverse' && (isset($_GET['tvcat']) || isset($_GET['browse']));
+if (!array_key_exists($tvCat, TV_CATEGORIES)) { $tvCat = ''; }
 
 if ($source === 'makerworld') {
     $svc           = null;
@@ -172,10 +190,13 @@ $csrf = csrf_token();
            class="<?= ($mwBrowse && $cid === $mwCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
-    <?php elseif ($source === 'thingiverse' || $source === 'myminifactory'): ?>
-    <div class="navlabel"><?= $source === 'thingiverse' ? 'Thingiverse' : 'MyMiniFactory' ?></div>
-    <nav>
-      <a href="?src=<?= e($source) ?>&browse=all" class="active">All Models</a>
+    <?php elseif ($source === 'thingiverse'): ?>
+    <div class="navlabel">Thingiverse</div>
+    <nav id="tvCatNav">
+      <?php foreach (TV_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
+        <a href="#" data-tvcat="<?= e($cid) ?>" data-tvlabel="<?= e($label) ?>"
+           class="<?= ($tvBrowse && $cid === $tvCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+      <?php endforeach; ?>
     </nav>
     <?php else: ?>
     <div class="navlabel">Category ID</div>
@@ -434,8 +455,10 @@ $csrf = csrf_token();
   let searchNext = null;   // next offset to fetch, or null when exhausted
   const MW_CAT = <?= json_encode($mwCat) ?>;
   const MW_BROWSE = <?= json_encode($mwBrowse) ?>;
-  let mwCatActive = '';    // current MakerWorld category id while browsing
-  let pbCatActive = ACTIVE_CAT; // current Printables category slug (mutable)
+  const TV_CAT = <?= json_encode($tvCat) ?>;
+  const TV_BROWSE = <?= json_encode($tvBrowse) ?>;
+  let mwCatActive = '';
+  let pbCatActive = ACTIVE_CAT;
 
   function hasMore() { return mode === 'search' ? (searchNext !== null) : (nextCursor !== null); }
 
@@ -451,7 +474,8 @@ $csrf = csrf_token();
           '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
           (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
           (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '') +
-          ((SOURCE === 'thingiverse') && searchQuery === '' ? '&browse=1' : '')
+          (SOURCE === 'thingiverse' && (window._tvCatActive ?? TV_CAT) ? '&tvcat=' + encodeURIComponent(window._tvCatActive ?? TV_CAT) : '') +
+          (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '')
         : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
           '&cursor=' + encodeURIComponent(nextCursor || '');
       const res = await fetch(url);
@@ -579,13 +603,13 @@ $csrf = csrf_token();
     browseCategory(MW_CAT, lbl);
   }
   // Thingiverse / MMF: auto-load popular on browse=all landing.
-  if ((SOURCE === 'thingiverse') && <?= json_encode(isset($_GET['browse'])) ?>) {
-    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
-    if (pageTitle) pageTitle.textContent = 'Thingiverse';
-    loadMore();
+  if (SOURCE === 'thingiverse' && TV_BROWSE) {
+    window._tvCatActive = TV_CAT;
+    const lbl = (document.querySelector('#tvCatNav a.active') || {}).textContent || 'All Models';
+    browseTVCategory(TV_CAT, lbl);
   }
 
-  // MW category nav — intercept clicks so the page never reloads (preserves selStore).
+  // MW category nav
   const mwCatNav = document.getElementById('mwCatNav');
   if (mwCatNav) {
     mwCatNav.addEventListener('click', e => {
@@ -596,6 +620,32 @@ $csrf = csrf_token();
       link.classList.add('active');
       browseCategory(link.dataset.mwcat, link.dataset.mwlabel);
     });
+  }
+
+  // Thingiverse category nav
+  const tvCatNav = document.getElementById('tvCatNav');
+  if (tvCatNav) {
+    tvCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-tvlabel]');
+      if (!link) return;
+      e.preventDefault();
+      tvCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browseTVCategory(link.dataset.tvcat, link.dataset.tvlabel);
+    });
+  }
+
+  async function browseTVCategory(catId, label) {
+    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
+    mwCatActive = '';
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'Thingiverse';
+    if (searchClear) searchClear.style.display = 'none';
+    refresh();
+    loading = false;
+    window._tvCatActive = catId;
+    await loadMore();
   }
 
   // Printables category nav — same pattern: JS browse, no page reload.

@@ -45,7 +45,7 @@ final class ThingiverseService
      *
      * @return array<int,array<string,mixed>>
      */
-    public function search(string $query, int $limit = 20, int $page = 1, bool $showNsfw = false): array
+    public function search(string $query, int $limit = 20, int $page = 1, bool $showNsfw = false, ?string $categoryId = null): array
     {
         $this->lastError = '';
         $this->lastTotal = 0;
@@ -57,16 +57,20 @@ final class ThingiverseService
 
         $query = trim($query);
         if ($query === '') {
-            return $this->popular($limit, $page);
+            return $this->popular($limit, $page, $categoryId);
         }
 
-        $url = self::API . '/search/' . rawurlencode($query)
-            . '?' . http_build_query([
-                'per_page' => max(1, min(30, $limit)),
-                'page'     => max(1, $page),
-                'sort'     => 'relevant',
-                'type'     => 'things',
-            ]);
+        $params = [
+            'per_page' => max(1, min(30, $limit)),
+            'page'     => max(1, $page),
+            'sort'     => 'relevant',
+            'type'     => 'things',
+        ];
+        if ($categoryId !== null && $categoryId !== '') {
+            $params['category_id'] = $categoryId;
+        }
+
+        $url  = self::API . '/search/' . rawurlencode($query) . '?' . http_build_query($params);
 
         $json = $this->apiGet($url);
         if ($json === null) return [];
@@ -85,17 +89,21 @@ final class ThingiverseService
      * Popular/newest browse (no keyword).
      * @return array<int,array<string,mixed>>
      */
-    public function popular(int $limit = 20, int $page = 1): array
+    public function popular(int $limit = 20, int $page = 1, ?string $categoryId = null): array
     {
         $this->lastError = '';
         if (!$this->isAuthed()) {
             $this->lastError = 'Thingiverse token not set.';
             return [];
         }
-        $url = self::API . '/popular?' . http_build_query([
+        $params = [
             'per_page' => max(1, min(30, $limit)),
             'page'     => max(1, $page),
-        ]);
+        ];
+        if ($categoryId !== null && $categoryId !== '') {
+            $params['category_id'] = $categoryId;
+        }
+        $url  = self::API . '/popular?' . http_build_query($params);
         $json = $this->apiGet($url);
         if ($json === null) return [];
         $items = is_array($json) && isset($json[0]) ? $json : ($json['results'] ?? []);
