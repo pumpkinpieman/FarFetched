@@ -131,12 +131,33 @@ final class ThingiverseService
         $urls = [];
         foreach ($json as $img) {
             if (!is_array($img)) continue;
-            // Prefer large, fall back to medium, then url root
-            $u = (string) ($img['sizes']['large']['url']
-                ?? $img['sizes']['medium']['url']
-                ?? $img['url']
-                ?? '');
-            if ($u !== '' && !in_array($u, $urls, true)) $urls[] = $u;
+
+            // Skip non-photo types (stl renders, file previews etc. often blank)
+            $type = strtolower((string) ($img['type'] ?? 'photo'));
+            if (!in_array($type, ['photo', 'image', ''], true)) continue;
+
+            // sizes is an array: [{type:'large',url:...},{type:'medium',url:...}]
+            $best = '';
+            if (isset($img['sizes']) && is_array($img['sizes'])) {
+                foreach ($img['sizes'] as $s) {
+                    if (!is_array($s)) continue;
+                    $st = strtolower((string)($s['type'] ?? ''));
+                    $su = (string)($s['url'] ?? '');
+                    if ($su === '') continue;
+                    if ($st === 'large')  { $best = $su; break; }
+                    if ($st === 'medium') { $best = $su; }
+                    if ($best === '')     { $best = $su; }
+                }
+            }
+
+            // Fall back to root url field
+            if ($best === '') $best = (string)($img['url'] ?? '');
+            if ($best === '') continue;
+
+            // Skip cdn.thingiverse.com default/placeholder images
+            if (str_contains($best, '/site/img/default/')) continue;
+
+            if (!in_array($best, $urls, true)) $urls[] = $best;
         }
         return $urls;
     }

@@ -424,10 +424,20 @@ $csrf = csrf_token();
         const res  = await fetch(endpoint);
         const urls = await res.json();
         if (Array.isArray(urls) && urls.length > 1) {
-          imgs.length = 0;
-          urls.forEach(u => imgs.push(u));
-          imgs.forEach(u => { const p = new Image(); p.src = encodeURI(u); });
-          prev.style.display = next.style.display = imgs.length > 1 ? 'block' : 'none';
+          // Filter out blank/broken images before showing slider
+          const valid = await Promise.all(urls.map(u => new Promise(resolve => {
+            const t = new Image();
+            t.onload  = () => resolve(t.naturalWidth > 10 ? u : null);
+            t.onerror = () => resolve(null);
+            t.src = encodeURI(u);
+          })));
+          const good = valid.filter(Boolean);
+          if (good.length > 1) {
+            imgs.length = 0;
+            good.forEach(u => imgs.push(u));
+            prev.style.display = next.style.display = 'block';
+          }
+          // If only 1 valid image, leave as-is (no arrows)
         }
       } catch(e) { /* fail silently */ }
     }
