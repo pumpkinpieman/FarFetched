@@ -115,7 +115,33 @@ final class ThingiverseService
     }
 
     /**
-     * Resolve the ZIP download URL for a thing.
+     * Fetch all images for a thing — used by the lazy hover slider.
+     * GET /things/{id}/images
+     * Returns array of full-size image URLs.
+     * @return string[]
+     */
+    public function getThingImages(string $thingId): array
+    {
+        $thingId = preg_replace('/[^0-9]/', '', $thingId);
+        if ($thingId === '' || !$this->isAuthed()) return [];
+
+        $json = $this->apiGet(self::API . '/things/' . $thingId . '/images');
+        if (!is_array($json)) return [];
+
+        $urls = [];
+        foreach ($json as $img) {
+            if (!is_array($img)) continue;
+            // Prefer large, fall back to medium, then url root
+            $u = (string) ($img['sizes']['large']['url']
+                ?? $img['sizes']['medium']['url']
+                ?? $img['url']
+                ?? '');
+            if ($u !== '' && !in_array($u, $urls, true)) $urls[] = $u;
+        }
+        return $urls;
+    }
+
+    /**
      * Thingiverse provides a per-thing ZIP at /things/{id}/zip
      * Falls back to individual file list if ZIP is unavailable.
      * Returns '' on failure.

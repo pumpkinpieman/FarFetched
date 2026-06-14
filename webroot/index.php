@@ -378,7 +378,7 @@ $csrf = csrf_token();
     card.querySelector('.msize').textContent = m.size ? fmtBytes(m.size) : '';
 
     if (multi) attachSlider(card, imgs, m.id);
-    else if (SOURCE === 'printables' && m.id) attachSlider(card, imgs, m.id);
+    else if ((SOURCE === 'printables' || SOURCE === 'thingiverse') && m.id) attachSlider(card, imgs, m.id);
     return card;
   }
 
@@ -412,26 +412,28 @@ $csrf = csrf_token();
     prev.addEventListener('click', (e)=>nav(-1, e));
     next.addEventListener('click', (e)=>nav( 1, e));
 
-    // For Printables cards: lazy-fetch the full gallery on first hover.
-    async function fetchPrintablesGallery() {
-      if (galleryFetched || !modelId || SOURCE !== 'printables') return;
+    // For Printables/Thingiverse cards: lazy-fetch the full gallery on first hover.
+    async function fetchGallery() {
+      if (galleryFetched || !modelId) return;
+      if (SOURCE !== 'printables' && SOURCE !== 'thingiverse') return;
       galleryFetched = true;
       try {
-        const res = await fetch('print_images.php?id=' + encodeURIComponent(modelId));
+        const endpoint = SOURCE === 'thingiverse'
+          ? 'thing_images.php?id=' + encodeURIComponent(modelId)
+          : 'print_images.php?id=' + encodeURIComponent(modelId);
+        const res  = await fetch(endpoint);
         const urls = await res.json();
         if (Array.isArray(urls) && urls.length > 1) {
           imgs.length = 0;
           urls.forEach(u => imgs.push(u));
-          // Preload all images now that we have them.
           imgs.forEach(u => { const p = new Image(); p.src = encodeURI(u); });
-          // Show/hide arrows based on updated count.
           prev.style.display = next.style.display = imgs.length > 1 ? 'block' : 'none';
         }
       } catch(e) { /* fail silently */ }
     }
 
     card.addEventListener('mouseenter', async ()=>{
-      await fetchPrintablesGallery();
+      await fetchGallery();
       if (imgs.length > 1) prev.style.display = next.style.display = 'block';
       if (!preloaded){
         preloaded = true;
