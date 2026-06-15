@@ -184,7 +184,6 @@ $csrf = csrf_token();
   nav a{color:#8a8070;}
   nav a:hover{background:#1a140c;color:#f0e6d3;}
   nav a.active{background:rgba(255,107,26,0.1);color:#ff6b1a;border:1px solid rgba(255,107,26,0.2);font-weight:600;}
-  .msize{color:#f5c842 !important;}
   .mcreator{color:#f5c842 !important;}
   .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
   .btn-primary:disabled{background:#2e1a0a;color:#5a4a32;cursor:not-allowed;}
@@ -228,7 +227,6 @@ $csrf = csrf_token();
   nav a:hover{background:#1a140c;color:#e8ede9;}
   nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
   nav a:not(.active){color:#c8d4c9;}
-  .msize{color:#f5a623 !important;}
   .mcreator{color:#f5a623 !important;}
   .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
   .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
@@ -289,7 +287,7 @@ $csrf = csrf_token();
   .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;border-radius:14px 14px 0 0;overflow:hidden;}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
   .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
-  .msize{font-size:11px;color:var(--clay-deep);font-weight:600;margin-top:5px;} .msize:empty{display:none;}
+
   .searchbar{display:flex;gap:8px;margin-bottom:18px;align-items:center;}
   .srcToggle{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;}
   .srcBtn{padding:7px 12px;font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;background:var(--card);}
@@ -440,7 +438,6 @@ $csrf = csrf_token();
           <div class="meta">
             <div class="mname"><?= e($m['name']) ?></div>
             <div class="mcreator">by <?= e($m['creator']) ?></div>
-            <div class="msize"><?= !empty($m['size']) ? e(human_size((int) $m['size'])) : '' ?></div>
           </div>
         </div>
       <?php endforeach; ?>
@@ -535,10 +532,9 @@ $csrf = csrf_token();
     card.innerHTML =
       '<input type="checkbox" class="pick" aria-label="Select model"' + (selHas(m.id) ? ' checked' : '') + '>' +
       '<div class="thumb" style="position:relative;">'+thumb+'</div>' + badge +
-      '<div class="meta"><div class="mname"></div><div class="mcreator"></div><div class="msize"></div></div>';
+      '<div class="meta"><div class="mname"></div><div class="mcreator"></div></div>';
     card.querySelector('.mname').textContent = m.name;
     card.querySelector('.mcreator').textContent = 'by ' + m.creator;
-    card.querySelector('.msize').textContent = m.size ? fmtBytes(m.size) : '';
 
     if (multi) attachSlider(card, imgs, m.id);
     else if ((SOURCE === 'printables' || SOURCE === 'thingiverse') && m.id) attachSlider(card, imgs, m.id);
@@ -620,7 +616,6 @@ $csrf = csrf_token();
     wrap.appendChild(prev);
     wrap.appendChild(next);
   }
-  function fmtBytes(b){ if(!b) return ''; const u=['B','KB','MB','GB']; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return (i===0?Math.round(n):n.toFixed(1))+' '+u[i]; }
 
   // Paging state. mode 'browse' uses the opaque cursor; mode 'search' uses a
   // numeric offset (searchPrints2). Same infinite-scroll mechanism for both.
