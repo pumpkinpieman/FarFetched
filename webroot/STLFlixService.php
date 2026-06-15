@@ -91,13 +91,15 @@ final class STLFlixService
     }
 
     /**
-     * Resolve the CDN ZIP download URL for a model via GraphQL.
+     * Resolve the CDN ZIP download URL for a model.
      *
-     * Probes several Strapi v4 field name candidates in a single query;
-     * picks the first URL ending in .zip. No page scraping — platform.stlflix.com
-     * is a Next.js SSR app that redirect-loops on server-side requests.
+     * STLFlix's download flow (reverse-engineered from DevTools):
+     *   1. POST k8s.stlflix.com/graphql — a "download" mutation that logs the
+     *      conversion and returns the CDN file URL.
+     *   2. GET static.stlflix.com/<Name_hash>.zip — no auth, just Referer cookie.
      *
-     * Returns '' and sets $lastError on failure.
+     * We try several known mutation/query shapes. The static CDN URL requires
+     * no Authorization header — only Referer: https://platform.stlflix.com/.
      */
     public function getDownloadUrl(string $modelId, string $slug): string
     {
@@ -108,95 +110,122 @@ final class STLFlixService
             return '';
         }
 
-        // Probe by slug first, then by numeric id if slug fails.
-        $candidates = [];
-        if ($slug !== '' && $slug !== $modelId) {
-            $candidates[] = ['field' => 'slug', 'val' => $slug];
-        }
-        if (is_numeric($modelId)) {
-            $candidates[] = ['field' => 'id', 'val' => $modelId];
-        }
-        if ($candidates === []) {
-            $candidates[] = ['field' => 'slug', 'val' => $modelId];
+        $idInt = is_numeric($modelId) ? (int) $modelId : 0;
+
+        // --- Attempt 1: createDownload / download mutation (common Strapi pattern) ---
+        $mutations = [];
+
+        if ($idInt > 0) {
+            $mutations[] = <<<GQL
+            mutation {
+              createDownload(data: { product: {$idInt} }) {
+                data { attributes { file { data { attributes { url } } } } }
+              }
+            }
+            GQL;
+
+            $mutations[] = <<<GQL
+            mutation {
+              download(productId: {$idInt}) {
+                url
+                file_url
+                download_url
+              }
+            }
+            GQL;
+
+            $mutations[] = <<<GQL
+            mutation {
+              createConversion(data: { product: {$idInt}, conversion_type: "download" }) {
+                data { attributes { file { data { attributes { url } } } } }
+              }
+            }
+            GQL;
         }
 
-        foreach ($candidates as ['field' => $field, 'val' => $val]) {
-            $filter = $field === 'id'
-                ? "filters: { id: { eq: {$val} } }"
-                : "filters: { slug: { eq: \"{$val}\" } }";
+        // --- Attempt 2: product query with every plausible file field ---
+        $filterById   = $idInt > 0 ? "filters: { id: { eq: {$idInt} } }" : '';
+        $filterBySlug = $slug !== '' ? "filters: { slug: { eq: \"{$slug}\" } }" : '';
 
-            // Query all plausible Strapi file-field names in one round-trip.
-            $query = <<<GQL
+        foreach (array_filter([$filterById, $filterBySlug]) as $filter) {
+            $mutations[] = <<<GQL
             {
               products({$filter}, pagination: { pageSize: 1 }) {
                 data {
                   id
                   attributes {
-                    name
-                    slug
-                    pack      { data { attributes { url name } } }
-                    zip_file  { data { attributes { url name } } }
-                    file      { data { attributes { url name } } }
-                    files     { data { attributes { url name } } }
-                    downloads { data { attributes { url name } } }
-                    assets    { data { attributes { url name } } }
+                    pack       { data { attributes { url name } } }
+                    zip_file   { data { attributes { url name } } }
+                    file       { data { attributes { url name } } }
+                    files      { data { attributes { url name } } }
+                    download   { data { attributes { url name } } }
+                    downloads  { data { attributes { url name } } }
+                    model_file { data { attributes { url name } } }
+                    assets     { data { attributes { url name } } }
                   }
                 }
               }
             }
             GQL;
-
-            $data = $this->graphql($query);
-            if ($data === null) continue;
-
-            $attrs = $data['products']['data'][0]['attributes'] ?? null;
-            if ($attrs === null) continue;
-
-            // Check every field candidate — return first .zip URL found.
-            foreach (['pack', 'zip_file', 'file', 'files', 'downloads', 'assets'] as $key) {
-                $entry = $attrs[$key] ?? null;
-                if ($entry === null) continue;
-
-                // Single-relation: { data: { attributes: { url } } }
-                // Multi-relation:  { data: [ { attributes: { url } } ] }
-                $items = isset($entry['data'][0]) ? $entry['data'] : [$entry['data'] ?? null];
-                foreach ($items as $item) {
-                    if (!is_array($item)) continue;
-                    $u = (string) ($item['attributes']['url'] ?? '');
-                    if ($u !== '') {
-                        return $this->absoluteUrl($u);
-                    }
-                }
-            }
         }
 
-        // Last resort: ask the library endpoint for this specific model and
-        // look for a download_url / file_url field the normalize() drops.
-        $libUrl  = self::LIBRARY . '?product_id=' . rawurlencode($modelId);
-        $libData = $this->getJson($libUrl);
-        if (is_array($libData)) {
-            array_walk_recursive($libData, static function ($v, $k) use (&$found): void {
-                if (
-                    $found === null
-                    && is_string($v)
-                    && str_ends_with(strtolower($v), '.zip')
-                    && str_starts_with($v, 'http')
-                ) {
-                    $found = $v;
-                }
-            });
-            if (!empty($found)) return (string) $found;
+        foreach ($mutations as $gql) {
+            $result = $this->graphql($gql);
+            if ($result === null) continue;
+
+            $url = $this->extractFirstZipUrl($result);
+            if ($url !== '') return $url;
+        }
+
+        // --- Attempt 3: painel.stlflix.com download endpoint ---
+        // The library API may expose a per-product download URL.
+        foreach (array_filter([$idInt > 0 ? (string)$idInt : '', $slug]) as $key) {
+            $endpoints = [
+                self::LIBRARY . '?product_id=' . rawurlencode($key),
+                'https://painel.stlflix.com/api/download?product_id=' . rawurlencode($key),
+                'https://painel.stlflix.com/api/products/' . rawurlencode($key) . '/download',
+            ];
+            foreach ($endpoints as $ep) {
+                $data = $this->getJson($ep);
+                if (!is_array($data)) continue;
+                $url = $this->extractFirstZipUrl($data);
+                if ($url !== '') return $url;
+            }
         }
 
         $label = $slug !== '' ? $slug : $modelId;
         $this->lastError = 'Could not resolve download URL for STLFlix model "' . $label . '". '
-            . 'GraphQL returned no file fields — field names may have changed. '
-            . 'Check k8s.stlflix.com/graphql introspection.';
+            . 'The download mutation field name is unknown — capture the GraphQL Request '
+            . 'payload from DevTools when clicking Download on a product page and report it.';
         return '';
     }
 
     /**
+     * Walk any decoded JSON array and return the first https://*.zip URL found.
+     * Handles both Strapi relation shapes and flat arrays.
+     */
+    private function extractFirstZipUrl(array $data): string
+    {
+        // Strapi file-relation field names to check (single and multi).
+        $fileFields = ['pack','zip_file','file','files','download','downloads','model_file','assets','url'];
+
+        array_walk_recursive($data, static function ($v) use (&$found): void {
+            if (
+                $found === null
+                && is_string($v)
+                && stripos($v, '.zip') !== false
+                && (str_starts_with($v, 'http') || str_starts_with($v, '//'))
+            ) {
+                $found = $v;
+            }
+        });
+
+        return isset($found) && is_string($found) ? $this->absoluteUrl($found) : '';
+    }
+
+    /**
      * Stream a remote URL to a local file path.
+     * The static.stlflix.com CDN requires no Authorization — just Referer.
      * $progressFn: callable(int $bytes) — called periodically with cumulative byte count.
      */
     public function downloadToFile(string $url, string $dest, ?callable $progressFn = null): bool
@@ -209,17 +238,23 @@ final class STLFlixService
             return false;
         }
 
+        // The CDN (static.stlflix.com / CloudFront) serves ZIPs publicly —
+        // no Authorization needed, only a Referer from platform.stlflix.com.
+        $isCdn    = str_contains($url, 'static.stlflix.com');
+        $headers  = ['Referer: ' . self::PLATFORM . '/'];
+        if (!$isCdn && $this->token !== '') {
+            $headers[] = 'Authorization: Bearer ' . $this->token;
+        }
+
         $written = 0;
         $ch      = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
             CURLOPT_TIMEOUT        => 600,
             CURLOPT_CONNECTTIMEOUT => 30,
             CURLOPT_USERAGENT      => self::UA,
-            CURLOPT_HTTPHEADER     => [
-                'Referer: ' . self::PLATFORM . '/',
-                'Authorization: Bearer ' . $this->token,
-            ],
+            CURLOPT_HTTPHEADER     => $headers,
             CURLOPT_WRITEFUNCTION  => static function ($ch, string $data) use ($fh, &$written, $progressFn): int {
                 $n = fwrite($fh, $data);
                 if ($n === false) return -1;
