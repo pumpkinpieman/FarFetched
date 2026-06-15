@@ -60,7 +60,46 @@ define('THUMBS_DIR',  PRIVATE_DIR . '/thumbs');
 // MODELS_ROOT is the parent that holds per-source subfolders
 // (printables/, stlflix/, etc.). FarFetched saves into the
 // 'printables' subfolder so every source lives side by side.
-define('MODELS_ROOT', getenv('FETCHER_DOWNLOAD_DIR') ?: '/mnt/user/Downloads/models');
+//
+// IMPORTANT: the container's cron daemon runs jobs in a scrubbed environment.
+// The entrypoint writes /etc/fetcher.env and the crontab sources it, but a
+// bare "VAR=value" line (no `export`) only sets a shell variable — it is NOT
+// inherited by the php child, so getenv() returns false under cron. We resolve
+// the root defensively: process env first, then the entrypoint env file, then
+// the conventional Docker mount point, and only then the legacy host path.
+if (!function_exists('ff_resolve_models_root')) {
+    function ff_resolve_models_root(): string
+    {
+        // 1) Process environment (works for web requests + `docker exec`).
+        $env = getenv('FETCHER_DOWNLOAD_DIR');
+        if (is_string($env) && trim($env) !== '') {
+            return rtrim(trim($env), '/');
+        }
+        // 2) Parse the entrypoint-written env file directly. Cron sources this
+        //    but may not export it, so getenv() can miss it. Handle both
+        //    `export FETCHER_DOWNLOAD_DIR=...` and bare `FETCHER_DOWNLOAD_DIR=...`.
+        foreach (['/etc/fetcher.env'] as $envFile) {
+            if (is_readable($envFile)) {
+                $lines = @file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+                foreach ($lines as $line) {
+                    if (preg_match('/^\s*(?:export\s+)?FETCHER_DOWNLOAD_DIR\s*=\s*(.+?)\s*$/', $line, $m)) {
+                        $val = trim($m[1], " \t\"'");
+                        if ($val !== '') {
+                            return rtrim($val, '/');
+                        }
+                    }
+                }
+            }
+        }
+        // 3) Conventional Docker mount point — correct for the standard image.
+        if (is_dir('/downloads')) {
+            return '/downloads';
+        }
+        // 4) Legacy bare-metal Unraid host path (last resort).
+        return '/mnt/user/Downloads/models';
+    }
+}
+define('MODELS_ROOT', ff_resolve_models_root());
 define('DEFAULT_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/printables');
 define('MAKERWORLD_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/makerworld');
 define('THINGIVERSE_DOWNLOAD_DIR',   rtrim(MODELS_ROOT, '/') . '/thingiverse');
