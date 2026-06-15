@@ -171,6 +171,12 @@ $badge = static function (string $s): string {
   @keyframes indet{0%{left:-40%;}100%{left:100%;}}
   .rowprog{font-size:11px;color:var(--muted);white-space:nowrap;}
   .file-counter{display:inline-block;font-size:11px;font-weight:600;color:var(--fg);background:var(--line);border-radius:3px;padding:0 4px;margin-right:3px;}
+  .src-badge{display:inline-block;font-size:10px;font-weight:800;padding:2px 6px;border-radius:5px;letter-spacing:.04em;background:#2e2218;color:#7a6a52;font-family:ui-monospace,monospace;}
+  .src-badge.printables{background:rgba(255,107,26,.12);color:#ff6b1a;}
+  .src-badge.makerworld{background:rgba(39,120,248,.12);color:#6fa8f5;}
+  .src-badge.thingiverse{background:rgba(0,188,212,.12);color:#4dd6e8;}
+  .src-badge.cults3d{background:rgba(180,60,200,.12);color:#d07be0;}
+  .src-badge.stlflix{background:rgba(245,200,66,.12);color:#f5c842;}
   .act{display:inline-flex;gap:6px;}
   .act button{padding:5px 9px;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:7px;}
   .act button:hover{border-color:var(--clay);color:var(--clay-deep);}
@@ -220,12 +226,18 @@ $badge = static function (string $s): string {
     </div>
 
     <table>
-      <thead><tr><th>Model</th><th>Model ID</th><th>Creator</th><th>Type</th><th>Status</th><th>Progress</th><th>Attempts</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Src</th><th>Model</th><th>Model ID</th><th>Creator</th><th>Type</th><th>Status</th><th>Progress</th><th>Attempts</th><th>Actions</th></tr></thead>
       <tbody id="qbody">
         <?php if ($rows === []): ?>
-          <tr><td colspan="8" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>
+          <tr><td colspan="9" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>
         <?php else: foreach ($rows as $r): ?>
           <tr data-job="<?= (int) $r['id'] ?>">
+            <?php
+              $srcSlug = strtolower((string)($r['source'] ?? ''));
+              $srcLabels = ['printables'=>'PT','makerworld'=>'MW','thingiverse'=>'TV','cults3d'=>'C3D','stlflix'=>'SF'];
+              $srcLabel = $srcLabels[$srcSlug] ?? strtoupper(substr($srcSlug,0,3));
+            ?>
+            <td><span class="src-badge <?= e($srcSlug) ?>"><?= e($srcLabel) ?></span></td>
             <td><?= e($r['name'] !== '' ? $r['name'] : $r['model_id']) ?></td>
             <td class="muted"><?= e($r['model_id']) ?></td>
             <td class="muted"><?= e($r['creator']) ?></td>
@@ -348,10 +360,11 @@ $badge = static function (string $s): string {
       if (sig !== lastSig) {
         lastSig = sig;
         if (!data.jobs.length) {
-          body.innerHTML = '<tr><td colspan="8" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>';
+          body.innerHTML = '<tr><td colspan="9" class="muted">Nothing queued yet. Select models on Browse and hit Download.</td></tr>';
         } else {
           body.innerHTML = data.jobs.map(j =>
             '<tr data-job="' + j.id + '">' +
+            (function(s){ const m={'printables':'PT','makerworld':'MW','thingiverse':'TV','cults3d':'C3D','stlflix':'SF'}; return '<td><span class="src-badge '+s+'">'+(m[s]||s.substring(0,3).toUpperCase())+'</span></td>'; })(j.source||'') +
             '<td>' + esc(j.name || j.model_id) + '</td>' +
             '<td class="muted">' + esc(j.model_id) + '</td>' +
             '<td class="muted">' + esc(j.creator) + '</td>' +
