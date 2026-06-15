@@ -112,7 +112,7 @@ function list_sources(): array
 {
     $root = MODELS_ROOT;
     if (!is_dir($root)) {
-        @mkdir($root, 0775, true);
+        @mkdir($root, 0777, true);
         return [];
     }
     $out = [];
@@ -269,7 +269,7 @@ function model_thumb(string $source, string $modelFolder, string $modelPath): ?s
     if ($pdf === null) {
         return null;
     }
-    if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0775, true)) {
+    if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0777, true)) {
         return null;
     }
 
@@ -340,7 +340,7 @@ function extract_zip_safe(string $zipPath, string $targetDir): bool
     if (!is_file($zipPath)) {
         return false;
     }
-    if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true)) {
+    if (!is_dir($targetDir) && !@mkdir($targetDir, 0777, true)) {
         return false;
     }
     $za = new ZipArchive();

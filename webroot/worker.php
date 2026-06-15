@@ -153,7 +153,7 @@ if (cfg('paused') === true) {
 }
 
 $baseDir = get_download_dir();
-if (!is_dir($baseDir) && !@mkdir($baseDir, 0775, true) && !is_dir($baseDir)) {
+if (!is_dir($baseDir) && !@mkdir($baseDir, 0777, true) && !is_dir($baseDir)) {
     logln('FATAL: download dir not creatable: ' . $baseDir);
     exit(1);
 }
@@ -174,7 +174,7 @@ $sourceDirs = [
 foreach ($sourceDirs as $srcName => $srcDir) {
     if ($srcDir === '') continue;
     if (!is_dir($srcDir)) {
-        if (!@mkdir($srcDir, 0775, true) && !is_dir($srcDir)) {
+        if (!@mkdir($srcDir, 0777, true) && !is_dir($srcDir)) {
             logln('WARN: Cannot create ' . $srcName . ' dir: ' . $srcDir . ' — check Docker volume permissions (chown -R nobody:users ' . dirname($srcDir) . ')');
         } else {
             logln('Created ' . $srcName . ' dir: ' . $srcDir);
@@ -293,7 +293,7 @@ while (true) {
 
             $mwBase  = get_makerworld_dir();
             $destDir = rtrim($mwBase, '/') . '/' . model_folder($modelId, $name, $slug);
-            if (!is_dir($destDir) && !@mkdir($destDir, 0775, true) && !is_dir($destDir)) {
+            if (!is_dir($destDir) && !@mkdir($destDir, 0777, true) && !is_dir($destDir)) {
                 $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Cannot create MakerWorld dir: ' . $destDir, ':path' => '', ':id' => $jobId]);
                 logerr('error', '  Cannot create MakerWorld dir: ' . $destDir);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
@@ -379,7 +379,7 @@ while (true) {
                     continue;
                 }
                 $destDir = rtrim(get_thingiverse_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
-                if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+                if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
                 $anyOk = false;
                 foreach ($files as $f) {
                     $fname = safe_segment($f['name']);
@@ -393,7 +393,7 @@ while (true) {
                 $upd->execute([':st' => $anyOk?'done':'error', ':inc' => 1, ':err' => $anyOk?'':$tv->lastError, ':path' => $anyOk?$destDir:'', ':id' => $jobId]);
             } else {
                 $destDir = rtrim(get_thingiverse_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
-                if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+                if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
                 $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_thingiverse.zip';
                 if (!cfg('overwrite') && is_file($dest)) {
                     logln('  Exists, skip: ' . basename($dest));
@@ -437,7 +437,7 @@ while (true) {
                 continue;
             }
             $destDir = rtrim(get_cults3d_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
-            if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+            if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
             $anyOk = false;
             foreach ($files as $f) {
                 $fname = safe_segment($f['name']);
@@ -479,7 +479,7 @@ while (true) {
             }
 
             $destDir = rtrim(get_stlflix_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
-            if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+            if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
 
             $anyOk    = false;
             $fileTotal = count($links);
@@ -569,7 +569,7 @@ while (true) {
 
             $destDir = rtrim($baseDir, '/') . '/' . model_folder($modelId, $name, $slug);
             if (!is_dir($destDir)) {
-                @mkdir($destDir, 0775, true);
+                @mkdir($destDir, 0777, true);
             }
             $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_model_files.zip';
 
@@ -636,7 +636,7 @@ while (true) {
                 if ($packLink !== '') {
                     logln('  No per-file match — falling back to PACK download.');
                     $destDir = rtrim($baseDir, '/') . '/' . model_folder($modelId, $name, $slug);
-                    if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+                    if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
                     $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_model_files.zip';
                     if (!cfg('overwrite') && is_file($dest)) {
                         logln('  Exists, skip: ' . basename($dest));

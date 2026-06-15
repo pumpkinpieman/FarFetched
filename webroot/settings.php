@@ -55,7 +55,7 @@ function apply_source_dir(string $raw, string $configKey): array
     if ($path[0] !== '/')       return ['ok' => false, 'msg' => 'Use an absolute path starting with "/".'];
     if (strpos($path, "\0") !== false || preg_match('#(^|/)\.\.(/|$)#', $path))
                                 return ['ok' => false, 'msg' => 'Path contains illegal segments.'];
-    if (!is_dir($path) && !@mkdir($path, 0775, true) && !is_dir($path))
+    if (!is_dir($path) && !@mkdir($path, 0777, true) && !is_dir($path))
                                 return ['ok' => false, 'msg' => 'Could not create directory — check parent permissions.'];
     if (!is_writable($path))    return ['ok' => false, 'msg' => 'Directory exists but is not writable.'];
     $real = realpath($path) ?: $path;
