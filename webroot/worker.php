@@ -569,10 +569,43 @@ while (true) {
         }
 
         if ($files === []) {
-            $msg = $svc->lastError !== '' ? $svc->lastError : 'No matching files on model.';
-            $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-            logerr('warn', '  Skipped: ' . $msg);
-            continue;
+            // Fallback chain: STL → 3MF → PACK
+            if (strtoupper($fileTy) === 'STL') {
+                logln('  No STL files — trying 3MF fallback.');
+                $files = $svc->getModelFiles($modelId, '3MF');
+                if ($files !== []) {
+                    $fileTy = '3MF';
+                    logln('  Falling back to 3MF (' . count($files) . ' file(s)).');
+                }
+            }
+            if ($files === []) {
+                $packLink = $svc->getPackLink($modelId, 'MODEL_FILES');
+                if ($packLink !== '') {
+                    logln('  No per-file match — falling back to PACK download.');
+                    $destDir = rtrim($baseDir, '/') . '/' . model_folder($modelId, $name, $slug);
+                    if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+                    $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_model_files.zip';
+                    if (!cfg('overwrite') && is_file($dest)) {
+                        logln('  Exists, skip: ' . basename($dest));
+                        $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                    } elseif ($svc->downloadToFile($packLink, $dest, progress_writer($jobId, basename($dest)))) {
+                        if (extract_zip_safe($dest, $destDir)) {
+                            logln('  Extracted pack into: ' . $destDir);
+                            if (cfg('keep_zip') !== true) { @unlink($dest); }
+                        }
+                        $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                    } else {
+                        $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
+                    }
+                    $GLOBALS['ACTIVE_JOB_ID'] = null;
+                    pace();
+                    continue;
+                }
+                $msg = $svc->lastError !== '' ? $svc->lastError : 'No matching files on model.';
+                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Skipped: ' . $msg);
+                continue;
+            }
         }
 
         $destDir   = rtrim($baseDir, '/') . '/' . model_folder($modelId, $name, $slug);
