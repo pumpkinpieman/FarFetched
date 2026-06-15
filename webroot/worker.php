@@ -405,23 +405,18 @@ while (true) {
     // ---- STLFlix: whole-model ZIP download ----------------------------------
     if (($job['source'] ?? '') === 'stlflix') {
         try {
-            $link = $stlfix->getDownloadUrl($modelId, $slug);
+            $links = $stlfix->getDownloadUrls($modelId, $slug);
 
-            // Dead/expired token — halt the run so user can re-auth.
-            if ($link === '' && str_contains(strtolower($stlfix->lastError), 'auth')) {
+            // Dead/expired token — halt the run.
+            if (empty($links) && str_contains(strtolower($stlfix->lastError), 'auth')) {
                 $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $stlfix->lastError, ':path' => '', ':id' => $jobId]);
                 logerr('error', '  STLFlix auth failed — halting run. Re-paste jwt in Settings.');
                 break;
             }
-            if ($link === '') {
-                $msg = $stlfix->lastError !== '' ? $stlfix->lastError : 'Could not resolve STLFlix download URL.';
+            if (empty($links)) {
+                $msg = $stlfix->lastError !== '' ? $stlfix->lastError : 'Could not resolve STLFlix download URLs.';
                 $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
                 logerr('warn', '  STLFlix error: ' . $msg);
-                // Log available product fields to help diagnose field-name mismatch.
-                $fields = $stlfix->introspectProductFields();
-                if ($fields !== []) {
-                    logln('  STLFlix Product fields: ' . implode(', ', $fields));
-                }
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(STLFLIX_DELAY_SECONDS);
                 continue;
@@ -430,40 +425,44 @@ while (true) {
             $destDir = rtrim(get_stlflix_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
             if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
 
-            $zipName = model_folder($modelId, $name, $slug) . '_stlflix.zip';
-            $dest    = $destDir . '/' . $zipName;
+            $anyOk = false;
+            foreach ($links as $i => $link) {
+                // Derive a filename from the URL, fallback to indexed name.
+                $urlBasename = basename(parse_url($link, PHP_URL_PATH) ?? '');
+                $zipName     = $urlBasename !== '' ? $urlBasename
+                    : model_folder($modelId, $name, $slug) . '_' . ($i + 1) . '.zip';
+                $dest = $destDir . '/' . $zipName;
 
-            if (!cfg('overwrite') && is_file($dest)) {
-                logln('  Exists, skip: ' . $zipName);
-                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
-                $GLOBALS['ACTIVE_JOB_ID'] = null;
-                continue; // no network, no pace
-            }
-
-            logln('  Downloading: ' . $zipName . ' from ' . $link);
-            $pwFn = progress_writer($jobId, $zipName);
-            // STLFlixService calls progressFn($bytesWritten); progress_writer expects ($total,$now).
-            $progressCb = static function (int $bytes) use ($pwFn): void { $pwFn(0, $bytes); };
-            if ($stlfix->downloadToFile($link, $dest, $progressCb)) {
-                logln('  Saved: ' . $dest);
-
-                if (extract_zip_safe($dest, $destDir)) {
-                    logln('  Extracted into: ' . $destDir);
-                    if (cfg('keep_zip') !== true) {
-                        @unlink($dest);
-                        logln('  Removed zip (keep_zip off).');
-                    }
-                    $finalPath = $destDir;
-                } else {
-                    logln('  Extract failed; zip kept at ' . $dest);
-                    $finalPath = $dest;
+                if (!cfg('overwrite') && is_file($dest)) {
+                    logln('  Exists, skip: ' . $zipName);
+                    $anyOk = true;
+                    continue;
                 }
 
-                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $finalPath, ':id' => $jobId]);
-            } else {
-                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $stlfix->lastError, ':path' => '', ':id' => $jobId]);
-                logln('  STLFlix download failed: ' . $stlfix->lastError);
+                logln('  Downloading: ' . $zipName . ' from ' . $link);
+                $pwFn = progress_writer($jobId, $zipName);
+                $progressCb = static function (int $bytes) use ($pwFn): void { $pwFn(0, $bytes); };
+
+                if ($stlfix->downloadToFile($link, $dest, $progressCb)) {
+                    logln('  Saved: ' . $dest);
+                    if (extract_zip_safe($dest, $destDir)) {
+                        logln('  Extracted into: ' . $destDir);
+                        if (cfg('keep_zip') !== true) {
+                            @unlink($dest);
+                            logln('  Removed zip (keep_zip off).');
+                        }
+                    } else {
+                        logln('  Extract failed; zip kept at ' . $dest);
+                    }
+                    $anyOk = true;
+                } else {
+                    logln('  Failed: ' . $zipName . ' — ' . $stlfix->lastError);
+                }
+                if ($i < count($links) - 1) pace(STLFLIX_DELAY_SECONDS);
             }
+
+            $upd->execute([':st' => $anyOk ? 'done' : 'error', ':inc' => 1,
+                ':err' => $anyOk ? '' : $stlfix->lastError, ':path' => $anyOk ? $destDir : '', ':id' => $jobId]);
         } catch (Throwable $e) {
             $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
             logln('  STLFlix error: ' . $e->getMessage());

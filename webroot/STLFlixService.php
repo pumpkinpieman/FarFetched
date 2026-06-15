@@ -104,74 +104,73 @@ final class STLFlixService
     }
 
     /**
-     * Resolve the CDN ZIP download URL for a model.
-     *
-     * Confirmed flow from DevTools:
-     *   1. POST https://k8s.stlflix.com/api/product/product-file
-     *      Body: {"fid":"<file_id>"}  — fid is NOT the product/model ID,
-     *      it's a separate file entity ID that comes from the product data.
-     *   2. GET  https://static.stlflix.com/<Name_hash>.zip  (no auth, just Referer)
-     *
-     * fid is resolved via GraphQL product query — it lives in a file/pack
-     * relation on the product. We probe several field names.
+     * Resolve all CDN download URLs for a product.
+     * Returns array of URLs (may be multiple files per product).
+     * @return string[]
      */
-    public function getDownloadUrl(string $modelId, string $slug): string
+    public function getDownloadUrls(string $modelId, string $slug): array
     {
         $this->lastError = '';
 
         if (!$this->isAuthed()) {
             $this->lastError = 'STLFlix token not set.';
-            return '';
+            return [];
         }
 
         $idInt   = is_numeric($modelId) ? (int) $modelId : 0;
         $useSlug = $slug !== '' ? $slug : $modelId;
 
-        // Step 1: resolve the fid via GraphQL.
-        $fid = $this->resolveFid($idInt, $useSlug);
-        if ($fid === '') {
-            // lastError already set by resolveFid
-            return '';
-        }
+        $fidStr = $this->resolveFid($idInt, $useSlug);
+        if ($fidStr === '') return [];
 
-        // If resolveFid found a direct URL in the file relation, return it immediately.
-        if (str_starts_with($fid, '__URL__:')) {
-            return substr($fid, 8);
-        }
+        $urls = [];
+        foreach (explode(',', $fidStr) as $fid) {
+            $fid = trim($fid);
+            if ($fid === '') continue;
 
-        // Step 2: POST /api/product/product-file with {"fid":"<fid>"} → CDN URL.
-        $result = $this->postJson(self::PRODUCT_FILE, ['fid' => $fid]);
-        if (!is_array($result)) {
-            $this->lastError = 'product-file API returned no JSON for fid=' . $fid
-                . ($this->lastError !== '' ? ': ' . $this->lastError : '');
-            return '';
-        }
-
-        $url = $this->extractFirstZipUrl($result);
-        if ($url !== '') return $url;
-
-        // Also check for a plain url string at root level.
-        foreach (['url', 'download_url', 'file_url', 'link', 'path', 'file', 'zip'] as $k) {
-            $v = $result[$k] ?? null;
-            if (is_string($v) && $v !== '') {
-                return $this->absoluteUrl($v);
+            // Direct URL shortcut from resolveFid.
+            if (str_starts_with($fid, '__URL__:')) {
+                $urls[] = substr($fid, 8);
+                continue;
             }
+
+            $result = $this->postJson(self::PRODUCT_FILE, ['fid' => $fid]);
+            if (!is_array($result)) continue;
+
+            $url = $this->extractFirstZipUrl($result);
+            if ($url === '') {
+                foreach (['url', 'download_url', 'file_url', 'link', 'path', 'file', 'zip'] as $k) {
+                    $v = $result[$k] ?? null;
+                    if (is_string($v) && $v !== '') { $url = $this->absoluteUrl($v); break; }
+                }
+            }
+            if ($url !== '') $urls[] = $url;
         }
 
-        $this->lastError = 'product-file API responded but contained no .zip URL for fid=' . $fid
-            . '. Response: ' . substr(json_encode($result), 0, 200);
-        return '';
+        if (empty($urls)) {
+            $this->lastError = 'product-file API returned no URLs for fids: ' . $fidStr;
+        }
+        return $urls;
+    }
+
+    /** @deprecated Use getDownloadUrls() */
+    public function getDownloadUrl(string $modelId, string $slug): string
+    {
+        $urls = $this->getDownloadUrls($modelId, $slug);
+        return $urls[0] ?? '';
     }
 
     /**
-     * Resolve the fid (file entity ID) for a product.
+     * Resolve all file fids for a product.
      *
-     * Confirmed via GraphQL exploration:
-     * - File relation fields on Product: stl_file, bambu_file (both UploadFile relations)
-     * - prusa_file is a plain String (not a relation, no id)
-     * - fid = the Strapi UploadFile entity id from whichever field is non-null
+     * Confirmed field structure on Product type:
+     *   files: [ComponentPageFiles]  — array, each has file { data { id, attributes { url } } }
+     *   stl_file: UploadFileEntityResponse  — single file relation
+     *   bambu_file: UploadFileEntityResponse — single Bambu Lab file
+     *   prusa_file: String — plain string, not a relation
      *
-     * POST /api/product/product-file with {"fid":"<id>"} returns the CDN URL.
+     * Returns comma-separated fid list (e.g. "29732,28295"), or
+     * "__URL__:<url>" if a direct URL is found, or '' on failure.
      */
     private function resolveFid(int $idInt, string $slug): string
     {
@@ -186,6 +185,7 @@ final class STLFlixService
                 data {
                   id
                   attributes {
+                    files      { id file { data { id attributes { url } } } }
                     stl_file   { data { id attributes { url } } }
                     bambu_file { data { id attributes { url } } }
                     prusa_file
@@ -201,11 +201,28 @@ final class STLFlixService
             $attrs = $data['products']['data'][0]['attributes'] ?? null;
             if (!is_array($attrs)) continue;
 
-            // Prefer stl_file (ZIP with STL files), then bambu_file, then files relation.
+            $fids = [];
+
+            // Primary: files[] array — each entry has file.data.id
+            foreach (($attrs['files'] ?? []) as $component) {
+                $fid = (string) ($component['file']['data']['id'] ?? '');
+                $url = (string) ($component['file']['data']['attributes']['url'] ?? '');
+                if ($fid !== '' && is_numeric($fid)) {
+                    $fids[] = $fid;
+                } elseif ($url !== '') {
+                    $fids[] = '__URL__:' . $this->absoluteUrl($url);
+                }
+            }
+
+            if ($fids !== []) {
+                if (function_exists('logln')) logln('  STLFlix fids from files[]: ' . implode(', ', $fids));
+                return implode(',', $fids);
+            }
+
+            // Fallback: stl_file, bambu_file single relations
             foreach (['stl_file', 'bambu_file'] as $key) {
                 $entry = $attrs[$key]['data'] ?? null;
                 if (!is_array($entry)) continue;
-
                 $fid = (string) ($entry['id'] ?? '');
                 if ($fid !== '' && is_numeric($fid)) {
                     if (function_exists('logln')) logln('  STLFlix fid=' . $fid . ' from ' . $key);
@@ -215,17 +232,15 @@ final class STLFlixService
                 if ($u !== '') return '__URL__:' . $this->absoluteUrl($u);
             }
 
-            // prusa_file is a plain string URL or filename — use directly if it's a zip.
+            // prusa_file is a plain string
             $prusaFile = (string) ($attrs['prusa_file'] ?? '');
-            if ($prusaFile !== '') {
-                if (str_starts_with($prusaFile, 'http')) return '__URL__:' . $prusaFile;
-                // It's likely just a filename — can't use without fid.
-                if (function_exists('logln')) logln('  STLFlix prusa_file (string): ' . $prusaFile);
+            if ($prusaFile !== '' && str_starts_with($prusaFile, 'http')) {
+                return '__URL__:' . $prusaFile;
             }
         }
 
         $this->lastError = 'Could not find fid for "' . $slug . '". '
-            . 'stl_file and bambu_file both null for this product.';
+            . 'files[], stl_file, and bambu_file all null for this product.';
         return '';
     }
 
