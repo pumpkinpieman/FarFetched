@@ -61,7 +61,43 @@ foreach ($sources as $s) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fetcher · Sources</title>
 <style>
-  :root{--bg:#FAF9F5;--panel:#F0EEE6;--card:#FFFFFF;--ink:#2B2A28;--muted:#6B6862;--line:#E5E2D8;--clay:#D97757;--clay-deep:#C2613F;}
+  :root{--bg:#0f1110;--panel:#161a17;--card:#1c211e;--ink:#e8ede9;--muted:#6b8070;--line:#2a3028;--clay:#39a85c;--clay-deep:#2a7d44;--ok:#39a85c;--err:#e05c5c;--warn:#d4820a;}
+  body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
+  .brand{color:#39a85c !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
+  nav a:hover{background:#1c211e;color:#e8ede9;}
+  nav a.active{background:rgba(57,168,92,.12);color:#39a85c;border:1px solid rgba(57,168,92,.2);font-weight:500;}
+  nav a:not(.active){color:#c8d4c9;}
+  .msize{color:#f5a623 !important;}
+  .btn-primary{background:#39a85c;color:#0a1a0e;} .btn-primary:hover{background:#2a7d44;}
+  .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
+  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#39a85c;color:#39a85c;}
+  .srcBtn.active{background:rgba(57,168,92,.12);color:#39a85c;}
+  select{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input:focus,textarea:focus,input:focus{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.25);}
+  .pick{accent-color:#d4820a;}
+  .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
+  .notice.ok,.notice{background:#0d1f12;color:#39a85c;}
+  .notice.err{background:#1f0d0d;color:#e05c5c;}
+  .notice.warn{background:#1a1200;color:#d4820a;}
+  .badge.paid{background:#3d2600;color:#f5a623;}
+  .tab-btn.active{color:#39a85c;border-bottom-color:#39a85c;}
+  .stat,.panel,.src-card,.overall,table{background:#1c211e;border-color:#2a3028;}
+  th{background:#161a17;}
+  .pill.fetch{background:#0d1f12;color:#39a85c;}
+  .pill{background:#1c211e;}
+  a.tile:hover{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .track{background:#2a3028;} .fill{background:#39a85c;}
+  .rowfill.green{background:#39a85c;}
+  .overall .live .dot{background:#39a85c;}
+  .act button:hover{border-color:#39a85c;color:#39a85c;}
+  .filebtn{background:#1c211e;border-color:#2a3028;color:#e8ede9;}
+  .filebtn:hover{border-color:#39a85c;}
+  .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
+  .folder-hdr{border-color:#2a3028;color:#6b8070;}
+  .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
+
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;}
   header{padding:40px 32px 24px;max-width:1000px;margin:0 auto;}
@@ -70,7 +106,7 @@ foreach ($sources as $s) {
   main{max-width:1000px;margin:0 auto;padding:0 32px 48px;}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px;margin-top:8px;}
   a.tile{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;transition:border-color .15s,box-shadow .15s;}
-  a.tile:hover{border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.18);}
+  a.tile:hover{border-color:var(--clay);box-shadow:0 0 0 2px rgba(212,130,10,.15);}
   .tname{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;margin-bottom:4px;}
   .tdesc{font-size:13px;color:var(--muted);line-height:1.5;min-height:38px;}
   .tmeta{margin-top:14px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;}

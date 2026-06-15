@@ -178,14 +178,50 @@ $csrf = csrf_token();
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browse · FarFetched</title>
 <style>
-  :root{--bg:#FAF9F5;--panel:#F0EEE6;--card:#FFFFFF;--ink:#2B2A28;--muted:#6B6862;--line:#E5E2D8;--clay:#D97757;--clay-deep:#C2613F;}
+  :root{--bg:#0f1110;--panel:#161a17;--card:#1c211e;--ink:#e8ede9;--muted:#6b8070;--line:#2a3028;--clay:#39a85c;--clay-deep:#2a7d44;--ok:#39a85c;--err:#e05c5c;--warn:#d4820a;}
+  body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
+  .brand{color:#39a85c !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
+  nav a:hover{background:#1c211e;color:#e8ede9;}
+  nav a.active{background:rgba(57,168,92,.12);color:#39a85c;border:1px solid rgba(57,168,92,.2);font-weight:500;}
+  nav a:not(.active){color:#c8d4c9;}
+  .msize{color:#f5a623 !important;}
+  .btn-primary{background:#39a85c;color:#0a1a0e;} .btn-primary:hover{background:#2a7d44;}
+  .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
+  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#39a85c;color:#39a85c;}
+  .srcBtn.active{background:rgba(57,168,92,.12);color:#39a85c;}
+  select{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input:focus,textarea:focus,input:focus{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.25);}
+  .pick{accent-color:#d4820a;}
+  .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
+  .notice.ok,.notice{background:#0d1f12;color:#39a85c;}
+  .notice.err{background:#1f0d0d;color:#e05c5c;}
+  .notice.warn{background:#1a1200;color:#d4820a;}
+  .badge.paid{background:#3d2600;color:#f5a623;}
+  .tab-btn.active{color:#39a85c;border-bottom-color:#39a85c;}
+  .stat,.panel,.src-card,.overall,table{background:#1c211e;border-color:#2a3028;}
+  th{background:#161a17;}
+  .pill.fetch{background:#0d1f12;color:#39a85c;}
+  .pill{background:#1c211e;}
+  a.tile:hover{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .track{background:#2a3028;} .fill{background:#39a85c;}
+  .rowfill.green{background:#39a85c;}
+  .overall .live .dot{background:#39a85c;}
+  .act button:hover{border-color:#39a85c;color:#39a85c;}
+  .filebtn{background:#1c211e;border-color:#2a3028;color:#e8ede9;}
+  .filebtn:hover{border-color:#39a85c;}
+  .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
+  .folder-hdr{border-color:#2a3028;color:#6b8070;}
+  .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
+
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh;}
   aside{width:240px;background:var(--panel);border-right:1px solid var(--line);padding:24px 16px;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto;}
   .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 16px;letter-spacing:-0.3px;}
-  .navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#A9A496;padding:12px 12px 6px;}
+  .navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b8070;padding:12px 12px 6px;}
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;cursor:pointer;}
-  nav a:hover{background:#E8E5DA;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
+  nav a:hover{background:#1c211e;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
   main{flex:1;padding:28px 32px;}
   .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);padding:14px 0 12px;margin-bottom:10px;box-shadow:0 6px 14px -10px rgba(0,0,0,.18);}
   h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;}
@@ -204,7 +240,7 @@ $csrf = csrf_token();
   .pastebar-status{font-size:13px;color:var(--muted,#6B6862);margin-top:8px;min-height:18px;}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:visible;position:relative;transition:border-color .15s,box-shadow .15s;cursor:pointer;user-select:none;}
-  .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.25);}
+  .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(212,130,10,.25);}
   .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;border-radius:14px 14px 0 0;overflow:hidden;}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
   .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
@@ -217,7 +253,7 @@ $csrf = csrf_token();
   .ftype-fixed{font-size:13px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--card);}
   .nsfwToggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap;cursor:pointer;}
   .searchbar input{flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:15px;background:var(--card);color:var(--ink);}
-  .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.15);}
+  .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(212,130,10,.15);}
   .badge{position:absolute;top:10px;right:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#fff;}
   .badge.paid{background:#C9912F;} .badge.club{background:#6E59C2;}
   .pick{position:absolute;top:10px;left:10px;width:22px;height:22px;cursor:pointer;accent-color:var(--clay);z-index:4;}

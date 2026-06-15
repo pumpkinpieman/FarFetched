@@ -318,13 +318,49 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Settings · FarFetched</title>
 <style>
-  :root{--bg:#FAF9F5;--panel:#F0EEE6;--card:#FFFFFF;--ink:#2B2A28;--muted:#6B6862;--line:#E5E2D8;--clay:#D97757;--clay-deep:#C2613F;--ok:#3F7D5B;--err:#B23B3B;--warn:#C9912F;}
+  :root{--bg:#0f1110;--panel:#161a17;--card:#1c211e;--ink:#e8ede9;--muted:#6b8070;--line:#2a3028;--clay:#39a85c;--clay-deep:#2a7d44;--ok:#39a85c;--err:#e05c5c;--warn:#d4820a;}
+  body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
+  .brand{color:#39a85c !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
+  nav a:hover{background:#1c211e;color:#e8ede9;}
+  nav a.active{background:rgba(57,168,92,.12);color:#39a85c;border:1px solid rgba(57,168,92,.2);font-weight:500;}
+  nav a:not(.active){color:#c8d4c9;}
+  .msize{color:#f5a623 !important;}
+  .btn-primary{background:#39a85c;color:#0a1a0e;} .btn-primary:hover{background:#2a7d44;}
+  .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
+  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#39a85c;color:#39a85c;}
+  .srcBtn.active{background:rgba(57,168,92,.12);color:#39a85c;}
+  select{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input:focus,textarea:focus,input:focus{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.25);}
+  .pick{accent-color:#d4820a;}
+  .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
+  .notice.ok,.notice{background:#0d1f12;color:#39a85c;}
+  .notice.err{background:#1f0d0d;color:#e05c5c;}
+  .notice.warn{background:#1a1200;color:#d4820a;}
+  .badge.paid{background:#3d2600;color:#f5a623;}
+  .tab-btn.active{color:#39a85c;border-bottom-color:#39a85c;}
+  .stat,.panel,.src-card,.overall,table{background:#1c211e;border-color:#2a3028;}
+  th{background:#161a17;}
+  .pill.fetch{background:#0d1f12;color:#39a85c;}
+  .pill{background:#1c211e;}
+  a.tile:hover{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .track{background:#2a3028;} .fill{background:#39a85c;}
+  .rowfill.green{background:#39a85c;}
+  .overall .live .dot{background:#39a85c;}
+  .act button:hover{border-color:#39a85c;color:#39a85c;}
+  .filebtn{background:#1c211e;border-color:#2a3028;color:#e8ede9;}
+  .filebtn:hover{border-color:#39a85c;}
+  .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
+  .folder-hdr{border-color:#2a3028;color:#6b8070;}
+  .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
+
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh;}
   aside{width:220px;background:var(--panel);border-right:1px solid var(--line);padding:24px 16px;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto;}
   .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 20px;letter-spacing:-0.3px;}
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;}
-  nav a:hover{background:#E8E5DA;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
+  nav a:hover{background:#1c211e;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
   main{flex:1;padding:28px 36px;max-width:900px;}
   h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;margin-bottom:4px;}
   .sub{color:var(--muted);font-size:14px;margin-bottom:24px;}
