@@ -39,6 +39,7 @@ final class STLFlixService
     /** @return array<string,string> id => label */
     public function categories(): array
     {
+        // Try GraphQL with 'categories' collection.
         $query = <<<'GQL'
         {
           categories(pagination: { pageSize: 100 }, sort: "name:asc") {
@@ -47,15 +48,26 @@ final class STLFlixService
         }
         GQL;
         $data = $this->graphql($query);
-        if ($data === null) return ['' => 'All Models'];
-
-        $out = ['' => 'All Models'];
-        foreach (($data['categories']['data'] ?? []) as $c) {
-            $id   = (string) ($c['id'] ?? '');
-            $name = (string) ($c['attributes']['name'] ?? '');
-            if ($id !== '' && $name !== '') $out[$id] = $name;
+        if ($data !== null && !empty($data['categories']['data'])) {
+            $out = ['' => 'All Models'];
+            foreach ($data['categories']['data'] as $c) {
+                $id   = (string) ($c['id'] ?? '');
+                $name = (string) ($c['attributes']['name'] ?? '');
+                if ($id !== '' && $name !== '') $out[$id] = $name;
+            }
+            return $out;
         }
-        return $out;
+
+        // Fallback: the platform sidebar categories as observed in the UI.
+        // These match what platform.stlflix.com/explore shows.
+        return [
+            ''   => 'All Models',
+            'bs' => 'Best Sellers',
+            'uf' => 'Usefull',
+            'ta' => 'Toys & Articulated',
+            'hd' => 'Home & Decor',
+            'rc' => 'RPG & Cosplay',
+        ];
     }
 
     /** @return array<int,array<string,mixed>> */
@@ -152,13 +164,32 @@ final class STLFlixService
     }
 
     /**
-     * Resolve the fid (file entity ID) for a product via GraphQL.
-     * The fid is a separate ID from the product/model ID — it's the ID of
-     * the file/pack/zip entity attached to the product in Strapi.
+     * Resolve the fid (file entity ID) for a product.
+     *
+     * Primary: GET platform.stlflix.com/<slug>.json?slug=<slug>
+     *   Next.js SSR data endpoint — returns full product props including file IDs.
+     *   No auth required, just Referer.
+     *
+     * Fallback: GraphQL product query probing all plausible file-relation fields.
      */
     private function resolveFid(int $idInt, string $slug): string
     {
-        // Build filter candidates: by numeric id first, then by slug.
+        // --- Primary: Next.js JSON data endpoint ---
+        if ($slug !== '') {
+            $jsonUrl = self::PLATFORM . '/' . rawurlencode($slug) . '.json?slug=' . rawurlencode($slug);
+            $data    = $this->getJson($jsonUrl);
+            if (is_array($data)) {
+                // Walk the full response tree for a numeric fid.
+                $fid = $this->extractFidFromData($data);
+                if ($fid !== '') return $fid;
+
+                // Also check for a direct .zip URL.
+                $url = $this->extractFirstZipUrl($data);
+                if ($url !== '') return '__URL__:' . $url;
+            }
+        }
+
+        // --- Fallback: GraphQL product query ---
         $filters = [];
         if ($idInt > 0) {
             $filters[] = "filters: { id: { eq: {$idInt} } }";
@@ -167,8 +198,6 @@ final class STLFlixService
             $filters[] = "filters: { slug: { eq: \"{$slug}\" } }";
         }
 
-        // Query every plausible file-relation field that could hold the fid.
-        // The fid appears to be a Strapi media/file entity ID (integer stored as string).
         foreach ($filters as $filter) {
             $query = <<<GQL
             {
@@ -196,13 +225,10 @@ final class STLFlixService
             $attrs = $data['products']['data'][0]['attributes'] ?? null;
             if (!is_array($attrs)) continue;
 
-            // Walk every field and collect the first numeric id found.
             foreach (['pack','zip_file','file','files','download','downloads','model_file','assets'] as $key) {
                 $entry = $attrs[$key] ?? null;
                 if ($entry === null) continue;
 
-                // Single-relation: { data: { id: "123", attributes: {...} } }
-                // Multi-relation:  { data: [ { id: "123", ... } ] }
                 $items = [];
                 if (isset($entry['data']['id'])) {
                     $items[] = $entry['data'];
@@ -213,16 +239,9 @@ final class STLFlixService
                 foreach ($items as $item) {
                     if (!is_array($item)) continue;
                     $fid = (string) ($item['id'] ?? '');
-                    if ($fid !== '' && is_numeric($fid)) {
-                        return $fid;
-                    }
-                    // Also check if the URL itself contains the fid pattern.
+                    if ($fid !== '' && is_numeric($fid)) return $fid;
                     $u = (string) ($item['attributes']['url'] ?? '');
                     if ($u !== '' && stripos($u, '.zip') !== false) {
-                        // We have a direct URL — return it via a special marker.
-                        // Store in lastError temporarily so caller can detect it.
-                        // Actually: if we have a URL here, skip fid and return directly.
-                        // We signal this by returning '__URL__:' . $url.
                         return '__URL__:' . $this->absoluteUrl($u);
                     }
                 }
@@ -230,8 +249,26 @@ final class STLFlixService
         }
 
         $this->lastError = 'Could not find fid for STLFlix model "' . $slug . '". '
-            . 'The file relation field name on the product type is still unknown. '
-            . 'Run introspection: ' . self::GRAPHQL . ' with query { __type(name:"Product") { fields { name } } }';
+            . 'Try introspection: POST ' . self::GRAPHQL
+            . ' {"query":"{ __type(name:\\"Product\\") { fields { name } } }"}';
+        return '';
+    }
+
+    /**
+     * Walk decoded JSON and return the first numeric string that looks like a Strapi file ID.
+     * Looks for keys named fid, file_id, id under file-like contexts.
+     */
+    private function extractFidFromData(array $data): string
+    {
+        // Direct key check first.
+        foreach (['fid', 'file_id', 'fileId'] as $key) {
+            array_walk_recursive($data, static function ($v, $k) use ($key, &$found): void {
+                if ($found === null && $k === $key && is_numeric($v)) {
+                    $found = (string) $v;
+                }
+            });
+            if (!empty($found)) return (string) $found;
+        }
         return '';
     }
 
@@ -411,6 +448,15 @@ final class STLFlixService
     /** GET a URL and return decoded JSON array, or null on error. */
     private function getJson(string $url): ?array
     {
+        $isPlatform = str_contains($url, 'platform.stlflix.com');
+        $headers    = ['Accept: application/json'];
+        if ($isPlatform) {
+            // Next.js JSON endpoints need the Referer; no auth header.
+            $headers[] = 'Referer: ' . self::PLATFORM . '/';
+        } else {
+            $headers[] = 'Authorization: Bearer ' . $this->token;
+        }
+
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -419,10 +465,7 @@ final class STLFlixService
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_USERAGENT      => self::UA,
-            CURLOPT_HTTPHEADER     => [
-                'Accept: application/json',
-                'Authorization: Bearer ' . $this->token,
-            ],
+            CURLOPT_HTTPHEADER     => $headers,
         ]);
         $body = curl_exec($ch);
         $st   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
