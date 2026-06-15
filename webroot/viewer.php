@@ -38,39 +38,82 @@ foreach ($sources as $s) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fetcher · 3D Viewer</title>
 <style>
-  :root{--bg:#0f1110;--panel:#161a17;--card:#1c211e;--ink:#e8ede9;--muted:#6b8070;--line:#2a3028;--clay:#39a85c;--clay-deep:#2a7d44;--ok:#39a85c;--err:#e05c5c;--warn:#d4820a;}
+  :root{--bg:#0c0a08;--panel:#141009;--card:#1a140c;--ink:#f0e6d3;--muted:#7a6a52;--line:#2e2218;--clay:#ff6b1a;--clay-deep:#c44d0d;--ok:#c8a020;--err:#e05c5c;--warn:#f5c842;}
+  body{background-image:radial-gradient(ellipse at 0% 100%, rgba(255,107,26,0.06) 0%, transparent 60%);}
+  .brand{color:#ff6b1a !important;font-weight:800 !important;letter-spacing:-.5px;}
+  nav a{color:#8a8070;}
+  nav a:hover{background:#1a140c;color:#f0e6d3;}
+  nav a.active{background:rgba(255,107,26,0.1);color:#ff6b1a;border:1px solid rgba(255,107,26,0.2);font-weight:600;}
+  .msize{color:#f5c842 !important;}
+  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
+  .btn-primary:disabled{background:#2e1a0a;color:#5a4a32;cursor:not-allowed;}
+  .btn-ghost{color:#8a8070;border-color:#2e2218;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .srcBtn.active{background:rgba(245,200,66,0.08);color:#f5c842;}
+  select{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
+  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
+  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
+  .card.sel{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.2);}
+  .pick{accent-color:#ff6b1a;}
+  .banner{background:#1a1000;color:#f5c842;border-color:#3d2800;}
+  .notice.ok{background:#1a1200;color:#f5c842;}
+  .notice.err{background:#1f0d0d;color:#e05c5c;}
+  .badge.paid{background:#3d2000;color:#f5c842;}
+  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
+  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2e2218;}
+  th{background:#141009;}
+  .pill.fetch{background:#1a1200;color:#f5c842;}
+  .pill{background:#1a140c;}
+  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
+  .track{background:#2e2218;} .fill{background:#ff6b1a;}
+  .rowfill{background:#ff6b1a;} .rowfill.green{background:#c8a020;}
+  .overall .live .dot{background:#ff6b1a;}
+  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .filebtn{background:#1a140c;border-color:#2e2218;color:#f0e6d3;}
+  .filebtn:hover{border-color:#ff6b1a;}
+  .filebtn.active{border-color:#f5c842;box-shadow:0 0 0 2px rgba(245,200,66,0.15);}
+  .folder-hdr{border-color:#2e2218;color:#7a6a52;}
+  .bar{background:#1a1000;color:#f5c842;border-color:#3d2800;}
+  .file-counter{background:#2e2218;color:#f0e6d3;}
+  .srcBtn{color:#7a6a52;}
+  .navlabel{color:#5a4a32;}
+  code{background:#1a140c;}
+  .notice{background:#1a140c;}
+  .step a{color:#ff6b1a;}
+  .act button{background:#1a140c;border-color:#2e2218;color:#7a6a52;}
+  .tag{background:#ff6b1a;}
+
   body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
-  .brand{color:#39a85c !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
-  nav a:hover{background:#1c211e;color:#e8ede9;}
-  nav a.active{background:rgba(57,168,92,.12);color:#39a85c;border:1px solid rgba(57,168,92,.2);font-weight:500;}
+  .brand{color:#ff6b1a !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
+  nav a:hover{background:#1a140c;color:#e8ede9;}
+  nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
   nav a:not(.active){color:#c8d4c9;}
   .msize{color:#f5a623 !important;}
   .btn-primary{background:#39a85c;color:#0a1a0e;} .btn-primary:hover{background:#2a7d44;}
   .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
-  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#39a85c;color:#39a85c;}
-  .srcBtn.active{background:rgba(57,168,92,.12);color:#39a85c;}
-  select{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
-  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.25);}
+  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .srcBtn.active{background:rgba(255,107,26,.1);color:#ff6b1a;}
+  select{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
+  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(255,107,26,.2);}
   .pick{accent-color:#d4820a;}
   .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-  .notice.ok,.notice{background:#0d1f12;color:#39a85c;}
+  .notice.ok,.notice{background:#0d1f12;color:#ff6b1a;}
   .notice.err{background:#1f0d0d;color:#e05c5c;}
   .notice.warn{background:#1a1200;color:#d4820a;}
   .badge.paid{background:#3d2600;color:#f5a623;}
-  .tab-btn.active{color:#39a85c;border-bottom-color:#39a85c;}
-  .stat,.panel,.src-card,.overall,table{background:#1c211e;border-color:#2a3028;}
+  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
+  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2a3028;}
   th{background:#161a17;}
-  .pill.fetch{background:#0d1f12;color:#39a85c;}
-  .pill{background:#1c211e;}
-  a.tile:hover{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .pill.fetch{background:#0d1f12;color:#ff6b1a;}
+  .pill{background:#1a140c;}
+  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
   .track{background:#2a3028;} .fill{background:#39a85c;}
   .rowfill.green{background:#39a85c;}
   .overall .live .dot{background:#39a85c;}
-  .act button:hover{border-color:#39a85c;color:#39a85c;}
-  .filebtn{background:#1c211e;border-color:#2a3028;color:#e8ede9;}
-  .filebtn:hover{border-color:#39a85c;}
+  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .filebtn{background:#1a140c;border-color:#2a3028;color:#e8ede9;}
+  .filebtn:hover{border-color:#ff6b1a;}
   .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
   .folder-hdr{border-color:#2a3028;color:#6b8070;}
   .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
@@ -81,7 +124,7 @@ foreach ($sources as $s) {
   .brand{font-family:ui-serif,Georgia,serif;font-size:22px;font-weight:600;color:var(--clay-deep);letter-spacing:-0.4px;padding:0 8px 18px;}
   .navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:12px 12px 6px;}
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;cursor:pointer;}
-  nav a:hover{background:#1c211e;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
+  nav a:hover{background:#1a140c;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
   main{flex:1;padding:28px 32px;min-width:0;display:flex;flex-direction:column;}
   h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;margin-bottom:4px;}
   .sub{color:var(--muted);font-size:14px;margin-bottom:20px;}
@@ -92,7 +135,7 @@ foreach ($sources as $s) {
   .files{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;min-height:0;}
   .filebtn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;display:flex;gap:8px;align-items:center;transition:border-color .15s,box-shadow .15s;}
   .filebtn:hover{border-color:var(--clay);}
-  .filebtn.active{border-color:var(--clay);box-shadow:0 0 0 2px rgba(212,130,10,.15);}
+  .filebtn.active{border-color:var(--clay);box-shadow:0 0 0 2px rgba(255,107,26,.15);}
   .filebtn .ext{font-size:10px;font-weight:700;text-transform:uppercase;color:#fff;background:var(--clay);border-radius:4px;padding:1px 5px;}
   .filebtn .sz{color:var(--muted);font-size:11px;}
   .folder-hdr{width:100%;font-size:12px;font-weight:600;color:var(--muted);padding:6px 2px 3px;border-bottom:1px solid var(--line);margin-bottom:2px;letter-spacing:.03em;}

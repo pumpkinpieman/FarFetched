@@ -178,39 +178,82 @@ $csrf = csrf_token();
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browse · FarFetched</title>
 <style>
-  :root{--bg:#0f1110;--panel:#161a17;--card:#1c211e;--ink:#e8ede9;--muted:#6b8070;--line:#2a3028;--clay:#39a85c;--clay-deep:#2a7d44;--ok:#39a85c;--err:#e05c5c;--warn:#d4820a;}
+  :root{--bg:#0c0a08;--panel:#141009;--card:#1a140c;--ink:#f0e6d3;--muted:#7a6a52;--line:#2e2218;--clay:#ff6b1a;--clay-deep:#c44d0d;--ok:#c8a020;--err:#e05c5c;--warn:#f5c842;}
+  body{background-image:radial-gradient(ellipse at 0% 100%, rgba(255,107,26,0.06) 0%, transparent 60%);}
+  .brand{color:#ff6b1a !important;font-weight:800 !important;letter-spacing:-.5px;}
+  nav a{color:#8a8070;}
+  nav a:hover{background:#1a140c;color:#f0e6d3;}
+  nav a.active{background:rgba(255,107,26,0.1);color:#ff6b1a;border:1px solid rgba(255,107,26,0.2);font-weight:600;}
+  .msize{color:#f5c842 !important;}
+  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
+  .btn-primary:disabled{background:#2e1a0a;color:#5a4a32;cursor:not-allowed;}
+  .btn-ghost{color:#8a8070;border-color:#2e2218;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .srcBtn.active{background:rgba(245,200,66,0.08);color:#f5c842;}
+  select{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
+  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
+  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
+  .card.sel{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.2);}
+  .pick{accent-color:#ff6b1a;}
+  .banner{background:#1a1000;color:#f5c842;border-color:#3d2800;}
+  .notice.ok{background:#1a1200;color:#f5c842;}
+  .notice.err{background:#1f0d0d;color:#e05c5c;}
+  .badge.paid{background:#3d2000;color:#f5c842;}
+  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
+  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2e2218;}
+  th{background:#141009;}
+  .pill.fetch{background:#1a1200;color:#f5c842;}
+  .pill{background:#1a140c;}
+  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
+  .track{background:#2e2218;} .fill{background:#ff6b1a;}
+  .rowfill{background:#ff6b1a;} .rowfill.green{background:#c8a020;}
+  .overall .live .dot{background:#ff6b1a;}
+  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .filebtn{background:#1a140c;border-color:#2e2218;color:#f0e6d3;}
+  .filebtn:hover{border-color:#ff6b1a;}
+  .filebtn.active{border-color:#f5c842;box-shadow:0 0 0 2px rgba(245,200,66,0.15);}
+  .folder-hdr{border-color:#2e2218;color:#7a6a52;}
+  .bar{background:#1a1000;color:#f5c842;border-color:#3d2800;}
+  .file-counter{background:#2e2218;color:#f0e6d3;}
+  .srcBtn{color:#7a6a52;}
+  .navlabel{color:#5a4a32;}
+  code{background:#1a140c;}
+  .notice{background:#1a140c;}
+  .step a{color:#ff6b1a;}
+  .act button{background:#1a140c;border-color:#2e2218;color:#7a6a52;}
+  .tag{background:#ff6b1a;}
+
   body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
-  .brand{color:#39a85c !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
-  nav a:hover{background:#1c211e;color:#e8ede9;}
-  nav a.active{background:rgba(57,168,92,.12);color:#39a85c;border:1px solid rgba(57,168,92,.2);font-weight:500;}
+  .brand{color:#ff6b1a !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
+  nav a:hover{background:#1a140c;color:#e8ede9;}
+  nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
   nav a:not(.active){color:#c8d4c9;}
   .msize{color:#f5a623 !important;}
   .btn-primary{background:#39a85c;color:#0a1a0e;} .btn-primary:hover{background:#2a7d44;}
   .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
-  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#39a85c;color:#39a85c;}
-  .srcBtn.active{background:rgba(57,168,92,.12);color:#39a85c;}
-  select{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1c211e;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
-  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.25);}
+  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .srcBtn.active{background:rgba(255,107,26,.1);color:#ff6b1a;}
+  select{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
+  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
+  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(255,107,26,.2);}
   .pick{accent-color:#d4820a;}
   .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-  .notice.ok,.notice{background:#0d1f12;color:#39a85c;}
+  .notice.ok,.notice{background:#0d1f12;color:#ff6b1a;}
   .notice.err{background:#1f0d0d;color:#e05c5c;}
   .notice.warn{background:#1a1200;color:#d4820a;}
   .badge.paid{background:#3d2600;color:#f5a623;}
-  .tab-btn.active{color:#39a85c;border-bottom-color:#39a85c;}
-  .stat,.panel,.src-card,.overall,table{background:#1c211e;border-color:#2a3028;}
+  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
+  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2a3028;}
   th{background:#161a17;}
-  .pill.fetch{background:#0d1f12;color:#39a85c;}
-  .pill{background:#1c211e;}
-  a.tile:hover{border-color:#39a85c;box-shadow:0 0 0 2px rgba(57,168,92,.15);}
+  .pill.fetch{background:#0d1f12;color:#ff6b1a;}
+  .pill{background:#1a140c;}
+  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
   .track{background:#2a3028;} .fill{background:#39a85c;}
   .rowfill.green{background:#39a85c;}
   .overall .live .dot{background:#39a85c;}
-  .act button:hover{border-color:#39a85c;color:#39a85c;}
-  .filebtn{background:#1c211e;border-color:#2a3028;color:#e8ede9;}
-  .filebtn:hover{border-color:#39a85c;}
+  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
+  .filebtn{background:#1a140c;border-color:#2a3028;color:#e8ede9;}
+  .filebtn:hover{border-color:#ff6b1a;}
   .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
   .folder-hdr{border-color:#2a3028;color:#6b8070;}
   .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
@@ -221,7 +264,7 @@ $csrf = csrf_token();
   .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 16px;letter-spacing:-0.3px;}
   .navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b8070;padding:12px 12px 6px;}
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;cursor:pointer;}
-  nav a:hover{background:#1c211e;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
+  nav a:hover{background:#1a140c;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
   main{flex:1;padding:28px 32px;}
   .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);padding:14px 0 12px;margin-bottom:10px;box-shadow:0 6px 14px -10px rgba(0,0,0,.18);}
   h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;}
@@ -240,7 +283,7 @@ $csrf = csrf_token();
   .pastebar-status{font-size:13px;color:var(--muted,#6B6862);margin-top:8px;min-height:18px;}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:visible;position:relative;transition:border-color .15s,box-shadow .15s;cursor:pointer;user-select:none;}
-  .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(212,130,10,.25);}
+  .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(255,107,26,.2);}
   .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;border-radius:14px 14px 0 0;overflow:hidden;}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
   .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
@@ -253,7 +296,7 @@ $csrf = csrf_token();
   .ftype-fixed{font-size:13px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--card);}
   .nsfwToggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap;cursor:pointer;}
   .searchbar input{flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:15px;background:var(--card);color:var(--ink);}
-  .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(212,130,10,.15);}
+  .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(255,107,26,.15);}
   .badge{position:absolute;top:10px;right:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#fff;}
   .badge.paid{background:#C9912F;} .badge.club{background:#6E59C2;}
   .pick{position:absolute;top:10px;left:10px;width:22px;height:22px;cursor:pointer;accent-color:var(--clay);z-index:4;}
@@ -350,9 +393,13 @@ $csrf = csrf_token();
     </div>
 
     <div class="searchbar">
-      <input type="search" id="searchInput" placeholder="<?= $source==='makerworld'
-        ? 'Search all of MakerWorld — e.g. airless ball, gridfinity, phone stand…'
-        : 'Search all of Printables — e.g. belt sander, toothpick, sanding block…' ?>" autocomplete="off">
+      <input type="search" id="searchInput" placeholder="<?= match($source) {
+        'makerworld'  => 'Search all of MakerWorld — e.g. airless ball, gridfinity, phone stand…',
+        'thingiverse' => 'Search all of Thingiverse — e.g. cable clip, vase, articulated dragon…',
+        'cults3d'     => 'Search all of Cults3D — e.g. miniature, keychain, lamp…',
+        'stlflix'     => 'Search STLFlix — e.g. vista vase, dragon egg, wall light…',
+        default       => 'Search all of Printables — e.g. belt sander, toothpick, sanding block…',
+      } ?>" autocomplete="off">
       <button class="btn-primary" id="searchGo">Search</button>
       <button class="btn-ghost" id="searchClear" style="display:none;">Clear</button>
       <?php if ($source === 'makerworld'): ?>
