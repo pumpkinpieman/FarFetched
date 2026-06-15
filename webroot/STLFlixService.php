@@ -14,7 +14,7 @@ declare(strict_types=1);
 final class STLFlixService
 {
     private const GRAPHQL      = 'https://k8s.stlflix.com/graphql';
-    private const PRODUCT_FILE = 'https://k8s.stlflix.com/product-file';
+    private const PRODUCT_FILE = 'https://k8s.stlflix.com/api/product/product-file';
     private const LIBRARY      = 'https://painel.stlflix.com/api/library/custom-library';
     private const PLATFORM     = 'https://platform.stlflix.com';
     private const UA       = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FarFetched/1.0';
@@ -94,14 +94,14 @@ final class STLFlixService
     /**
      * Resolve the CDN ZIP download URL for a model.
      *
-     * Confirmed flow from DevTools (Image 1):
-     *   POST https://k8s.stlflix.com/product-file  → returns JSON with CDN URL
-     *   GET  https://static.stlflix.com/<Name_hash>.zip  → the actual file (no auth)
+     * Confirmed flow from DevTools:
+     *   1. POST https://k8s.stlflix.com/api/product/product-file
+     *      Body: {"fid":"<file_id>"}  — fid is NOT the product/model ID,
+     *      it's a separate file entity ID that comes from the product data.
+     *   2. GET  https://static.stlflix.com/<Name_hash>.zip  (no auth, just Referer)
      *
-     * Payload shape is inferred from the REST endpoint name + model context.
-     * We try several plausible body shapes and scan the JSON response for any .zip URL.
-     *
-     * Returns '' and sets $lastError on failure.
+     * fid is resolved via GraphQL product query — it lives in a file/pack
+     * relation on the product. We probe several field names.
      */
     public function getDownloadUrl(string $modelId, string $slug): string
     {
@@ -112,94 +112,127 @@ final class STLFlixService
             return '';
         }
 
-        $idInt    = is_numeric($modelId) ? (int) $modelId : 0;
-        $useSlug  = $slug !== '' ? $slug : $modelId;
+        $idInt   = is_numeric($modelId) ? (int) $modelId : 0;
+        $useSlug = $slug !== '' ? $slug : $modelId;
 
-        // Build several candidate payloads for the product-file endpoint.
-        // The exact field names aren't confirmed; we try the most likely shapes.
-        $payloads = [];
+        // Step 1: resolve the fid via GraphQL.
+        $fid = $this->resolveFid($idInt, $useSlug);
+        if ($fid === '') {
+            // lastError already set by resolveFid
+            return '';
+        }
 
+        // If resolveFid found a direct URL in the file relation, return it immediately.
+        if (str_starts_with($fid, '__URL__:')) {
+            return substr($fid, 8);
+        }
+
+        // Step 2: POST /api/product/product-file with {"fid":"<fid>"} → CDN URL.
+        $result = $this->postJson(self::PRODUCT_FILE, ['fid' => $fid]);
+        if (!is_array($result)) {
+            $this->lastError = 'product-file API returned no JSON for fid=' . $fid
+                . ($this->lastError !== '' ? ': ' . $this->lastError : '');
+            return '';
+        }
+
+        $url = $this->extractFirstZipUrl($result);
+        if ($url !== '') return $url;
+
+        // Also check for a plain url string at root level.
+        foreach (['url', 'download_url', 'file_url', 'link', 'path', 'file', 'zip'] as $k) {
+            $v = $result[$k] ?? null;
+            if (is_string($v) && $v !== '') {
+                return $this->absoluteUrl($v);
+            }
+        }
+
+        $this->lastError = 'product-file API responded but contained no .zip URL for fid=' . $fid
+            . '. Response: ' . substr(json_encode($result), 0, 200);
+        return '';
+    }
+
+    /**
+     * Resolve the fid (file entity ID) for a product via GraphQL.
+     * The fid is a separate ID from the product/model ID — it's the ID of
+     * the file/pack/zip entity attached to the product in Strapi.
+     */
+    private function resolveFid(int $idInt, string $slug): string
+    {
+        // Build filter candidates: by numeric id first, then by slug.
+        $filters = [];
         if ($idInt > 0) {
-            $payloads[] = ['product_id' => $idInt];
-            $payloads[] = ['productId'  => $idInt];
-            $payloads[] = ['id'         => $idInt];
-            $payloads[] = ['product_id' => $idInt,   'slug' => $useSlug];
-            $payloads[] = ['product_id' => (string)$idInt];
+            $filters[] = "filters: { id: { eq: {$idInt} } }";
         }
-        $payloads[] = ['slug'       => $useSlug];
-        $payloads[] = ['product_slug' => $useSlug];
-
-        foreach ($payloads as $payload) {
-            $result = $this->postJson(self::PRODUCT_FILE, $payload);
-            if (!is_array($result)) continue;
-
-            $url = $this->extractFirstZipUrl($result);
-            if ($url !== '') {
-                return $url;
-            }
-
-            // Also check for a plain string 'url' or 'download_url' key at root.
-            foreach (['url', 'download_url', 'file_url', 'link', 'path'] as $k) {
-                $v = $result[$k] ?? null;
-                if (is_string($v) && $v !== '') {
-                    return $this->absoluteUrl($v);
-                }
-            }
+        if ($slug !== '') {
+            $filters[] = "filters: { slug: { eq: \"{$slug}\" } }";
         }
 
-        // Fallback: GraphQL product query — probe every plausible file-field name.
-        foreach (array_filter([
-            $idInt > 0 ? "filters: { id: { eq: {$idInt} } }" : '',
-            $useSlug !== '' ? "filters: { slug: { eq: \"{$useSlug}\" } }" : '',
-        ]) as $filter) {
+        // Query every plausible file-relation field that could hold the fid.
+        // The fid appears to be a Strapi media/file entity ID (integer stored as string).
+        foreach ($filters as $filter) {
             $query = <<<GQL
             {
               products({$filter}, pagination: { pageSize: 1 }) {
                 data {
                   id
                   attributes {
-                    pack       { data { attributes { url name } } }
-                    zip_file   { data { attributes { url name } } }
-                    file       { data { attributes { url name } } }
-                    files      { data { attributes { url name } } }
-                    download   { data { attributes { url name } } }
-                    downloads  { data { attributes { url name } } }
-                    model_file { data { attributes { url name } } }
-                    assets     { data { attributes { url name } } }
+                    pack       { data { id attributes { url name } } }
+                    zip_file   { data { id attributes { url name } } }
+                    file       { data { id attributes { url name } } }
+                    files      { data { id attributes { url name } } }
+                    download   { data { id attributes { url name } } }
+                    downloads  { data { id attributes { url name } } }
+                    model_file { data { id attributes { url name } } }
+                    assets     { data { id attributes { url name } } }
                   }
                 }
               }
             }
             GQL;
+
             $data = $this->graphql($query);
             if ($data === null) continue;
-            $url = $this->extractFirstZipUrl($data);
-            if ($url !== '') return $url;
+
+            $attrs = $data['products']['data'][0]['attributes'] ?? null;
+            if (!is_array($attrs)) continue;
+
+            // Walk every field and collect the first numeric id found.
+            foreach (['pack','zip_file','file','files','download','downloads','model_file','assets'] as $key) {
+                $entry = $attrs[$key] ?? null;
+                if ($entry === null) continue;
+
+                // Single-relation: { data: { id: "123", attributes: {...} } }
+                // Multi-relation:  { data: [ { id: "123", ... } ] }
+                $items = [];
+                if (isset($entry['data']['id'])) {
+                    $items[] = $entry['data'];
+                } elseif (is_array($entry['data'] ?? null)) {
+                    $items = $entry['data'];
+                }
+
+                foreach ($items as $item) {
+                    if (!is_array($item)) continue;
+                    $fid = (string) ($item['id'] ?? '');
+                    if ($fid !== '' && is_numeric($fid)) {
+                        return $fid;
+                    }
+                    // Also check if the URL itself contains the fid pattern.
+                    $u = (string) ($item['attributes']['url'] ?? '');
+                    if ($u !== '' && stripos($u, '.zip') !== false) {
+                        // We have a direct URL — return it via a special marker.
+                        // Store in lastError temporarily so caller can detect it.
+                        // Actually: if we have a URL here, skip fid and return directly.
+                        // We signal this by returning '__URL__:' . $url.
+                        return '__URL__:' . $this->absoluteUrl($u);
+                    }
+                }
+            }
         }
 
-        $this->lastError = 'Could not resolve download URL for STLFlix model "' . $useSlug . '". '
-            . 'Capture the product-file POST Request body from DevTools (click the '
-            . '"product-file" row in Network tab → Request tab) and report the payload.';
+        $this->lastError = 'Could not find fid for STLFlix model "' . $slug . '". '
+            . 'The file relation field name on the product type is still unknown. '
+            . 'Run introspection: ' . self::GRAPHQL . ' with query { __type(name:"Product") { fields { name } } }';
         return '';
-    }
-
-    /**
-     * Walk any decoded JSON structure and return the first https://*.zip URL found.
-     */
-    private function extractFirstZipUrl(array $data): string
-    {
-        $found = null;
-        array_walk_recursive($data, static function ($v) use (&$found): void {
-            if (
-                $found === null
-                && is_string($v)
-                && stripos($v, '.zip') !== false
-                && (str_starts_with($v, 'http') || str_starts_with($v, '//'))
-            ) {
-                $found = $v;
-            }
-        });
-        return isset($found) && is_string($found) ? $this->absoluteUrl($found) : '';
     }
 
     /**
@@ -398,6 +431,22 @@ final class STLFlixService
         if ($body === false || $st >= 400) return null;
         $json = json_decode((string) $body, true);
         return is_array($json) ? $json : null;
+    }
+
+    private function extractFirstZipUrl(array $data): string
+    {
+        $found = null;
+        array_walk_recursive($data, static function ($v) use (&$found): void {
+            if (
+                $found === null
+                && is_string($v)
+                && stripos($v, '.zip') !== false
+                && (str_starts_with($v, 'http') || str_starts_with($v, '//'))
+            ) {
+                $found = $v;
+            }
+        });
+        return isset($found) && is_string($found) ? $this->absoluteUrl($found) : '';
     }
 
     private function absoluteUrl(string $url): string
