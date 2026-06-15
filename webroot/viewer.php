@@ -15,6 +15,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 
+$csrf = csrf_token();
+
 // Build a source -> [folder model names] map for the dropdowns. Loose .zip
 // "models" are excluded: there are no extracted files to view yet.
 $sources = list_sources();
@@ -132,6 +134,25 @@ foreach ($sources as $s) {
   .field{display:flex;flex-direction:column;gap:5px;}
   .field label{font-size:12px;color:var(--muted);font-weight:600;}
   select{border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:14px;background:var(--card);color:var(--ink);min-width:200px;}
+  .btn-delete{background:#3a1a10;color:#ff8a5c;border:1px solid #5a2818;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;}
+  .btn-delete:hover:not(:disabled){background:#e05c5c;color:#fff;border-color:#e05c5c;}
+  .btn-delete:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-ghost{background:none;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:9px 16px;font-size:14px;font-weight:500;cursor:pointer;}
+  .btn-ghost:hover{border-color:var(--clay);color:var(--clay);}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(3px);}
+  .modal-backdrop[hidden]{display:none;}
+  .modal{background:var(--card);border:1px solid var(--line);border-radius:14px;width:min(460px,92vw);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,.5);}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--line);font-size:16px;font-weight:700;color:var(--ink);}
+  .modal-close{background:none;border:none;color:var(--muted);font-size:24px;line-height:1;cursor:pointer;padding:0 4px;}
+  .modal-close:hover{color:var(--ink);}
+  .modal-tools{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--line);}
+  .selall{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink);cursor:pointer;}
+  .delete-list{overflow-y:auto;padding:8px 12px;flex:1;}
+  .delete-item{display:flex;align-items:center;gap:10px;padding:9px 8px;border-radius:7px;cursor:pointer;font-size:13.5px;color:var(--ink);}
+  .delete-item:hover{background:var(--panel);}
+  .delete-item input{width:auto;cursor:pointer;}
+  .delete-item .dsize{margin-left:auto;font-size:12px;color:var(--muted);font-family:ui-monospace,monospace;}
+  .modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:16px 20px;border-top:1px solid var(--line);}
   .files{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;min-height:0;}
   .filebtn{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;display:flex;gap:8px;align-items:center;transition:border-color .15s,box-shadow .15s;}
   .filebtn:hover{border-color:var(--clay);}
@@ -185,6 +206,29 @@ foreach ($sources as $s) {
       <div class="field">
         <label for="model">Model</label>
         <select id="model" disabled><option value="">— select a source —</option></select>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button id="deleteBtn" class="btn-delete" disabled>🗑 Delete</button>
+      </div>
+    </div>
+
+    <!-- Delete modal -->
+    <div id="deleteModal" class="modal-backdrop" hidden>
+      <div class="modal">
+        <div class="modal-head">
+          <span id="deleteModalTitle">Delete models</span>
+          <button class="modal-close" id="deleteCancel">&times;</button>
+        </div>
+        <div class="modal-tools">
+          <label class="selall"><input type="checkbox" id="deleteSelectAll"> Select all</label>
+          <span id="deleteCount" class="muted">0 selected</span>
+        </div>
+        <div id="deleteList" class="delete-list"></div>
+        <div class="modal-foot">
+          <button class="btn-ghost" id="deleteCancel2">Cancel</button>
+          <button class="btn-delete" id="deleteConfirm" disabled>Delete selected</button>
+        </div>
       </div>
     </div>
 
@@ -479,10 +523,22 @@ foreach ($sources as $s) {
     }
 
     // ---- Pickers ------------------------------------------------------------
+    // ---- Delete flow: element refs (declared before srcSel handler uses them)
+    const CSRF        = <?= json_encode($csrf) ?>;
+    const deleteBtn   = document.getElementById('deleteBtn');
+    const modal       = document.getElementById('deleteModal');
+    const listEl      = document.getElementById('deleteList');
+    const selAll      = document.getElementById('deleteSelectAll');
+    const countEl     = document.getElementById('deleteCount');
+    const confirmBtn  = document.getElementById('deleteConfirm');
+    const titleEl     = document.getElementById('deleteModalTitle');
+
     srcSel.addEventListener('change', () => {
       const src = srcSel.value;
       modelSel.innerHTML = '';
       filesEl.innerHTML = '<span class="hint">Pick a model to list its files.</span>';
+      // Delete button is active whenever a source with at least one model is chosen.
+      deleteBtn.disabled = !(src && SOURCES[src] && SOURCES[src].length);
       if (!src || !SOURCES[src]) {
         modelSel.disabled = true;
         modelSel.innerHTML = '<option value="">— select a source —</option>';
@@ -491,6 +547,99 @@ foreach ($sources as $s) {
       modelSel.disabled = false;
       modelSel.appendChild(new Option('— select —', ''));
       for (const name of SOURCES[src]) modelSel.appendChild(new Option(name, name));
+    });
+
+    // ---- Delete flow: behavior -----------------------------------------------
+    function closeModal() { modal.hidden = true; }
+    document.getElementById('deleteCancel').addEventListener('click', closeModal);
+    document.getElementById('deleteCancel2').addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+    function refreshDeleteState() {
+      const boxes = [...listEl.querySelectorAll('input[type=checkbox]')];
+      const checked = boxes.filter(b => b.checked);
+      countEl.textContent = checked.length + ' selected';
+      confirmBtn.disabled = checked.length === 0;
+      selAll.checked = boxes.length > 0 && checked.length === boxes.length;
+      selAll.indeterminate = checked.length > 0 && checked.length < boxes.length;
+    }
+
+    deleteBtn.addEventListener('click', () => {
+      const src = srcSel.value;
+      if (!src || !SOURCES[src] || !SOURCES[src].length) return;
+      titleEl.textContent = 'Delete models — ' + src;
+      listEl.innerHTML = '';
+      for (const name of SOURCES[src]) {
+        const row = document.createElement('label');
+        row.className = 'delete-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = name;
+        cb.addEventListener('change', refreshDeleteState);
+        const span = document.createElement('span');
+        span.textContent = name;
+        row.appendChild(cb);
+        row.appendChild(span);
+        listEl.appendChild(row);
+      }
+      selAll.checked = false;
+      selAll.indeterminate = false;
+      refreshDeleteState();
+      modal.hidden = false;
+    });
+
+    selAll.addEventListener('change', () => {
+      listEl.querySelectorAll('input[type=checkbox]').forEach(b => { b.checked = selAll.checked; });
+      refreshDeleteState();
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      const src = srcSel.value;
+      const models = [...listEl.querySelectorAll('input[type=checkbox]:checked')].map(b => b.value);
+      if (models.length === 0) return;
+
+      if (!confirm('Are you sure you want to Delete? This cannot be recovered!')) return;
+
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Deleting…';
+      try {
+        const res = await fetch('model_delete.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csrf: CSRF, src, models })
+        });
+        const data = await res.json();
+        if (!data.ok && (!data.deleted || data.deleted.length === 0)) {
+          alert('Delete failed: ' + (data.error || (data.errors && data.errors[0] && data.errors[0].error) || 'unknown error'));
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Delete selected';
+          return;
+        }
+        // Remove deleted models from the in-memory map + dropdown.
+        const deleted = new Set(data.deleted || []);
+        SOURCES[src] = (SOURCES[src] || []).filter(n => !deleted.has(n));
+        // Rebuild model dropdown.
+        modelSel.innerHTML = '';
+        if (SOURCES[src].length) {
+          modelSel.disabled = false;
+          modelSel.appendChild(new Option('— select —', ''));
+          for (const name of SOURCES[src]) modelSel.appendChild(new Option(name, name));
+        } else {
+          modelSel.disabled = true;
+          modelSel.innerHTML = '<option value="">— no models —</option>';
+          deleteBtn.disabled = true;
+        }
+        filesEl.innerHTML = '<span class="hint">Pick a model to list its files.</span>';
+        closeModal();
+        if (data.errors && data.errors.length) {
+          alert('Deleted ' + (data.deleted || []).length + ' model(s). ' + data.errors.length + ' could not be deleted.');
+        }
+      } catch (err) {
+        alert('Delete request failed: ' + err.message);
+      } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Delete selected';
+      }
     });
 
     modelSel.addEventListener('change', async () => {

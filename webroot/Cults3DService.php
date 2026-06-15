@@ -139,24 +139,48 @@ final class Cults3DService
 
     /**
      * Get download URLs for a creation's files.
+     *
+     * Cults3D's `Creation` type has no `files` field. Downloadable files live
+     * under `blueprints`, each exposing fileName / fileUrl / fileExtension.
+     *
      * @return array<int,array{name:string,url:string,size:int}>
      */
     public function getFiles(string $slug): array
     {
+        $this->lastError = '';
         if (!$this->isAuthed()) return [];
-        $gql = '{ creation(slug: ' . json_encode($slug) . ') { files { name size url } } }';
+
+        $gql = '{ creation(slug: ' . json_encode($slug) . ') { '
+             . 'blueprints { fileName fileExtension fileUrl } } }';
         $data = $this->gql($gql);
         if ($data === null) return [];
-        $files = $data['creation']['files'] ?? [];
-        $out   = [];
-        foreach ($files as $f) {
-            $url = (string)($f['url'] ?? '');
+
+        $blueprints = $data['creation']['blueprints'] ?? [];
+        $out = [];
+        foreach ($blueprints as $bp) {
+            $url = (string) ($bp['fileUrl'] ?? '');
             if ($url === '') continue;
+
+            $name = (string) ($bp['fileName'] ?? '');
+            if ($name === '') {
+                // Synthesize a name from URL basename if the API omits it.
+                $name = basename(parse_url($url, PHP_URL_PATH) ?: 'file');
+            }
+            // Ensure the extension is present on the filename.
+            $ext = strtolower((string) ($bp['fileExtension'] ?? ''));
+            if ($ext !== '' && !preg_match('/\.' . preg_quote($ext, '/') . '$/i', $name)) {
+                $name .= '.' . $ext;
+            }
+
             $out[] = [
-                'name' => (string)($f['name'] ?? 'file'),
+                'name' => $name,
                 'url'  => $url,
-                'size' => (int)($f['size'] ?? 0),
+                'size' => 0, // Blueprint type exposes no size field.
             ];
+        }
+
+        if ($out === []) {
+            $this->lastError = 'No downloadable blueprints found for this creation.';
         }
         return $out;
     }
@@ -285,12 +309,27 @@ final class Cults3DService
             $thumb  = (string)($it['illustrationImageUrl'] ?? '');
             $images = $thumb !== '' ? [$thumb] : [];
 
+            // Browse/search results don't carry per-file sizes; left as 0.
             $size = 0;
-            foreach (($it['files'] ?? []) as $f) { $size += (int)($f['size'] ?? 0); }
 
             $id   = (string)($it['id']   ?? '');
             $slug = (string)($it['slug'] ?? '');
             $name = (string)($it['name'] ?? 'Untitled');
+
+            // Cults3D's API sometimes returns a base64 global node ID in the
+            // format base64("Creation/<slug>"). Decode and extract the slug.
+            if ($id !== '' && !ctype_digit($id)) {
+                $decoded = base64_decode($id, true);
+                if ($decoded !== false && str_contains($decoded, '/')) {
+                    $real = substr($decoded, strrpos($decoded, '/') + 1);
+                    if ($real !== '') {
+                        $id = $real;
+                        if ($slug === '') {
+                            $slug = $real;
+                        }
+                    }
+                }
+            }
 
             $out[] = [
                 'id'      => $id,

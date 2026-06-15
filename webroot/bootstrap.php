@@ -480,6 +480,7 @@ function cfg_defaults(): array
         'paused'         => false,
         'keep_zip'       => true,
         'overwrite'      => false,
+        'prefer_pack'    => false,
         'makerworld_token'           => (string) (getenv('FETCHER_MAKERWORLD_TOKEN') ?: ''),
         'makerworld_refresh_token'   => '',
         'makerworld_download_dir'    => '',
@@ -546,6 +547,9 @@ function cfg_save(array $patch): bool
     }
     if (array_key_exists('overwrite', $patch)) {
         $current['overwrite'] = (bool) $patch['overwrite'];
+    }
+    if (array_key_exists('prefer_pack', $patch)) {
+        $current['prefer_pack'] = (bool) $patch['prefer_pack'];
     }
     if (array_key_exists('makerworld_token', $patch)) {
         // Opaque cookie value; trim only. Empty string clears it.

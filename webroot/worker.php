@@ -158,7 +158,7 @@ if (!is_dir($baseDir) && !@mkdir($baseDir, 0777, true) && !is_dir($baseDir)) {
     exit(1);
 }
 if (!is_writable($baseDir)) {
-    logln('FATAL: download dir not writable: ' . $baseDir . ' (fix share permissions on the Unraid share).');
+    logln('FATAL: download dir not writable: ' . $baseDir . ' (fix directory permissions on the local array / shared folder so the container user can write).');
     exit(1);
 }
 
@@ -175,7 +175,7 @@ foreach ($sourceDirs as $srcName => $srcDir) {
     if ($srcDir === '') continue;
     if (!is_dir($srcDir)) {
         if (!@mkdir($srcDir, 0777, true) && !is_dir($srcDir)) {
-            logln('WARN: Cannot create ' . $srcName . ' dir: ' . $srcDir . ' — check Docker volume permissions (chown -R nobody:users ' . dirname($srcDir) . ')');
+            logln('WARN: Cannot create ' . $srcName . ' dir: ' . $srcDir . ' — check directory permissions on the local array / shared folder so the container user can write to ' . dirname($srcDir) . '.');
         } else {
             logln('Created ' . $srcName . ' dir: ' . $srcDir);
         }
@@ -471,8 +471,10 @@ while (true) {
             }
             if (empty($links)) {
                 $msg = $stlfix->lastError !== '' ? $stlfix->lastError : 'Could not resolve STLFlix download URLs.';
-                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logerr('warn', '  STLFlix error: ' . $msg);
+                // A product with no attached files is not a retryable error — skip it.
+                $isNoFiles = str_contains(strtolower($msg), 'no downloadable files');
+                $upd->execute([':st' => $isNoFiles ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  STLFlix ' . ($isNoFiles ? 'skipped' : 'error') . ': ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(STLFLIX_DELAY_SECONDS);
                 continue;
@@ -612,6 +614,36 @@ while (true) {
     }
 
     try {
+        // Global "always pack" preference: when enabled, pull the whole-model
+        // ZIP and extract instead of fetching each requested file individually.
+        // Skipped when the user explicitly queued a PACK job (already pack mode).
+        if (cfg('prefer_pack') === true && strtoupper($fileTy) !== 'PACK') {
+            $packLink = $svc->getPackLink($modelId, 'MODEL_FILES');
+            if ($packLink !== '') {
+                logln('  Prefer-pack on — downloading whole-model ZIP.');
+                $destDir = rtrim($baseDir, '/') . '/' . model_folder($modelId, $name, $slug);
+                if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
+                $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_model_files.zip';
+                if (!cfg('overwrite') && is_file($dest)) {
+                    logln('  Exists, skip: ' . basename($dest));
+                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                } elseif ($svc->downloadToFile($packLink, $dest, progress_writer($jobId, basename($dest)))) {
+                    if (extract_zip_safe($dest, $destDir)) {
+                        logln('  Extracted pack into: ' . $destDir);
+                        if (cfg('keep_zip') !== true) { @unlink($dest); }
+                    }
+                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                } else {
+                    $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
+                }
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace();
+                continue;
+            }
+            // No pack available — fall through to the normal per-file path.
+            logln('  Prefer-pack on, but no whole-model ZIP available — using per-file download.');
+        }
+
         $files = $svc->getModelFiles($modelId, $fileTy);
 
         // Dead token: stop the whole run so the user re-auths; requeue this job.

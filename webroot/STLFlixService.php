@@ -304,8 +304,9 @@ final class STLFlixService
             }
         }
 
-        $this->lastError = 'Could not find fid for "' . $slug . '". '
-            . 'files[], stl_file, and bambu_file all null for this product.';
+        $this->lastError = 'No downloadable files on STLFlix product "' . $slug . '" '
+            . '(files[], stl_file, bambu_file, and prusa_file are all empty — '
+            . 'the product has no model files attached).';
         return '';
     }
 

@@ -255,6 +255,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'batch_cap'      => (int) ($_POST['batch_cap'] ?? 2000),
             'keep_zip'       => isset($_POST['keep_zip']),
             'overwrite'      => isset($_POST['overwrite']),
+            'prefer_pack'    => isset($_POST['prefer_pack']),
         ]);
         $notice = $ok
             ? ['type' => 'ok', 'text' => 'Worker settings saved.']
@@ -309,7 +310,7 @@ $stlflixReady = $stlflixTok !== '';
 
 // Active tab
 $tab = (string) ($_GET['tab'] ?? $_POST['_tab'] ?? 'sources');
-if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
+if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = 'sources';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -414,6 +415,15 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
   .tab-btn:hover{color:var(--ink);background:var(--panel);}
   .tab-btn.active{color:var(--clay-deep);border-bottom-color:var(--clay);background:none;}
   .tab-content{display:none;} .tab-content.active{display:block;}
+  /* Donate tab */
+  .donate-wrap{display:flex;justify-content:center;padding:30px 0;}
+  .donate-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:36px 40px;max-width:440px;text-align:center;box-shadow:0 0 0 1px rgba(255,107,26,.06),0 8px 40px rgba(0,0,0,.3);}
+  .donate-logo{border-radius:16px;margin-bottom:22px;background:#0c0a08;}
+  .donate-title{font-size:22px;font-weight:800;color:var(--ink);margin-bottom:10px;letter-spacing:-.01em;}
+  .donate-text{font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:24px;}
+  .donate-btn{display:inline-block;background:linear-gradient(90deg,#ff6b1a,#f5c842);color:#1a0e00;font-weight:800;font-size:15px;padding:13px 32px;border-radius:10px;text-decoration:none;transition:transform .12s,box-shadow .12s;box-shadow:0 4px 18px rgba(255,107,26,.25);}
+  .donate-btn:hover{transform:translateY(-2px);box-shadow:0 6px 24px rgba(255,107,26,.4);}
+  .donate-handle{font-size:12px;color:var(--muted);margin-top:16px;font-family:ui-monospace,monospace;}
 
   /* Source cards */
   .src-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:28px;}
@@ -495,6 +505,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
     <button class="tab-btn <?= $tab==='sources'?'active':'' ?>" onclick="switchTab('sources')">Sources</button>
     <button class="tab-btn <?= $tab==='worker'?'active':'' ?>" onclick="switchTab('worker')">Worker</button>
     <button class="tab-btn <?= $tab==='activity'?'active':'' ?>" onclick="switchTab('activity')">Activity</button>
+    <button class="tab-btn <?= $tab==='donate'?'active':'' ?>" onclick="switchTab('donate')">Donate</button>
   </div>
 
   <!-- ===================== SOURCES TAB ===================== -->
@@ -813,6 +824,12 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
           </label>
           <p class="hint">By default a file already on disk is skipped. Enable to overwrite — useful if a download was corrupted or the model was updated.</p>
 
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500;color:var(--ink);margin-top:14px;">
+            <input type="checkbox" name="prefer_pack" value="1" <?= cfg('prefer_pack')===true?'checked':'' ?> style="width:auto;">
+            Prefer whole-model ZIP when available
+          </label>
+          <p class="hint">When a source offers a whole-model pack, download it as a single ZIP and extract it rather than fetching files one at a time — faster, with fewer paced steps, but you get every file in the model. Mainly affects Printables (which otherwise downloads each requested file individually). Sources that already pack whole models (MakerWorld, Thingiverse) or only serve per-file zips (Cults3D, STLFlix) are unchanged.</p>
+
           <div class="row" style="margin-top:16px;">
             <button class="btn-primary btn-sm" name="action" value="save_config">Save</button>
           </div>
@@ -843,6 +860,20 @@ if (!in_array($tab, ['sources', 'worker', 'activity'], true)) $tab = 'sources';
     <pre class="log"><?php foreach ($logRows as $row) { echo e($row) . "\n"; } ?></pre>
     <p class="hint" style="margin-top:10px;">Auth failures, skipped files, and errors land here. Full log at <code>private/farfetched.log</code>.</p>
     <?php endif; ?>
+  </div>
+
+  <div class="tab-content <?= $tab==='donate'?'active':'' ?>" id="tab-donate">
+    <div class="donate-wrap">
+      <div class="donate-card">
+        <img src="https://www.btcbdesign.com/logo.png" alt="BTCB Design" width="200" height="200" class="donate-logo">
+        <h2 class="donate-title">Do you like this project?</h2>
+        <p class="donate-text">FarFetched is free and open source. If it's saved you time, consider buying me a ko-fi to keep the builds coming.</p>
+        <a href="https://ko-fi.com/bloodthirstycheeseburger90415" target="_blank" rel="noopener noreferrer" class="donate-btn">
+          ☕ Buy me a ko-fi
+        </a>
+        <p class="donate-handle">ko-fi.com/bloodthirstycheeseburger90415</p>
+      </div>
+    </div>
   </div>
 
 </main>
