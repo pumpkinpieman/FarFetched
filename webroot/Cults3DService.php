@@ -80,7 +80,6 @@ final class Cults3DService
                   illustrationImageUrl
                   category { slug }
                   creator { nick }
-                  files { size }
                 }
               }
             }
@@ -107,7 +106,6 @@ final class Cults3DService
                   illustrationImageUrl
                   category { slug }
                   creator { nick }
-                  files { size }
                 }
               }
             }

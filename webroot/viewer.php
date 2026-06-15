@@ -254,7 +254,8 @@ foreach ($sources as $s) {
     const grid = new THREE.GridHelper(400, 40, 0x555049, 0x33302c);
     scene.add(grid);
 
-    const material = new THREE.MeshStandardMaterial({ color: 0xD97757, metalness: 0.05, roughness: 0.65, flatShading: false });
+    const material    = new THREE.MeshStandardMaterial({ color: 0xff6b1a, metalness: 0.05, roughness: 0.65, flatShading: false });
+    const material3mf = new THREE.MeshStandardMaterial({ color: 0xb0b8c0, metalness: 0.15, roughness: 0.55, flatShading: false });
 
     let current = null; // currently displayed mesh/group
 
@@ -335,7 +336,7 @@ foreach ($sources as $s) {
               if (o.geometry?.attributes?.color) {
                 o.geometry.deleteAttribute('color');
               }
-              o.material = material;
+              o.material = material3mf;
             }
           });
           scene.add(object);
@@ -424,7 +425,7 @@ foreach ($sources as $s) {
 
       const group = new THREE.Group();
       for (const part of out) {
-        const mesh = new THREE.Mesh(part.geometry, material);
+        const mesh = new THREE.Mesh(part.geometry, material3mf);
         mesh.applyMatrix4(part.matrix);
         group.add(mesh);
       }
@@ -523,8 +524,8 @@ foreach ($sources as $s) {
                             '<span>' + f.name.replace(/</g, '&lt;') + '</span>' +
                             '<span class="sz">' + fmtSize(f.size) + '</span>';
             btn.addEventListener('click', () => {
-              if (f.size > 5 * 1024 * 1024) {
-                if (!confirm('This is a large file: ' + fmtSize(f.size) + '\n\nAre you sure you want to load it?')) return;
+              if (f.size > 50 * 1024 * 1024) {
+                if (!confirm('This is a very large file: ' + fmtSize(f.size) + '\n\nAre you sure you want to load it?')) return;
               }
               document.querySelectorAll('.filebtn.active').forEach(b => b.classList.remove('active'));
               btn.classList.add('active');

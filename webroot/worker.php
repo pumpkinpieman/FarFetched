@@ -682,9 +682,11 @@ function pace(?int $delay = null): void
 /** Make a filesystem-safe path segment (no traversal, no separators). */
 function safe_segment(string $s): string
 {
-    $s = preg_replace('/[\/\\\\\x00-\x1F]+/', '_', $s) ?? $s;
+    $s = preg_replace("/['"`]/", '', $s) ?? $s;
+    $s = preg_replace('/[\/\\\x00-\x1F:*?<>|]+/', '_', $s) ?? $s;
     $s = trim($s, " .");
     $s = preg_replace('/\s+/', ' ', $s) ?? $s;
+    $s = preg_replace('/_+/', '_', $s) ?? $s;
     if ($s === '' || $s === '.' || $s === '..') {
         $s = 'file';
     }

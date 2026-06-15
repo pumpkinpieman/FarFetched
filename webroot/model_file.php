@@ -20,7 +20,7 @@ $src   = (string) ($_GET['src'] ?? '');
 $model = (string) ($_GET['model'] ?? '');
 
 $srcPath = source_path($src); // null unless a valid, existing source slug
-if ($srcPath === null || $model === '' || !preg_match('/^[A-Za-z0-9._ +&,\'()-]+$/', $model)) {
+if ($srcPath === null || $model === '' || !preg_match('/^[A-Za-z0-9._ +&,\'()!-]+$/', $model)) {
     http_response_code(404);
     exit;
 }
