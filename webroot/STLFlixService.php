@@ -13,9 +13,10 @@ declare(strict_types=1);
  */
 final class STLFlixService
 {
-    private const GRAPHQL  = 'https://k8s.stlflix.com/graphql';
-    private const LIBRARY  = 'https://painel.stlflix.com/api/library/custom-library';
-    private const PLATFORM = 'https://platform.stlflix.com';
+    private const GRAPHQL      = 'https://k8s.stlflix.com/graphql';
+    private const PRODUCT_FILE = 'https://k8s.stlflix.com/product-file';
+    private const LIBRARY      = 'https://painel.stlflix.com/api/library/custom-library';
+    private const PLATFORM     = 'https://platform.stlflix.com';
     private const UA       = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FarFetched/1.0';
 
     public string $lastError = '';
@@ -93,13 +94,14 @@ final class STLFlixService
     /**
      * Resolve the CDN ZIP download URL for a model.
      *
-     * STLFlix's download flow (reverse-engineered from DevTools):
-     *   1. POST k8s.stlflix.com/graphql — a "download" mutation that logs the
-     *      conversion and returns the CDN file URL.
-     *   2. GET static.stlflix.com/<Name_hash>.zip — no auth, just Referer cookie.
+     * Confirmed flow from DevTools (Image 1):
+     *   POST https://k8s.stlflix.com/product-file  → returns JSON with CDN URL
+     *   GET  https://static.stlflix.com/<Name_hash>.zip  → the actual file (no auth)
      *
-     * We try several known mutation/query shapes. The static CDN URL requires
-     * no Authorization header — only Referer: https://platform.stlflix.com/.
+     * Payload shape is inferred from the REST endpoint name + model context.
+     * We try several plausible body shapes and scan the JSON response for any .zip URL.
+     *
+     * Returns '' and sets $lastError on failure.
      */
     public function getDownloadUrl(string $modelId, string $slug): string
     {
@@ -110,45 +112,47 @@ final class STLFlixService
             return '';
         }
 
-        $idInt = is_numeric($modelId) ? (int) $modelId : 0;
+        $idInt    = is_numeric($modelId) ? (int) $modelId : 0;
+        $useSlug  = $slug !== '' ? $slug : $modelId;
 
-        // --- Attempt 1: createDownload / download mutation (common Strapi pattern) ---
-        $mutations = [];
+        // Build several candidate payloads for the product-file endpoint.
+        // The exact field names aren't confirmed; we try the most likely shapes.
+        $payloads = [];
 
         if ($idInt > 0) {
-            $mutations[] = <<<GQL
-            mutation {
-              createDownload(data: { product: {$idInt} }) {
-                data { attributes { file { data { attributes { url } } } } }
-              }
-            }
-            GQL;
+            $payloads[] = ['product_id' => $idInt];
+            $payloads[] = ['productId'  => $idInt];
+            $payloads[] = ['id'         => $idInt];
+            $payloads[] = ['product_id' => $idInt,   'slug' => $useSlug];
+            $payloads[] = ['product_id' => (string)$idInt];
+        }
+        $payloads[] = ['slug'       => $useSlug];
+        $payloads[] = ['product_slug' => $useSlug];
 
-            $mutations[] = <<<GQL
-            mutation {
-              download(productId: {$idInt}) {
-                url
-                file_url
-                download_url
-              }
-            }
-            GQL;
+        foreach ($payloads as $payload) {
+            $result = $this->postJson(self::PRODUCT_FILE, $payload);
+            if (!is_array($result)) continue;
 
-            $mutations[] = <<<GQL
-            mutation {
-              createConversion(data: { product: {$idInt}, conversion_type: "download" }) {
-                data { attributes { file { data { attributes { url } } } } }
-              }
+            $url = $this->extractFirstZipUrl($result);
+            if ($url !== '') {
+                return $url;
             }
-            GQL;
+
+            // Also check for a plain string 'url' or 'download_url' key at root.
+            foreach (['url', 'download_url', 'file_url', 'link', 'path'] as $k) {
+                $v = $result[$k] ?? null;
+                if (is_string($v) && $v !== '') {
+                    return $this->absoluteUrl($v);
+                }
+            }
         }
 
-        // --- Attempt 2: product query with every plausible file field ---
-        $filterById   = $idInt > 0 ? "filters: { id: { eq: {$idInt} } }" : '';
-        $filterBySlug = $slug !== '' ? "filters: { slug: { eq: \"{$slug}\" } }" : '';
-
-        foreach (array_filter([$filterById, $filterBySlug]) as $filter) {
-            $mutations[] = <<<GQL
+        // Fallback: GraphQL product query — probe every plausible file-field name.
+        foreach (array_filter([
+            $idInt > 0 ? "filters: { id: { eq: {$idInt} } }" : '',
+            $useSlug !== '' ? "filters: { slug: { eq: \"{$useSlug}\" } }" : '',
+        ]) as $filter) {
+            $query = <<<GQL
             {
               products({$filter}, pagination: { pageSize: 1 }) {
                 data {
@@ -167,48 +171,24 @@ final class STLFlixService
               }
             }
             GQL;
-        }
-
-        foreach ($mutations as $gql) {
-            $result = $this->graphql($gql);
-            if ($result === null) continue;
-
-            $url = $this->extractFirstZipUrl($result);
+            $data = $this->graphql($query);
+            if ($data === null) continue;
+            $url = $this->extractFirstZipUrl($data);
             if ($url !== '') return $url;
         }
 
-        // --- Attempt 3: painel.stlflix.com download endpoint ---
-        // The library API may expose a per-product download URL.
-        foreach (array_filter([$idInt > 0 ? (string)$idInt : '', $slug]) as $key) {
-            $endpoints = [
-                self::LIBRARY . '?product_id=' . rawurlencode($key),
-                'https://painel.stlflix.com/api/download?product_id=' . rawurlencode($key),
-                'https://painel.stlflix.com/api/products/' . rawurlencode($key) . '/download',
-            ];
-            foreach ($endpoints as $ep) {
-                $data = $this->getJson($ep);
-                if (!is_array($data)) continue;
-                $url = $this->extractFirstZipUrl($data);
-                if ($url !== '') return $url;
-            }
-        }
-
-        $label = $slug !== '' ? $slug : $modelId;
-        $this->lastError = 'Could not resolve download URL for STLFlix model "' . $label . '". '
-            . 'The download mutation field name is unknown — capture the GraphQL Request '
-            . 'payload from DevTools when clicking Download on a product page and report it.';
+        $this->lastError = 'Could not resolve download URL for STLFlix model "' . $useSlug . '". '
+            . 'Capture the product-file POST Request body from DevTools (click the '
+            . '"product-file" row in Network tab → Request tab) and report the payload.';
         return '';
     }
 
     /**
-     * Walk any decoded JSON array and return the first https://*.zip URL found.
-     * Handles both Strapi relation shapes and flat arrays.
+     * Walk any decoded JSON structure and return the first https://*.zip URL found.
      */
     private function extractFirstZipUrl(array $data): string
     {
-        // Strapi file-relation field names to check (single and multi).
-        $fileFields = ['pack','zip_file','file','files','download','downloads','model_file','assets','url'];
-
+        $found = null;
         array_walk_recursive($data, static function ($v) use (&$found): void {
             if (
                 $found === null
@@ -219,7 +199,6 @@ final class STLFlixService
                 $found = $v;
             }
         });
-
         return isset($found) && is_string($found) ? $this->absoluteUrl($found) : '';
     }
 
