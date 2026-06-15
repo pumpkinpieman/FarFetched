@@ -67,19 +67,22 @@ function write_worker_status(array $s): void
 function progress_writer(int $jobId, string $file): callable
 {
     $last = 0.0;
-    return static function (int $total, int $now) use ($jobId, $file, &$last): void {
+    return static function (int $total, int $now, int $fileNum = 0, int $fileTotal = 0) use ($jobId, $file, &$last): void {
         $t = microtime(true);
         if ($now > 0 && $now < $total && ($t - $last) < 0.30) {
-            return; // throttle mid-transfer; always allow first/last ticks
+            return;
         }
         $last = $t;
-        write_worker_status([
+        $s = [
             'phase'  => 'downloading',
             'job_id' => $jobId,
             'file'   => $file,
             'bytes'  => $now,
             'total'  => $total,
-        ]);
+        ];
+        if ($fileNum > 0)    $s['file_num']   = $fileNum;
+        if ($fileTotal > 0)  $s['file_total'] = $fileTotal;
+        write_worker_status($s);
     };
 }
 
@@ -425,8 +428,10 @@ while (true) {
             $destDir = rtrim(get_stlflix_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
             if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
 
-            $anyOk = false;
+            $anyOk    = false;
+            $fileTotal = count($links);
             foreach ($links as $i => $link) {
+                $fileNum = $i + 1;
                 // Derive a filename from the URL, fallback to indexed name.
                 $urlBasename = basename(parse_url($link, PHP_URL_PATH) ?? '');
                 $zipName     = $urlBasename !== '' ? $urlBasename
@@ -439,9 +444,11 @@ while (true) {
                     continue;
                 }
 
-                logln('  Downloading: ' . $zipName . ' from ' . $link);
+                logln('  Downloading: ' . $zipName . ' (' . $fileNum . '/' . $fileTotal . ') from ' . $link);
                 $pwFn = progress_writer($jobId, $zipName);
-                $progressCb = static function (int $bytes) use ($pwFn): void { $pwFn(0, $bytes); };
+                $progressCb = static function (int $bytes) use ($pwFn, $fileNum, $fileTotal): void {
+                    $pwFn(0, $bytes, $fileNum, $fileTotal);
+                };
 
                 if ($stlfix->downloadToFile($link, $dest, $progressCb)) {
                     logln('  Saved: ' . $dest);

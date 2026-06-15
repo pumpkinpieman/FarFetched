@@ -91,6 +91,7 @@ $badge = static function (string $s): string {
   .rowbar.indet .rowfill{width:40%;transition:none;position:absolute;animation:indet 1.1s ease-in-out infinite;}
   @keyframes indet{0%{left:-40%;}100%{left:100%;}}
   .rowprog{font-size:11px;color:var(--muted);white-space:nowrap;}
+  .file-counter{display:inline-block;font-size:11px;font-weight:600;color:var(--fg);background:var(--line);border-radius:3px;padding:0 4px;margin-right:3px;}
   .act{display:inline-flex;gap:6px;}
   .act button{padding:5px 9px;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:7px;}
   .act button:hover{border-color:var(--clay);color:var(--clay-deep);}
@@ -197,11 +198,14 @@ $badge = static function (string $s): string {
 
       if (active.phase === 'downloading' && isWorkingRow) {
         const sized = active.total ? (fmtBytes(active.bytes) + ' / ' + fmtBytes(active.total)) : fmtBytes(active.bytes);
+        const fileCounter = (active.file_num && active.file_total)
+          ? '<span class="file-counter">' + active.file_num + '/' + active.file_total + '</span> '
+          : '';
         if (active.percent === null || !active.total) {
           return '<div class="rowbar indet"><div class="rowfill green"></div></div>'
-               + '<span class="rowprog">downloading…' + (sized ? ' ' + esc(sized) : '') + '</span>';
+               + '<span class="rowprog">' + fileCounter + 'downloading…' + (sized ? ' ' + esc(sized) : '') + '</span>';
         }
-        return greenBar(active.percent) + '<span class="rowprog">' + active.percent + '% · ' + esc(sized) + '</span>';
+        return greenBar(active.percent) + '<span class="rowprog">' + fileCounter + active.percent + '% · ' + esc(sized) + '</span>';
       }
 
       if (active.phase === 'waiting') {

@@ -59,6 +59,7 @@ foreach ($sources as $s) {
   .filebtn.active{border-color:var(--clay);box-shadow:0 0 0 2px rgba(217,119,87,.18);}
   .filebtn .ext{font-size:10px;font-weight:700;text-transform:uppercase;color:#fff;background:var(--clay);border-radius:4px;padding:1px 5px;}
   .filebtn .sz{color:var(--muted);font-size:11px;}
+  .folder-hdr{width:100%;font-size:12px;font-weight:600;color:var(--muted);padding:6px 2px 3px;border-bottom:1px solid var(--line);margin-bottom:2px;letter-spacing:.03em;}
   .hint{color:var(--muted);font-size:13px;}
   .stage{position:relative;flex:1;min-height:380px;background:#1c1b1a;border:1px solid var(--line);border-radius:12px;overflow:hidden;}
   #canvas-wrap{position:absolute;inset:0;}
@@ -417,25 +418,45 @@ foreach ($sources as $s) {
           return;
         }
         filesEl.innerHTML = '';
+
+        // Group files by subfolder for folder-aware display.
+        const grouped = {};
         for (const f of list) {
-          const btn = document.createElement('button');
-          btn.className = 'filebtn';
-          btn.innerHTML = '<span class="ext">' + f.ext + '</span>' +
-                          '<span>' + f.name.replace(/</g, '&lt;') + '</span>' +
-                          '<span class="sz">' + fmtSize(f.size) + '</span>';
-          btn.addEventListener('click', () => {
-            if (f.size > 5 * 1024 * 1024) {
-              if (!confirm('This is a large file: ' + fmtSize(f.size) + '\n\nAre you sure you want to load it?')) return;
-            }
-            document.querySelectorAll('.filebtn.active').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const url = 'model_file.php?src=' + encodeURIComponent(src) +
-                        '&model=' + encodeURIComponent(model) +
-                        '&file=' + encodeURIComponent(f.rel);
-            metaEl.textContent = f.rel + ' · ' + fmtSize(f.size);
-            loadFile(url, f.ext, f.name);
-          });
-          filesEl.appendChild(btn);
+          const slash = f.rel.lastIndexOf('/');
+          const folder = slash > -1 ? f.rel.substring(0, slash) : '';
+          if (!grouped[folder]) grouped[folder] = [];
+          grouped[folder].push(f);
+        }
+        const folders = Object.keys(grouped).sort();
+        const hasSubfolders = folders.some(k => k !== '');
+
+        for (const folder of folders) {
+          if (hasSubfolders && folder !== '') {
+            const hdr = document.createElement('div');
+            hdr.className = 'folder-hdr';
+            hdr.innerHTML = '\u{1F4C1} ' + folder.replace(/</g, '&lt;');
+            filesEl.appendChild(hdr);
+          }
+          for (const f of grouped[folder]) {
+            const btn = document.createElement('button');
+            btn.className = 'filebtn';
+            btn.innerHTML = '<span class="ext">' + f.ext + '</span>' +
+                            '<span>' + f.name.replace(/</g, '&lt;') + '</span>' +
+                            '<span class="sz">' + fmtSize(f.size) + '</span>';
+            btn.addEventListener('click', () => {
+              if (f.size > 5 * 1024 * 1024) {
+                if (!confirm('This is a large file: ' + fmtSize(f.size) + '\n\nAre you sure you want to load it?')) return;
+              }
+              document.querySelectorAll('.filebtn.active').forEach(b => b.classList.remove('active'));
+              btn.classList.add('active');
+              const url = 'model_file.php?src=' + encodeURIComponent(src) +
+                          '&model=' + encodeURIComponent(model) +
+                          '&file=' + encodeURIComponent(f.rel);
+              metaEl.textContent = f.rel + ' · ' + fmtSize(f.size);
+              loadFile(url, f.ext, f.name);
+            });
+            filesEl.appendChild(btn);
+          }
         }
       } catch (e) {
         filesEl.innerHTML = '<span class="hint">Failed to list files.</span>';
