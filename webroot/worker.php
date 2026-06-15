@@ -31,6 +31,7 @@ require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
 require_once __DIR__ . '/Cults3DService.php';
+require_once __DIR__ . '/STLFlixService.php';
 
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
@@ -93,10 +94,11 @@ if (!flock($lock, LOCK_EX | LOCK_NB)) {
     exit(0);
 }
 
-$svc  = new PrintablesService();
-$mw   = new MakerWorldService();
-$tv   = new ThingiverseService();
-$cults = new Cults3DService();
+$svc    = new PrintablesService();
+$mw     = new MakerWorldService();
+$tv     = new ThingiverseService();
+$cults  = new Cults3DService();
+$stlfix = new STLFlixService();
 
 // Per-source readiness. A source that isn't configured simply has its jobs wait
 // in the queue (they're filtered out of the claim query below) rather than
@@ -125,11 +127,17 @@ logln($cultsReady
     ? 'Cults3D credentials present.'
     : 'Cults3D credentials absent — Cults3D jobs will wait.');
 
+$stlflixReady = $stlfix->isAuthed();
+logln($stlflixReady
+    ? 'STLFlix token present.'
+    : 'STLFlix token absent — STLFlix jobs will wait.');
+
 $readySources = [];
 if ($printablesReady)  { $readySources[] = 'printables'; }
 if ($makerworldReady)  { $readySources[] = 'makerworld'; }
 if ($thingiverseReady) { $readySources[] = 'thingiverse'; }
 if ($cultsReady)       { $readySources[] = 'cults3d'; }
+if ($stlflixReady)     { $readySources[] = 'stlflix'; }
 
 if ($readySources === []) {
     logerr('error', 'No source configured — paste at least one token in Settings. Exiting.');
@@ -391,6 +399,69 @@ while (true) {
         }
         $GLOBALS['ACTIVE_JOB_ID'] = null;
         pace(CULTS3D_DELAY_SECONDS);
+        continue;
+    }
+
+    // ---- STLFlix: whole-model ZIP download ----------------------------------
+    if (($job['source'] ?? '') === 'stlflix') {
+        try {
+            $link = $stlfix->getDownloadUrl($modelId, $slug);
+
+            // Dead/expired token — halt the run so user can re-auth.
+            if ($link === '' && str_contains(strtolower($stlfix->lastError), 'auth')) {
+                $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $stlfix->lastError, ':path' => '', ':id' => $jobId]);
+                logerr('error', '  STLFlix auth failed — halting run. Re-paste jwt in Settings.');
+                break;
+            }
+            if ($link === '') {
+                $msg = $stlfix->lastError !== '' ? $stlfix->lastError : 'Could not resolve STLFlix download URL.';
+                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  STLFlix skipped: ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(STLFLIX_DELAY_SECONDS);
+                continue;
+            }
+
+            $destDir = rtrim(get_stlflix_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+            if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+
+            $zipName = model_folder($modelId, $name, $slug) . '_stlflix.zip';
+            $dest    = $destDir . '/' . $zipName;
+
+            if (!cfg('overwrite') && is_file($dest)) {
+                logln('  Exists, skip: ' . $zipName);
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                continue; // no network, no pace
+            }
+
+            logln('  Downloading: ' . $zipName . ' from ' . $link);
+            if ($stlfix->downloadToFile($link, $dest, progress_writer($jobId, $zipName))) {
+                logln('  Saved: ' . $dest);
+
+                if (extract_zip_safe($dest, $destDir)) {
+                    logln('  Extracted into: ' . $destDir);
+                    if (cfg('keep_zip') !== true) {
+                        @unlink($dest);
+                        logln('  Removed zip (keep_zip off).');
+                    }
+                    $finalPath = $destDir;
+                } else {
+                    logln('  Extract failed; zip kept at ' . $dest);
+                    $finalPath = $dest;
+                }
+
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $finalPath, ':id' => $jobId]);
+            } else {
+                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $stlfix->lastError, ':path' => '', ':id' => $jobId]);
+                logln('  STLFlix download failed: ' . $stlfix->lastError);
+            }
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  STLFlix error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(STLFLIX_DELAY_SECONDS);
         continue;
     }
 
