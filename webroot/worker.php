@@ -461,8 +461,13 @@ while (true) {
                 if ($i < count($links) - 1) pace(STLFLIX_DELAY_SECONDS);
             }
 
-            $upd->execute([':st' => $anyOk ? 'done' : 'error', ':inc' => 1,
-                ':err' => $anyOk ? '' : $stlfix->lastError, ':path' => $anyOk ? $destDir : '', ':id' => $jobId]);
+            $upd->execute([
+                ':st'   => $anyOk ? 'done' : 'error',
+                ':inc'  => 1,
+                ':err'  => $anyOk ? '' : (string) $stlfix->lastError,
+                ':path' => $anyOk ? (string) $destDir : '',
+                ':id'   => (int) $jobId,
+            ]);
         } catch (Throwable $e) {
             $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
             logln('  STLFlix error: ' . $e->getMessage());

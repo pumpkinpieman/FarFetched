@@ -90,7 +90,7 @@ if ($source === 'cults3d') {
 if ($source === 'stlflix') {
     $stlflix = new STLFlixService();
     $stlCat  = preg_replace('/[^0-9]/', '', (string) ($_GET['stlcat'] ?? ''));
-    $limit   = 20;
+    $limit   = 24;
     $models  = $stlflix->search($q, $limit, $offset, $stlCat);
     if ($stlflix->lastError !== '') { echo json_encode(['ok' => false, 'error' => $stlflix->lastError]); exit; }
     $nextOffset = (($offset + $limit) < $stlflix->lastTotal) ? $offset + $limit : null;

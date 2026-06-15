@@ -39,18 +39,18 @@ final class STLFlixService
     /** @return array<string,string> id => label */
     public function categories(): array
     {
-        // Try GraphQL with 'categories' collection.
+        // Try parent_categories first (top-level like Art, Gadgets, Household etc.)
         $query = <<<'GQL'
         {
-          categories(pagination: { pageSize: 100 }, sort: "name:asc") {
+          parentCategories(pagination: { pageSize: 100 }, sort: "name:asc") {
             data { id attributes { name slug } }
           }
         }
         GQL;
         $data = $this->graphql($query);
-        if ($data !== null && !empty($data['categories']['data'])) {
+        if ($data !== null && !empty($data['parentCategories']['data'])) {
             $out = ['' => 'All Models'];
-            foreach ($data['categories']['data'] as $c) {
+            foreach ($data['parentCategories']['data'] as $c) {
                 $id   = (string) ($c['id'] ?? '');
                 $name = (string) ($c['attributes']['name'] ?? '');
                 if ($id !== '' && $name !== '') $out[$id] = $name;
@@ -58,16 +58,26 @@ final class STLFlixService
             return $out;
         }
 
-        // Fallback: the platform sidebar categories as observed in the UI.
-        // These match what platform.stlflix.com/explore shows.
-        return [
-            ''   => 'All Models',
-            'bs' => 'Best Sellers',
-            'uf' => 'Usefull',
-            'ta' => 'Toys & Articulated',
-            'hd' => 'Home & Decor',
-            'rc' => 'RPG & Cosplay',
-        ];
+        // Fallback: flat categories
+        $query2 = <<<'GQL'
+        {
+          categories(pagination: { pageSize: 100 }, sort: "name:asc") {
+            data { id attributes { name slug } }
+          }
+        }
+        GQL;
+        $data2 = $this->graphql($query2);
+        if ($data2 !== null && !empty($data2['categories']['data'])) {
+            $out = ['' => 'All Models'];
+            foreach ($data2['categories']['data'] as $c) {
+                $id   = (string) ($c['id'] ?? '');
+                $name = (string) ($c['attributes']['name'] ?? '');
+                if ($id !== '' && $name !== '') $out[$id] = $name;
+            }
+            return $out;
+        }
+
+        return ['' => 'All Models'];
     }
 
     /** @return array<int,array<string,mixed>> */
@@ -81,26 +91,81 @@ final class STLFlixService
             return [];
         }
 
-        $payload = [
-            'interval'    => 'ALL_TIME',
-            'miniatures'  => false,
-            'filament'    => false,
-            'category_id' => $categoryId !== '' ? (int) $categoryId : null,
-        ];
-        $json = $this->postJson(self::LIBRARY, $payload);
-        if (!is_array($json)) return [];
+        $page  = (int) floor($offset / $limit) + 1;
+        $start = ($page - 1) * $limit;
 
-        $rows = $this->normalize($json);
-        if ($query !== '') {
-            $needle = strtolower($query);
-            $rows   = array_values(array_filter($rows, static function (array $m) use ($needle): bool {
-                return str_contains(strtolower((string) $m['name']), $needle)
-                    || str_contains(strtolower((string) $m['creator']), $needle);
-            }));
+        // Build filters — category ID can be from parentCategories or categories.
+        $filterParts = [];
+        if ($categoryId !== '') {
+            // Try both parent_categories and categories relations so either works.
+            $filterParts[] = "or: [ { parent_categories: { id: { eq: {$categoryId} } } }, { categories: { id: { eq: {$categoryId} } } } ]";
         }
+        if ($query !== '') {
+            $escaped       = addslashes($query);
+            $filterParts[] = "name: { containsi: \"{$escaped}\" }";
+        }
+        $filtersGql = $filterParts !== []
+            ? 'filters: { ' . implode(', ', $filterParts) . ' }'
+            : '';
 
-        $this->lastTotal = count($rows);
-        return array_slice($rows, $offset, $limit);
+        $gql = <<<GQL
+        {
+          products(
+            {$filtersGql}
+            pagination: { page: {$page}, pageSize: {$limit} }
+            sort: "release_date:desc"
+          ) {
+            meta { pagination { total page pageSize pageCount } }
+            data {
+              id
+              attributes {
+                name
+                slug
+                thumbnail { data { attributes { url } } }
+                categories { data { id attributes { name } } }
+              }
+            }
+          }
+        }
+        GQL;
+
+        $data = $this->graphql($gql);
+        if ($data === null) return [];
+
+        $pagination      = $data['products']['meta']['pagination'] ?? [];
+        $this->lastTotal = (int) ($pagination['total'] ?? 0);
+
+        return $this->normalizeGql($data['products']['data'] ?? []);
+    }
+
+    /** Normalize GraphQL products query response into standard model array. */
+    private function normalizeGql(array $items): array
+    {
+        $out = [];
+        foreach ($items as $p) {
+            if (!is_array($p)) continue;
+            $a     = $p['attributes'] ?? [];
+            $id    = (string) ($p['id'] ?? '');
+            $name  = (string) ($a['name'] ?? 'Untitled');
+            $slug  = (string) ($a['slug'] ?? $id);
+            $thumb = (string) ($a['thumbnail']['data']['attributes']['url'] ?? '');
+            $cats  = [];
+            foreach (($a['categories']['data'] ?? []) as $c) {
+                $label = (string) ($c['attributes']['name'] ?? '');
+                if ($label !== '') $cats[] = $label;
+            }
+            $out[] = [
+                'id'      => $id,
+                'slug'    => $slug,
+                'name'    => $name,
+                'creator' => $cats !== [] ? implode(', ', array_slice($cats, 0, 2)) : 'STLFlix',
+                'thumb'   => $thumb,
+                'images'  => $thumb !== '' ? [$thumb] : [],
+                'size'    => 0,
+                'source'  => 'stlflix',
+            ];
+        }
+        return $out;
     }
 
     /**
