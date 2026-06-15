@@ -18,6 +18,8 @@ $ALLOWED_HOSTS = [
     'cdn.cults3d.com',
     'files.cults3d.com',
     'cdn.thingiverse.com',
+    'thingiverse-production.s3.amazonaws.com',
+    'thingiverse-production.s3-us-west-2.amazonaws.com',
     'cdn.thangs.com',
     'images.makerworld.com',
     'makerworld-model.oss-us-west-1.aliyuncs.com',
@@ -42,20 +44,30 @@ if ($scheme !== 'https' || !in_array($host, $ALLOWED_HOSTS, true)) {
 }
 
 // Block private/internal IP ranges in case of redirect.
+// Allow up to 3 redirects but only within the same allowlist.
 $ch = curl_init($url);
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_FOLLOWLOCATION => false,   // no redirects — prevents SSRF
+    CURLOPT_FOLLOWLOCATION => true,
+    CURLOPT_MAXREDIRS      => 3,
     CURLOPT_TIMEOUT        => 30,
     CURLOPT_CONNECTTIMEOUT => 10,
     CURLOPT_USERAGENT      => 'Mozilla/5.0 FarFetched/1.0',
     CURLOPT_HTTPHEADER     => ['Accept: image/*'],
 ]);
 
-$body = curl_exec($ch);
-$st   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$ct   = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+$body     = curl_exec($ch);
+$st       = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$ct       = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+$finalUrl = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
 curl_close($ch);
+
+// Validate the final URL after redirects is still an allowed host.
+$finalHost = strtolower(parse_url($finalUrl, PHP_URL_HOST) ?? '');
+if ($finalHost !== '' && !in_array($finalHost, $ALLOWED_HOSTS, true)) {
+    http_response_code(403);
+    exit;
+}
 
 if ($body === false || $st !== 200 || strlen($body) > 8 * 1024 * 1024) {
     http_response_code(502);

@@ -122,7 +122,7 @@ final class ThingiverseService
      */
     public function getThingImages(string $thingId): array
     {
-        $thingId = preg_replace('/[^0-9]/', '', $thingId);
+        $thingId = preg_replace('/[^a-z0-9\-]/', '', strtolower($thingId));
         if ($thingId === '' || !$this->isAuthed()) return [];
 
         $json = $this->apiGet(self::API . '/things/' . $thingId . '/images');
@@ -170,7 +170,8 @@ final class ThingiverseService
     public function getThingZipUrl(string $thingId): string
     {
         $this->lastError = '';
-        $thingId = preg_replace('/[^0-9]/', '', $thingId);
+        // Accept both numeric IDs and slugs.
+        $thingId = preg_replace('/[^a-z0-9\-]/', '', strtolower($thingId));
         if ($thingId === '') {
             $this->lastError = 'Invalid Thingiverse thing ID.';
             return '';
@@ -209,7 +210,7 @@ final class ThingiverseService
     public function getFiles(string $thingId): array
     {
         $this->lastError = '';
-        $thingId = preg_replace('/[^0-9]/', '', $thingId);
+        $thingId = preg_replace('/[^a-z0-9\-]/', '', strtolower($thingId));
         if ($thingId === '' || !$this->isAuthed()) return [];
 
         $json = $this->apiGet(self::API . '/things/' . $thingId . '/files');
@@ -344,6 +345,18 @@ final class ThingiverseService
             }
 
             $id   = (string) ($it['id'] ?? '');
+            // Thingiverse REST API sometimes returns a base64 global node ID
+            // in the format base64("CrHation/<id-or-slug>").
+            // Extract the part after the slash as the usable ID.
+            if ($id !== '' && !is_numeric($id)) {
+                $decoded = base64_decode($id, true);
+                if ($decoded !== false && str_contains($decoded, '/')) {
+                    $real = substr($decoded, strrpos($decoded, '/') + 1);
+                    if ($real !== '') {
+                        $id = $real; // numeric string or slug
+                    }
+                }
+            }
             $name = (string) ($it['name'] ?? 'Untitled');
             $slug = (string) ($it['slug'] ?? preg_replace('/[^a-z0-9]+/', '-', strtolower($name)) ?? $id);
 
