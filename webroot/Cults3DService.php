@@ -150,16 +150,28 @@ final class Cults3DService
         $this->lastError = '';
         if (!$this->isAuthed()) return [];
 
+        // Pull price (pre-formatted, in the creation's own currency) and
+        // openPriced alongside blueprints so we can distinguish a paid-but-
+        // unowned model (fileUrl withheld by the API) from a model that
+        // genuinely has no files.
         $gql = '{ creation(slug: ' . json_encode($slug) . ') { '
+             . 'price { cents formatted } openPriced '
              . 'blueprints { fileName fileExtension fileUrl } } }';
         $data = $this->gql($gql);
         if ($data === null) return [];
 
-        $blueprints = $data['creation']['blueprints'] ?? [];
+        $creation   = $data['creation'] ?? null;
+        if (!is_array($creation)) {
+            $this->lastError = 'Cults3D creation not found for "' . $slug . '".';
+            return [];
+        }
+
+        $blueprints = $creation['blueprints'] ?? [];
         $out = [];
+        $hadBlueprintWithoutUrl = false;
         foreach ($blueprints as $bp) {
             $url = (string) ($bp['fileUrl'] ?? '');
-            if ($url === '') continue;
+            if ($url === '') { $hadBlueprintWithoutUrl = true; continue; }
 
             $name = (string) ($bp['fileName'] ?? '');
             if ($name === '') {
@@ -180,7 +192,26 @@ final class Cults3DService
         }
 
         if ($out === []) {
-            $this->lastError = 'No downloadable blueprints found for this creation.';
+            // Blueprints exist but their URLs are withheld -> this is a paid /
+            // pay-what-you-want model you don't own. Cults3D only populates
+            // fileUrl for free models or ones you've purchased.
+            $cents      = (int) ($creation['price']['cents'] ?? 0);
+            $formatted  = trim((string) ($creation['price']['formatted'] ?? ''));
+            $openPriced = (bool) ($creation['openPriced'] ?? false);
+            if ($hadBlueprintWithoutUrl && ($cents > 0 || $openPriced)) {
+                // Prefer Cults3D's own localized price string (correct currency
+                // symbol/format); fall back to a generic label if absent.
+                $price = $formatted !== ''
+                    ? $formatted
+                    : ($cents > 0 ? $cents . ' cents' : 'pay-what-you-want');
+                $this->lastError = 'Paid Cults3D model (' . $price . ') — download URL is '
+                    . 'only available after purchase, so it cannot be fetched.';
+            } elseif ($hadBlueprintWithoutUrl) {
+                $this->lastError = 'Cults3D withheld the download URL for this model '
+                    . '(it may require purchase or additional access).';
+            } else {
+                $this->lastError = 'No downloadable blueprints found for this creation.';
+            }
         }
         return $out;
     }
