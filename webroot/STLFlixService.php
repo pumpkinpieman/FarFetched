@@ -91,10 +91,12 @@ final class STLFlixService
     }
 
     /**
-     * Resolve the CDN ZIP download URL for a model.
+     * Resolve the CDN ZIP download URL for a model via GraphQL.
      *
-     * Strategy 1: GraphQL product query for the file URL field.
-     * Strategy 2: Scrape the product page for the download href.
+     * Probes several Strapi v4 field name candidates in a single query;
+     * picks the first URL ending in .zip. No page scraping — platform.stlflix.com
+     * is a Next.js SSR app that redirect-loops on server-side requests.
+     *
      * Returns '' and sets $lastError on failure.
      */
     public function getDownloadUrl(string $modelId, string $slug): string
@@ -106,63 +108,90 @@ final class STLFlixService
             return '';
         }
 
-        // Strategy 1: GraphQL — query product files.
-        $gqlSlug = $slug !== '' ? $slug : $modelId;
-        $query   = <<<GQL
-        {
-          products(filters: { slug: { eq: "{$gqlSlug}" } }, pagination: { pageSize: 1 }) {
-            data {
-              id
-              attributes {
-                name
-                slug
-                zip_file { data { attributes { url } } }
-                files { data { attributes { url name } } }
+        // Probe by slug first, then by numeric id if slug fails.
+        $candidates = [];
+        if ($slug !== '' && $slug !== $modelId) {
+            $candidates[] = ['field' => 'slug', 'val' => $slug];
+        }
+        if (is_numeric($modelId)) {
+            $candidates[] = ['field' => 'id', 'val' => $modelId];
+        }
+        if ($candidates === []) {
+            $candidates[] = ['field' => 'slug', 'val' => $modelId];
+        }
+
+        foreach ($candidates as ['field' => $field, 'val' => $val]) {
+            $filter = $field === 'id'
+                ? "filters: { id: { eq: {$val} } }"
+                : "filters: { slug: { eq: \"{$val}\" } }";
+
+            // Query all plausible Strapi file-field names in one round-trip.
+            $query = <<<GQL
+            {
+              products({$filter}, pagination: { pageSize: 1 }) {
+                data {
+                  id
+                  attributes {
+                    name
+                    slug
+                    pack      { data { attributes { url name } } }
+                    zip_file  { data { attributes { url name } } }
+                    file      { data { attributes { url name } } }
+                    files     { data { attributes { url name } } }
+                    downloads { data { attributes { url name } } }
+                    assets    { data { attributes { url name } } }
+                  }
+                }
               }
             }
-          }
-        }
-        GQL;
+            GQL;
 
-        $data = $this->graphql($query);
-        if ($data !== null) {
-            $attrs = $data['products']['data'][0]['attributes'] ?? [];
+            $data = $this->graphql($query);
+            if ($data === null) continue;
 
-            // Prefer explicit zip_file field.
-            $zipUrl = (string) ($attrs['zip_file']['data']['attributes']['url'] ?? '');
-            if ($zipUrl !== '') {
-                return $this->absoluteUrl($zipUrl);
-            }
+            $attrs = $data['products']['data'][0]['attributes'] ?? null;
+            if ($attrs === null) continue;
 
-            // Fall back to first file in files array.
-            foreach (($attrs['files']['data'] ?? []) as $f) {
-                $u = (string) ($f['attributes']['url'] ?? '');
-                if ($u !== '' && str_ends_with(strtolower($u), '.zip')) {
-                    return $this->absoluteUrl($u);
+            // Check every field candidate — return first .zip URL found.
+            foreach (['pack', 'zip_file', 'file', 'files', 'downloads', 'assets'] as $key) {
+                $entry = $attrs[$key] ?? null;
+                if ($entry === null) continue;
+
+                // Single-relation: { data: { attributes: { url } } }
+                // Multi-relation:  { data: [ { attributes: { url } } ] }
+                $items = isset($entry['data'][0]) ? $entry['data'] : [$entry['data'] ?? null];
+                foreach ($items as $item) {
+                    if (!is_array($item)) continue;
+                    $u = (string) ($item['attributes']['url'] ?? '');
+                    if ($u !== '') {
+                        return $this->absoluteUrl($u);
+                    }
                 }
             }
         }
 
-        // Strategy 2: Scrape the platform product page for a .zip link.
-        $pageSlug = $slug !== '' ? $slug : $modelId;
-        $pageUrl  = self::PLATFORM . '/product/' . rawurlencode($pageSlug);
-        $html     = $this->getHtml($pageUrl);
-        if ($html === '') {
-            // lastError already set by getHtml
-            return '';
+        // Last resort: ask the library endpoint for this specific model and
+        // look for a download_url / file_url field the normalize() drops.
+        $libUrl  = self::LIBRARY . '?product_id=' . rawurlencode($modelId);
+        $libData = $this->getJson($libUrl);
+        if (is_array($libData)) {
+            array_walk_recursive($libData, static function ($v, $k) use (&$found): void {
+                if (
+                    $found === null
+                    && is_string($v)
+                    && str_ends_with(strtolower($v), '.zip')
+                    && str_starts_with($v, 'http')
+                ) {
+                    $found = $v;
+                }
+            });
+            if (!empty($found)) return (string) $found;
         }
 
-        // Look for static.stlflix.com/*.zip href in the page.
-        if (preg_match('~https://static\.stlflix\.com/[^\s"\'<>]+\.zip~i', $html, $m)) {
-            return $m[0];
-        }
-
-        // Look for any *.zip download link.
-        if (preg_match('~href="([^"]+\.zip[^"]*)"~i', $html, $m)) {
-            return $this->absoluteUrl($m[1]);
-        }
-
-        $this->lastError = 'Could not resolve download URL for STLFlix model "' . $pageSlug . '".';
+        $label = $slug !== '' ? $slug : $modelId;
+        $this->lastError = 'Could not resolve download URL for STLFlix model "' . $label . '". '
+            . 'GraphQL returned no file fields — field names may have changed. '
+            . 'Check k8s.stlflix.com/graphql introspection.';
         return '';
     }
 
@@ -240,6 +269,36 @@ final class STLFlixService
         return $this->graphql($query) !== null;
     }
 
+    /**
+     * Return the field names on the ProductEntity type via introspection.
+     * Use for debugging when getDownloadUrl returns no URL.
+     * @return string[]
+     */
+    public function introspectProductFields(): array
+    {
+        $query = <<<'GQL'
+        {
+          __type(name: "ProductEntityResponse") {
+            fields { name }
+          }
+        }
+        GQL;
+        $data = $this->graphql($query);
+        $fields = [];
+        foreach (($data['__type']['fields'] ?? []) as $f) {
+            $fields[] = (string) ($f['name'] ?? '');
+        }
+        if ($fields === []) {
+            // Try the attributes wrapper type.
+            $q2 = '{ __type(name: "Product") { fields { name } } }';
+            $d2 = $this->graphql($q2);
+            foreach (($d2['__type']['fields'] ?? []) as $f) {
+                $fields[] = (string) ($f['name'] ?? '');
+            }
+        }
+        return array_filter($fields);
+    }
+
     // ---- Private helpers ---------------------------------------------------
 
     /** @return array<string,mixed>|null */
@@ -270,6 +329,7 @@ final class STLFlixService
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_POST           => true,
@@ -301,35 +361,29 @@ final class STLFlixService
         return $json;
     }
 
-    private function getHtml(string $url): string
+    /** GET a URL and return decoded JSON array, or null on error. */
+    private function getJson(string $url): ?array
     {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_USERAGENT      => self::UA,
             CURLOPT_HTTPHEADER     => [
-                'Accept: text/html,application/xhtml+xml,*/*',
+                'Accept: application/json',
                 'Authorization: Bearer ' . $this->token,
-                'Referer: ' . self::PLATFORM . '/',
             ],
         ]);
         $body = curl_exec($ch);
         $st   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err  = curl_error($ch);
         curl_close($ch);
 
-        if ($body === false || $err !== '') {
-            $this->lastError = 'Page fetch error: ' . $err;
-            return '';
-        }
-        if ($st >= 400) {
-            $this->lastError = 'HTTP ' . $st . ' fetching product page.';
-            return '';
-        }
-        return (string) $body;
+        if ($body === false || $st >= 400) return null;
+        $json = json_decode((string) $body, true);
+        return is_array($json) ? $json : null;
     }
 
     private function absoluteUrl(string $url): string

@@ -416,7 +416,12 @@ while (true) {
             if ($link === '') {
                 $msg = $stlfix->lastError !== '' ? $stlfix->lastError : 'Could not resolve STLFlix download URL.';
                 $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logerr('warn', '  STLFlix skipped: ' . $msg);
+                logerr('warn', '  STLFlix error: ' . $msg);
+                // Log available product fields to help diagnose field-name mismatch.
+                $fields = $stlfix->introspectProductFields();
+                if ($fields !== []) {
+                    logln('  STLFlix Product fields: ' . implode(', ', $fields));
+                }
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(STLFLIX_DELAY_SECONDS);
                 continue;
