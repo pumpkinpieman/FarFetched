@@ -179,13 +179,23 @@ final class STLFlixService
             $jsonUrl = self::PLATFORM . '/' . rawurlencode($slug) . '.json?slug=' . rawurlencode($slug);
             $data    = $this->getJson($jsonUrl);
             if (is_array($data)) {
-                // Walk the full response tree for a numeric fid.
+                // Log the top-level keys so we can identify the fid field name.
+                $topKeys = implode(', ', array_keys($data));
+                if (function_exists('logln')) logln('  STLFlix JSON keys: ' . $topKeys);
+
                 $fid = $this->extractFidFromData($data);
                 if ($fid !== '') return $fid;
 
                 // Also check for a direct .zip URL.
                 $url = $this->extractFirstZipUrl($data);
                 if ($url !== '') return '__URL__:' . $url;
+
+                // Log a snippet to help identify structure.
+                if (function_exists('logln')) {
+                    logln('  STLFlix JSON snippet: ' . substr(json_encode($data), 0, 400));
+                }
+            } else {
+                if (function_exists('logln')) logln('  STLFlix JSON endpoint returned null for: ' . $jsonUrl);
             }
         }
 
@@ -223,7 +233,12 @@ final class STLFlixService
             if ($data === null) continue;
 
             $attrs = $data['products']['data'][0]['attributes'] ?? null;
-            if (!is_array($attrs)) continue;
+            if (!is_array($attrs)) {
+                if (function_exists('logln')) logln('  STLFlix GQL: no product attrs for filter: ' . $filter);
+                continue;
+            }
+
+            if (function_exists('logln')) logln('  STLFlix GQL product attr keys: ' . implode(', ', array_keys($attrs)));
 
             foreach (['pack','zip_file','file','files','download','downloads','model_file','assets'] as $key) {
                 $entry = $attrs[$key] ?? null;
@@ -256,18 +271,33 @@ final class STLFlixService
 
     /**
      * Walk decoded JSON and return the first numeric string that looks like a Strapi file ID.
-     * Looks for keys named fid, file_id, id under file-like contexts.
+     * Handles Next.js pageProps nesting: { pageProps: { product: { ... } } }
+     * Also catches fid/file_id/fileId keys anywhere in the tree.
      */
     private function extractFidFromData(array $data): string
     {
-        // Direct key check first.
-        foreach (['fid', 'file_id', 'fileId'] as $key) {
-            array_walk_recursive($data, static function ($v, $k) use ($key, &$found): void {
-                if ($found === null && $k === $key && is_numeric($v)) {
-                    $found = (string) $v;
-                }
-            });
-            if (!empty($found)) return (string) $found;
+        // Unwrap Next.js SSR envelope if present.
+        $unwrapped = $data['pageProps'] ?? $data;
+        if (!is_array($unwrapped)) $unwrapped = $data;
+
+        // Also try one level deeper: pageProps.product, pageProps.data, etc.
+        $candidates = [$data, $unwrapped];
+        foreach (['product','data','props','initialData','serverData'] as $k) {
+            if (isset($unwrapped[$k]) && is_array($unwrapped[$k])) {
+                $candidates[] = $unwrapped[$k];
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            foreach (['fid', 'file_id', 'fileId', 'f_id'] as $key) {
+                $found = null;
+                array_walk_recursive($candidate, static function ($v, $k) use ($key, &$found): void {
+                    if ($found === null && $k === $key && is_numeric($v)) {
+                        $found = (string) $v;
+                    }
+                });
+                if ($found !== null) return $found;
+            }
         }
         return '';
     }
