@@ -166,69 +166,15 @@ final class STLFlixService
     /**
      * Resolve the fid (file entity ID) for a product.
      *
-     * The fid comes from the library API response — it's a field in the raw
-     * item data that normalize() currently drops. We fetch the full library
-     * and find the matching product, then walk the raw data for any numeric
-     * ID associated with a file/zip relation.
+     * Confirmed via GraphQL exploration:
+     * - File relation fields on Product: stl_file, bambu_file (both UploadFile relations)
+     * - prusa_file is a plain String (not a relation, no id)
+     * - fid = the Strapi UploadFile entity id from whichever field is non-null
      *
-     * Fallback: Next.js JSON endpoint, then GraphQL probe.
+     * POST /api/product/product-file with {"fid":"<id>"} returns the CDN URL.
      */
     private function resolveFid(int $idInt, string $slug): string
     {
-        // --- Primary: library API — fetch raw and scan for fid ---
-        $payload = ['interval' => 'ALL_TIME', 'miniatures' => false, 'filament' => false, 'category_id' => null];
-        $raw = $this->postJson(self::LIBRARY, $payload);
-        if (is_array($raw)) {
-            foreach ($raw as $item) {
-                if (!is_array($item)) continue;
-
-                // Match by product id or slug.
-                $p       = $item['product']['data'] ?? $item['data'] ?? $item;
-                $pid     = (string) ($p['id'] ?? '');
-                $pslug   = (string) ($p['attributes']['slug'] ?? '');
-                $matched = ($idInt > 0 && $pid === (string) $idInt)
-                        || ($slug !== '' && $pslug === $slug);
-                if (!$matched) continue;
-
-                if (function_exists('logln')) {
-                    logln('  STLFlix library item keys: ' . implode(', ', array_keys($item)));
-                    logln('  STLFlix product attr keys: ' . implode(', ', array_keys($p['attributes'] ?? [])));
-                }
-
-                // Walk the entire raw item for fid/file_id keys.
-                $fid = null;
-                array_walk_recursive($item, static function ($v, $k) use (&$fid): void {
-                    if ($fid === null && in_array($k, ['fid','file_id','fileId','f_id'], true) && is_numeric($v)) {
-                        $fid = (string) $v;
-                    }
-                });
-                if ($fid !== null) return $fid;
-
-                // Also check for a direct .zip URL anywhere in the item.
-                $url = $this->extractFirstZipUrl($item);
-                if ($url !== '') return '__URL__:' . $url;
-
-                // Log the full raw item so we can identify the fid field.
-                if (function_exists('logln')) {
-                    logln('  STLFlix raw item: ' . substr(json_encode($item), 0, 600));
-                }
-                break; // found the product but no fid — stop searching
-            }
-        }
-
-        // --- Fallback: Next.js JSON endpoint ---
-        if ($slug !== '') {
-            $jsonUrl = self::PLATFORM . '/' . rawurlencode($slug) . '.json?slug=' . rawurlencode($slug);
-            $data    = $this->getJson($jsonUrl);
-            if (is_array($data)) {
-                $fid = $this->extractFidFromData($data);
-                if ($fid !== '') return $fid;
-                $url = $this->extractFirstZipUrl($data);
-                if ($url !== '') return '__URL__:' . $url;
-            }
-        }
-
-        // --- Fallback: GraphQL product file-relation probe ---
         $filters = [];
         if ($idInt > 0) $filters[] = "filters: { id: { eq: {$idInt} } }";
         if ($slug !== '') $filters[] = "filters: { slug: { eq: \"{$slug}\" } }";
@@ -240,40 +186,47 @@ final class STLFlixService
                 data {
                   id
                   attributes {
-                    pack       { data { id attributes { url } } }
-                    zip_file   { data { id attributes { url } } }
-                    file       { data { id attributes { url } } }
-                    files      { data { id attributes { url } } }
-                    download   { data { id attributes { url } } }
-                    downloads  { data { id attributes { url } } }
-                    model_file { data { id attributes { url } } }
-                    assets     { data { id attributes { url } } }
+                    stl_file   { data { id attributes { url } } }
+                    bambu_file { data { id attributes { url } } }
+                    prusa_file
                   }
                 }
               }
             }
             GQL;
+
             $data = $this->graphql($query);
             if ($data === null) continue;
+
             $attrs = $data['products']['data'][0]['attributes'] ?? null;
             if (!is_array($attrs)) continue;
-            if (function_exists('logln')) logln('  STLFlix GQL attr keys: ' . implode(', ', array_keys($attrs)));
-            foreach (['pack','zip_file','file','files','download','downloads','model_file','assets'] as $key) {
-                $entry = $attrs[$key] ?? null;
-                if ($entry === null) continue;
-                $items = isset($entry['data']['id']) ? [$entry['data']] : ($entry['data'] ?? []);
-                foreach ((array)$items as $item) {
-                    if (!is_array($item)) continue;
-                    $fid = (string) ($item['id'] ?? '');
-                    if ($fid !== '' && is_numeric($fid)) return $fid;
-                    $u = (string) ($item['attributes']['url'] ?? '');
-                    if ($u !== '' && stripos($u, '.zip') !== false) return '__URL__:' . $this->absoluteUrl($u);
+
+            // Check stl_file and bambu_file (UploadFile relations with id).
+            foreach (['stl_file', 'bambu_file'] as $key) {
+                $entry = $attrs[$key]['data'] ?? null;
+                if (!is_array($entry)) continue;
+
+                $fid = (string) ($entry['id'] ?? '');
+                if ($fid !== '' && is_numeric($fid)) {
+                    if (function_exists('logln')) logln('  STLFlix fid=' . $fid . ' from ' . $key);
+                    return $fid;
                 }
+                // Also grab direct URL if present (fallback).
+                $u = (string) ($entry['attributes']['url'] ?? '');
+                if ($u !== '') return '__URL__:' . $this->absoluteUrl($u);
+            }
+
+            // prusa_file is a plain string URL or filename — use directly if it's a zip.
+            $prusaFile = (string) ($attrs['prusa_file'] ?? '');
+            if ($prusaFile !== '') {
+                if (str_starts_with($prusaFile, 'http')) return '__URL__:' . $prusaFile;
+                // It's likely just a filename — can't use without fid.
+                if (function_exists('logln')) logln('  STLFlix prusa_file (string): ' . $prusaFile);
             }
         }
 
         $this->lastError = 'Could not find fid for "' . $slug . '". '
-            . 'Library API matched the product but no fid/file_id key found — check log for raw item dump.';
+            . 'stl_file and bambu_file both null for this product.';
         return '';
     }
 
@@ -282,34 +235,6 @@ final class STLFlixService
      * Handles Next.js pageProps nesting: { pageProps: { product: { ... } } }
      * Also catches fid/file_id/fileId keys anywhere in the tree.
      */
-    private function extractFidFromData(array $data): string
-    {
-        // Unwrap Next.js SSR envelope if present.
-        $unwrapped = $data['pageProps'] ?? $data;
-        if (!is_array($unwrapped)) $unwrapped = $data;
-
-        // Also try one level deeper: pageProps.product, pageProps.data, etc.
-        $candidates = [$data, $unwrapped];
-        foreach (['product','data','props','initialData','serverData'] as $k) {
-            if (isset($unwrapped[$k]) && is_array($unwrapped[$k])) {
-                $candidates[] = $unwrapped[$k];
-            }
-        }
-
-        foreach ($candidates as $candidate) {
-            foreach (['fid', 'file_id', 'fileId', 'f_id'] as $key) {
-                $found = null;
-                array_walk_recursive($candidate, static function ($v, $k) use ($key, &$found): void {
-                    if ($found === null && $k === $key && is_numeric($v)) {
-                        $found = (string) $v;
-                    }
-                });
-                if ($found !== null) return $found;
-            }
-        }
-        return '';
-    }
-
     /**
      * Stream a remote URL to a local file path.
      * The static.stlflix.com CDN requires no Authorization — just Referer.
