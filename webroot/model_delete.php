@@ -16,6 +16,13 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 
+// Resume the session so $_SESSION['csrf'] (minted by the viewer page) is
+// available for the token check below. Without this the session is empty and
+// every request fails CSRF validation.
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_start();
+}
+
 header('Content-Type: application/json');
 
 function fail(string $msg, int $code = 400): void
