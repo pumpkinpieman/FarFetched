@@ -584,7 +584,7 @@ $csrf = csrf_token();
             const t = new Image();
             t.onload  = () => resolve(t.naturalWidth > 10 ? u : null);
             t.onerror = () => resolve(null);
-            t.src = encodeURI(u);
+            t.src = thumbSrc(u);
           })));
           const good = valid.filter(Boolean);
           if (good.length > 1) {

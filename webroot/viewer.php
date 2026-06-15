@@ -243,7 +243,7 @@ foreach ($sources as $s) {
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.05));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.4));
     const key = new THREE.DirectionalLight(0xffffff, 1.4);
     key.position.set(1, 1.4, 1);
     scene.add(key);
@@ -333,10 +333,17 @@ foreach ($sources as $s) {
           clearModel();
           object.traverse(o => {
             if (o.isMesh) {
+              // Strip vertex colors that cause black rendering
               if (o.geometry?.attributes?.color) {
                 o.geometry.deleteAttribute('color');
               }
-              o.material = material3mf;
+              // Replace all embedded materials with our neutral material
+              if (Array.isArray(o.material)) {
+                o.material = o.material.map(() => material3mf);
+              } else {
+                o.material = material3mf;
+              }
+              o.material.needsUpdate = true;
             }
           });
           scene.add(object);

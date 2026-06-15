@@ -444,7 +444,7 @@ while (true) {
                     continue;
                 }
 
-                logln('  Downloading: ' . $zipName . ' (' . $fileNum . '/' . $fileTotal . ') from ' . $link);
+                logln('  Downloading: ' . $zipName . ' (' . $fileNum . '/' . $fileTotal . ') from [CDN]');
                 $pwFn = progress_writer($jobId, $zipName);
                 $progressCb = static function (int $bytes) use ($pwFn, $fileNum, $fileTotal): void {
                     $pwFn(0, $bytes, $fileNum, $fileTotal);
