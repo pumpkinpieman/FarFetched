@@ -248,12 +248,10 @@ while (true) {
         private \PDO $pdo;
         public function __construct(\PDO $pdo) { $this->pdo = $pdo; }
         public function execute(array $p): void {
-            $stmt = $this->pdo->prepare(
-                "UPDATE download_jobs
+            $sql = "UPDATE download_jobs
                  SET status = :st, attempts = attempts + :inc, last_error = :err,
                      saved_path = :path, updated_at = datetime('now')
-                 WHERE id = :id"
-            );
+                 WHERE id = :id";
             $params = [
                 ':st'   => (string) ($p[':st']   ?? ''),
                 ':inc'  => (int)    ($p[':inc']  ?? 0),
@@ -263,8 +261,13 @@ while (true) {
             ];
             // busy_timeout (30s) handles normal contention; this retry is a final
             // guard so a transient lock never crashes the worker mid-queue.
+            // The statement is re-prepared inside each attempt: a non-emulated
+            // SQLite handle left over from a failed execute() cannot be re-run
+            // (it raises "bad parameter or other API misuse"), so every retry
+            // needs a fresh statement.
             for ($attempt = 1; ; $attempt++) {
                 try {
+                    $stmt = $this->pdo->prepare($sql);
                     $stmt->execute($params);
                     return;
                 } catch (\PDOException $e) {
