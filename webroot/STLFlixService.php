@@ -166,47 +166,72 @@ final class STLFlixService
     /**
      * Resolve the fid (file entity ID) for a product.
      *
-     * Primary: GET platform.stlflix.com/<slug>.json?slug=<slug>
-     *   Next.js SSR data endpoint — returns full product props including file IDs.
-     *   No auth required, just Referer.
+     * The fid comes from the library API response — it's a field in the raw
+     * item data that normalize() currently drops. We fetch the full library
+     * and find the matching product, then walk the raw data for any numeric
+     * ID associated with a file/zip relation.
      *
-     * Fallback: GraphQL product query probing all plausible file-relation fields.
+     * Fallback: Next.js JSON endpoint, then GraphQL probe.
      */
     private function resolveFid(int $idInt, string $slug): string
     {
-        // --- Primary: Next.js JSON data endpoint ---
+        // --- Primary: library API — fetch raw and scan for fid ---
+        $payload = ['interval' => 'ALL_TIME', 'miniatures' => false, 'filament' => false, 'category_id' => null];
+        $raw = $this->postJson(self::LIBRARY, $payload);
+        if (is_array($raw)) {
+            foreach ($raw as $item) {
+                if (!is_array($item)) continue;
+
+                // Match by product id or slug.
+                $p       = $item['product']['data'] ?? $item['data'] ?? $item;
+                $pid     = (string) ($p['id'] ?? '');
+                $pslug   = (string) ($p['attributes']['slug'] ?? '');
+                $matched = ($idInt > 0 && $pid === (string) $idInt)
+                        || ($slug !== '' && $pslug === $slug);
+                if (!$matched) continue;
+
+                if (function_exists('logln')) {
+                    logln('  STLFlix library item keys: ' . implode(', ', array_keys($item)));
+                    logln('  STLFlix product attr keys: ' . implode(', ', array_keys($p['attributes'] ?? [])));
+                }
+
+                // Walk the entire raw item for fid/file_id keys.
+                $fid = null;
+                array_walk_recursive($item, static function ($v, $k) use (&$fid): void {
+                    if ($fid === null && in_array($k, ['fid','file_id','fileId','f_id'], true) && is_numeric($v)) {
+                        $fid = (string) $v;
+                    }
+                });
+                if ($fid !== null) return $fid;
+
+                // Also check for a direct .zip URL anywhere in the item.
+                $url = $this->extractFirstZipUrl($item);
+                if ($url !== '') return '__URL__:' . $url;
+
+                // Log the full raw item so we can identify the fid field.
+                if (function_exists('logln')) {
+                    logln('  STLFlix raw item: ' . substr(json_encode($item), 0, 600));
+                }
+                break; // found the product but no fid — stop searching
+            }
+        }
+
+        // --- Fallback: Next.js JSON endpoint ---
         if ($slug !== '') {
             $jsonUrl = self::PLATFORM . '/' . rawurlencode($slug) . '.json?slug=' . rawurlencode($slug);
             $data    = $this->getJson($jsonUrl);
             if (is_array($data)) {
-                // Log the top-level keys so we can identify the fid field name.
-                $topKeys = implode(', ', array_keys($data));
-                if (function_exists('logln')) logln('  STLFlix JSON keys: ' . $topKeys);
-
                 $fid = $this->extractFidFromData($data);
                 if ($fid !== '') return $fid;
-
-                // Also check for a direct .zip URL.
                 $url = $this->extractFirstZipUrl($data);
                 if ($url !== '') return '__URL__:' . $url;
-
-                // Log a snippet to help identify structure.
-                if (function_exists('logln')) {
-                    logln('  STLFlix JSON snippet: ' . substr(json_encode($data), 0, 400));
-                }
-            } else {
-                if (function_exists('logln')) logln('  STLFlix JSON endpoint returned null for: ' . $jsonUrl);
             }
         }
 
-        // --- Fallback: GraphQL product query ---
+        // --- Fallback: GraphQL product file-relation probe ---
         $filters = [];
-        if ($idInt > 0) {
-            $filters[] = "filters: { id: { eq: {$idInt} } }";
-        }
-        if ($slug !== '') {
-            $filters[] = "filters: { slug: { eq: \"{$slug}\" } }";
-        }
+        if ($idInt > 0) $filters[] = "filters: { id: { eq: {$idInt} } }";
+        if ($slug !== '') $filters[] = "filters: { slug: { eq: \"{$slug}\" } }";
 
         foreach ($filters as $filter) {
             $query = <<<GQL
@@ -215,57 +240,40 @@ final class STLFlixService
                 data {
                   id
                   attributes {
-                    pack       { data { id attributes { url name } } }
-                    zip_file   { data { id attributes { url name } } }
-                    file       { data { id attributes { url name } } }
-                    files      { data { id attributes { url name } } }
-                    download   { data { id attributes { url name } } }
-                    downloads  { data { id attributes { url name } } }
-                    model_file { data { id attributes { url name } } }
-                    assets     { data { id attributes { url name } } }
+                    pack       { data { id attributes { url } } }
+                    zip_file   { data { id attributes { url } } }
+                    file       { data { id attributes { url } } }
+                    files      { data { id attributes { url } } }
+                    download   { data { id attributes { url } } }
+                    downloads  { data { id attributes { url } } }
+                    model_file { data { id attributes { url } } }
+                    assets     { data { id attributes { url } } }
                   }
                 }
               }
             }
             GQL;
-
             $data = $this->graphql($query);
             if ($data === null) continue;
-
             $attrs = $data['products']['data'][0]['attributes'] ?? null;
-            if (!is_array($attrs)) {
-                if (function_exists('logln')) logln('  STLFlix GQL: no product attrs for filter: ' . $filter);
-                continue;
-            }
-
-            if (function_exists('logln')) logln('  STLFlix GQL product attr keys: ' . implode(', ', array_keys($attrs)));
-
+            if (!is_array($attrs)) continue;
+            if (function_exists('logln')) logln('  STLFlix GQL attr keys: ' . implode(', ', array_keys($attrs)));
             foreach (['pack','zip_file','file','files','download','downloads','model_file','assets'] as $key) {
                 $entry = $attrs[$key] ?? null;
                 if ($entry === null) continue;
-
-                $items = [];
-                if (isset($entry['data']['id'])) {
-                    $items[] = $entry['data'];
-                } elseif (is_array($entry['data'] ?? null)) {
-                    $items = $entry['data'];
-                }
-
-                foreach ($items as $item) {
+                $items = isset($entry['data']['id']) ? [$entry['data']] : ($entry['data'] ?? []);
+                foreach ((array)$items as $item) {
                     if (!is_array($item)) continue;
                     $fid = (string) ($item['id'] ?? '');
                     if ($fid !== '' && is_numeric($fid)) return $fid;
                     $u = (string) ($item['attributes']['url'] ?? '');
-                    if ($u !== '' && stripos($u, '.zip') !== false) {
-                        return '__URL__:' . $this->absoluteUrl($u);
-                    }
+                    if ($u !== '' && stripos($u, '.zip') !== false) return '__URL__:' . $this->absoluteUrl($u);
                 }
             }
         }
 
-        $this->lastError = 'Could not find fid for STLFlix model "' . $slug . '". '
-            . 'Try introspection: POST ' . self::GRAPHQL
-            . ' {"query":"{ __type(name:\\"Product\\") { fields { name } } }"}';
+        $this->lastError = 'Could not find fid for "' . $slug . '". '
+            . 'Library API matched the product but no fid/file_id key found — check log for raw item dump.';
         return '';
     }
 
