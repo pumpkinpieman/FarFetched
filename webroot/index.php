@@ -490,6 +490,14 @@ $csrf = csrf_token();
     }
   }
 
+  // Proxy CDN images that block cross-origin requests.
+  const PROXY_SOURCES = ['cults3d', 'thingiverse'];
+  function thumbSrc(url) {
+    if (!url) return '';
+    if (PROXY_SOURCES.includes(SOURCE)) return 'proxy.php?url=' + encodeURIComponent(url);
+    return encodeURI(url);
+  }
+
   // Build a card DOM node from a model object (same markup as the PHP render).
   function makeCard(m){
     const card = document.createElement('div');
@@ -505,13 +513,6 @@ $csrf = csrf_token();
       ? m.images
       : (m.thumb ? [m.thumb] : []);
     const multi = imgs.length > 1;
-
-    const PROXY_SOURCES = ['cults3d', 'thingiverse'];
-    function thumbSrc(url) {
-      if (!url) return '';
-      if (PROXY_SOURCES.includes(SOURCE)) return 'proxy.php?url=' + encodeURIComponent(url);
-      return encodeURI(url);
-    }
 
     const thumb = imgs.length
       ? '<img class="thumb-img" src="'+thumbSrc(imgs[0])+'" alt="" loading="lazy">'

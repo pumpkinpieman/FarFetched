@@ -18,6 +18,7 @@ $ALLOWED_HOSTS = [
     'cdn.cults3d.com',
     'files.cults3d.com',
     'cdn.thingiverse.com',
+    'resize.thingiverse.com',
     'thingiverse-production.s3.amazonaws.com',
     'thingiverse-production.s3-us-west-2.amazonaws.com',
     'cdn.thangs.com',
@@ -37,6 +38,22 @@ if ($url === '') {
 $parsed = parse_url($url);
 $host   = strtolower($parsed['host'] ?? '');
 $scheme = strtolower($parsed['scheme'] ?? '');
+
+// Thingiverse resize service wraps the real CDN URL in ?url= param.
+// Unwrap it so we fetch the actual image directly.
+if ($host === 'resize.thingiverse.com' && isset($parsed['query'])) {
+    parse_str($parsed['query'], $qp);
+    if (isset($qp['url']) && str_starts_with($qp['url'], 'https://')) {
+        $innerParsed = parse_url($qp['url']);
+        $innerHost   = strtolower($innerParsed['host'] ?? '');
+        if (in_array($innerHost, $ALLOWED_HOSTS, true)) {
+            $url  = $qp['url'];
+            $parsed = $innerParsed;
+            $host   = $innerHost;
+            $scheme = 'https';
+        }
+    }
+}
 
 if ($scheme !== 'https' || !in_array($host, $ALLOWED_HOSTS, true)) {
     http_response_code(403);
