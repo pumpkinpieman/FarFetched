@@ -254,13 +254,31 @@ while (true) {
                      saved_path = :path, updated_at = datetime('now')
                  WHERE id = :id"
             );
-            $stmt->execute([
+            $params = [
                 ':st'   => (string) ($p[':st']   ?? ''),
                 ':inc'  => (int)    ($p[':inc']  ?? 0),
                 ':err'  => (string) ($p[':err']  ?? ''),
                 ':path' => (string) ($p[':path'] ?? ''),
                 ':id'   => (int)    ($p[':id']   ?? 0),
-            ]);
+            ];
+            // busy_timeout (30s) handles normal contention; this retry is a final
+            // guard so a transient lock never crashes the worker mid-queue.
+            for ($attempt = 1; ; $attempt++) {
+                try {
+                    $stmt->execute($params);
+                    return;
+                } catch (\PDOException $e) {
+                    $locked = stripos($e->getMessage(), 'locked') !== false
+                           || stripos($e->getMessage(), 'busy') !== false;
+                    if (!$locked || $attempt >= 5) {
+                        throw $e;
+                    }
+                    if (function_exists('logln')) {
+                        logln('  DB locked, retrying status write (' . $attempt . '/5)…');
+                    }
+                    usleep(500000 * $attempt); // 0.5s, 1s, 1.5s, 2s backoff
+                }
+            }
         }
     };
 

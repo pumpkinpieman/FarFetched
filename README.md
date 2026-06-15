@@ -1,204 +1,130 @@
-<p align="center">
-  <img src="assets/logo-wordmark.svg" alt="FarFetched" width="360">
-</p>
-
 # FarFetched
 
-A small, single-user, **personal-use** tool for Local (Apache + PHP):
-browse Printables by category, select models, queue them, and a paced
-background worker downloads the STL/3MF files to a folder you choose
-(default `/mnt/user/Downloads/models`).
+**A patient, self-hosted fetcher for your 3D-print library.**
 
-It is **not** a site mirror. It downloads what you'd download by hand, slowly
-(default 120s between files), one logged-in session, respecting per-model
-licenses. Pace + filters keep it on the right side of Printables' ToS.
+FarFetched browses, searches, and downloads models from **Printables, MakerWorld, Thingiverse, Cults3D, and STLFlix** at a deliberate, polite pace — then keeps them in a tidy local library with a built-in STL / 3MF viewer. One container, your server.
 
+Built by [BTCB Design](https://www.btcbdesign.com).
 
-## Run with Docker (recommended on Local)
+---
 
-Single container: Apache + PHP 8.3 + cron, all inside. No host PHP version
-fights, no `nobody:users` permission dance.
+## Why
 
-```bash
-# 1. clone
-git clone https://github.com/pumpkinpieman/farfetched.git
-cd farfetched
+Bulk-downloading from model sites either means clicking one file at a time forever, or hammering a free API until it rate-limits you. FarFetched sits in the middle: queue everything you want, and a background worker pulls it down one file at a time with a configurable delay — courteous to the source, hands-off for you. Everything lands in a clean local folder you own, browsable in-app and ready for your slicer.
 
-# 2. point the downloads volume at a real host folder
-#    (edit docker-compose.yml: /mnt/user/Downloads/models:/downloads)
+---
 
-# 3. build + run
-docker compose up -d --build
+## Features
 
-# 4. browse
-open http://localhost:8088/
-```
+- **Five sources, one queue** — Printables, MakerWorld, Thingiverse, Cults3D, and STLFlix. Switch sources without losing your selection.
+- **Paced downloads** — a configurable delay between every fetch keeps the source service happy. The queue shows exactly when the next file fires.
+- **Live queue progress** — per-file and overall progress update in real time without reloading, including source badges (PT / MW / TV / C3D / SF) on every job.
+- **Search & infinite scroll** — keyword search across all five sources, results streaming in as you scroll.
+- **STL & 3MF viewer** — spin up any downloaded model in the browser. A resilient 3MF loader handles slicer exports that trip up stock parsers.
+- **Model management** — delete models directly from the viewer with multi-select and a confirm step.
+- **Local library** — downloads land in a clean, organized folder you own, one subfolder per source.
+- **Cross-category multi-select** — build a batch across categories and sources before hitting Download.
+- **Prefer-pack option** — optionally pull whole-model ZIPs and extract, instead of fetching files one at a time.
+- **Paste-once auth** — drop in one token per source; FarFetched keeps itself signed in.
 
-Then: **Settings** (paste token, confirm download dir is `/downloads`) →
-**Verify Seams** → **Browse** → watch **Queue**. The worker runs on cron
-inside the container every 5 min, self-paced at `FETCHER_DOWNLOAD_DELAY`
-seconds per file.
+---
 
-Persistence:
-- `farfetched_private` named volume holds the token, SQLite queue, and logs —
-  survives rebuilds.
-- Your chosen host folder (bind-mounted to `/downloads`) is where STL/3MF
-  files land.
-
-Env knobs (in `docker-compose.yml`) seed the **initial** values:
-- `FETCHER_DOWNLOAD_DELAY` — seconds between files (default 120; raise to be gentler).
-- `FETCHER_DOWNLOAD_DIR` — in-container download path (default `/downloads`; leave as-is).
-- `FETCHER_MAX_ATTEMPTS`, `FETCHER_BATCH_CAP` — retry cap / submit cap.
-
-After first run, tune these live in **Settings → Worker & Pacing** (delay,
-retries, batch cap, and a Pause toggle). The UI writes `private/config.php`,
-which **overrides the env defaults** and takes effect on the worker's next cron
-tick — no rebuild, no compose edit. Env vars only set the starting point.
-
-### Unraid
-Add via **Docker → Add Container** (or Compose Manager): map a host port to
-container `80`, bind a host share to `/downloads`, and create/keep the
-`private` volume. No template needed beyond that.
-
-## Publishing to GitHub
-
-`private/` and all secrets/state are gitignored, so a fresh clone starts clean.
-Before you push:
-- This is framed **personal-use / educational**. The Printables API calls are
-  reverse-engineered and unverified; the README and pacing defaults stay
-  conservative on purpose. Don't market it as "download everything."
-- Add a `LICENSE` if you want one (MIT is typical for a tool like this).
-- `verify.php` is a diagnostic that exposes raw API output — fine in the repo,
-  but block or delete it on any long-lived deployment.
+## Quick start (Docker)
 
 ```bash
-git init && git add . && git commit -m "Initial commit: FarFetched"
-git branch -M main
-git remote add origin https://github.com/pumpkinpieman/farfetched.git
-git push -u origin main
+docker run -d \
+  --name FarFetched \
+  -p 16545:80 \
+  -e FETCHER_DOWNLOAD_DIR=/downloads \
+  -e FETCHER_DOWNLOAD_DELAY=120 \
+  -v /path/to/your/models:/downloads \
+  -v /path/to/persistent/data:/var/www/html/private \
+  ghcr.io/pumpkinpieman/farfetched:latest
 ```
 
+Then open `http://your-server:16545` and add your source tokens under **Settings**.
 
-## Layout
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FETCHER_DOWNLOAD_DIR` | `/downloads` | Container path where models are saved (bind-mount this). |
+| `FETCHER_DOWNLOAD_DELAY` | `120` | Default seconds between downloads (also tunable per-source in Settings). |
+
+### Volumes
+
+| Mount | Purpose |
+|---|---|
+| `/downloads` | Where your models land. Map to a host folder you control. |
+| `/var/www/html/private` | Persistent state: SQLite job queue, tokens, config, logs. |
+
+---
+
+## Finding your auth tokens
+
+Each source needs a token or credentials, pulled from your browser's DevTools while logged in. The in-app **Settings → Sources** page and the home page include step-by-step guides for Chrome, Firefox, Edge, and Safari. In brief:
+
+- **Printables / MakerWorld / Thingiverse / STLFlix** — DevTools → Network → find an API/GraphQL request → copy the `Authorization: Bearer …` header.
+- **Cults3D** — DevTools → Application/Storage → Cookies → copy `user_email` and `user_token`.
+
+Tokens expire on each platform's own schedule (Printables ~1h, STLFlix ~30 days); just re-paste when a source stops authing.
+
+---
+
+## Architecture
+
+- **PHP 8.3 + Apache** in a single Docker image.
+- **SQLite (WAL)** job queue in the persistent volume.
+- **Background worker** invoked by cron, self-locking against overlap, self-pacing between downloads.
+- **Three.js** viewer for STL/3MF preview.
+- **Vanilla JS** front end — no build step.
+
+### Notable engineering
+
+- **Lock-free live progress** — the worker streams state to a small JSON file the UI polls, rather than fighting the job store for write locks.
+- **Defensive API queries** — GraphQL queries ask for the richer shape first and fall back automatically, so a schema change degrades one feature instead of blanking the page.
+- **Resilient 3MF loading** — a fallback unzips the archive and parses mesh geometry directly, then re-seats the model upright.
+- **Cron-safe path resolution** — path resolution falls back through the process env, the entrypoint env file, and the conventional mount point, so downloads land correctly regardless of how the worker is launched.
+- **Server-side image proxy** — thumbnails from CORS-restricted CDNs (Cults3D, Thingiverse) are streamed through an allowlisted server-side proxy.
+- **Auto-format detection with fallback** — handles zip vs. bare .3mf/.stl per model, with an STL → 3MF → pack fallback when a requested format is missing.
+
+---
+
+## Project layout
 
 ```
-farfetched/
-├── webroot/                  <- Apache DocumentRoot points HERE
-│   ├── bootstrap.php          shared: paths, SQLite PDO, config stores, helpers
-│   ├── index.php              browse + filter + select + queue
-│   ├── jobs.php               live queue status
-│   ├── settings.php           token + download-location config
-│   ├── verify.php             API-seam probe (raw JSON; delete after verifying)
-│   ├── enqueue.php            POST: selection -> queued jobs
-│   ├── PrintablesService.php  live GraphQL client
-│   ├── worker.php             CLI-only paced queue drainer (cron)
-│   └── .htaccess              blocks worker.php, db, dotfiles
-├── deploy/
-│   ├── fetcher.conf           Apache 2.4 virtual host
-│   └── hosts-entry.txt        hosts-file line for localhost.fetcher
-├── private/                   created at runtime, OUTSIDE webroot:
-│   ├── printables_token.php     your session token (chmod 600)
-│   ├── download_dir.php         chosen download path
-│   ├── fetcher.db               SQLite queue (WAL)
-│   └── *.log                    worker + apache logs
-└── schema.sql                 reference (auto-applied by bootstrap)
+webroot/                     # Apache document root
+├── index.php                # Browse / search UI + router
+├── home.php                 # Source picker + token guide
+├── jobs.php / jobs_status.php  # Download queue (live)
+├── viewer.php               # STL / 3MF 3D viewer + delete
+├── settings.php             # Per-source auth, worker tuning, donate
+├── worker.php               # CLI download worker (cron)
+├── bootstrap.php            # Config, paths, DB, shared helpers
+├── proxy.php                # Server-side image proxy
+├── model_file.php           # Path-safe file streaming for the viewer
+├── model_delete.php         # Model deletion endpoint
+├── enqueue.php / job_action.php
+└── *Service.php             # One client per source
 ```
 
-`private/` MUST sit one level above `webroot/`. The code resolves it as
-`dirname(webroot)/private`, so deploy the whole folder and point Apache at
-`webroot/`.
+---
 
-## 1. Deploy + Apache vhost
+## Security notes
 
-1. Copy the project somewhere on Local, e.g.
-   `/mnt/user/appdata/farfetched/`. (If you use a different path, edit
-   the two paths in `deploy/fetcher.conf`.)
-2. Install the vhost:
-   - Debian/Ubuntu Apache: copy `deploy/fetcher.conf` to
-     `/etc/apache2/sites-available/`, then `a2ensite fetcher && systemctl reload apache2`.
-   - Generic httpd: drop it in `conf.d/` (or `Include` it) and reload.
-   - Requires `mod_rewrite`/`AllowOverride All` so the bundled `.htaccess` applies.
-3. PHP 8.1+ with `curl`, `pdo_sqlite`.
+- All state-changing endpoints require POST + CSRF token.
+- Source slugs and model names are validated to single path segments; deletion is confirmed to resolve inside the source directory via `realpath()` before any file is touched.
+- The image proxy is host-allowlisted and follows redirects only within that allowlist (SSRF-safe).
+- Tokens live in the private volume, never in the web root.
 
-## 2. Hosts entry (so `localhost.fetcher` resolves)
+---
 
-On every machine you browse FROM, add the line in `deploy/hosts-entry.txt` to
-the hosts file (use `127.0.0.1` to browse on Local itself, or Local's LAN
-IP to browse from another machine):
+## Support
 
-```
-127.0.0.1    localhost.fetcher
-```
+Like the project? [Buy me a ko-fi ☕](https://ko-fi.com/bloodthirstycheeseburger90415)
 
-| OS            | Hosts file path                                  |
-|---------------|--------------------------------------------------|
-| Linux / macOS | `/etc/hosts` (sudo)                              |
-| Windows       | `C:\Windows\System32\drivers\etc\hosts` (admin)  |
+---
 
-Then browse to **http://localhost.fetcher/**.
+## License
 
-## 3. Configure (Settings page)
-
-- **Token:** log into printables.com → DevTools → Network → click any
-  `graphql` request → copy the `Authorization` header value → paste → Save →
-  Validate.
-- **Download Location:** confirm/adjust path → Save & Create. Green dot =
-  writable; amber = fix share permissions (below) and re-save.
-
-## 4. Verify the API seams (IMPORTANT — do before a real run)
-
-The Printables API is undocumented / reverse-engineered. Open
-**http://localhost.fetcher/verify.php** and run each probe. It prints the RAW
-JSON Printables returns, so you can compare actual field names against what
-`PrintablesService.php` assumes, and edit the service where they differ.
-
-How to get the inputs from DevTools (logged into printables.com):
-1. **Token** → Network tab → any `graphql` request → Request Headers →
-   `Authorization`. (Already done in Settings.)
-2. **categoryId [S2]** → click a left-nav category on the site → watch the new
-   `graphql` request → in its **Payload**, read `variables.categoryId`. Plug
-   that number into the search probe. Fill the confirmed IDs into
-   `PrintablesService::CATEGORY_IDS`.
-3. **model id [S4]** → open any model page; the id is the number in the URL
-   (`/model/<id>-slug`). Run the files probe; confirm the field that holds the
-   file list (`stls`, etc.) and each file's `id`/`name`.
-4. **file id [S5]** → from the files-probe output. Run the link probe; confirm
-   `getDownloadLink` returns `output.link`, and that the `fileType` enum value
-   (STL vs BINARY_STL vs 3MF) and `source` are accepted.
-
-Seams, all marked `SEAM TO VERIFY` in code:
-- **[S1]** `morePrints` search query + field names
-- **[S2]** numeric `categoryId` per category
-- **[S3]** image CDN prefix for thumbnails
-- **[S4]** `print()` model→files query + file field/enum names
-- **[S5]** `getDownloadLink` mutation enum values
-- **token** the `me { id publicUsername }` field
-
-Everything fails into a clean error banner if a guess is wrong — nothing
-crashes; it just won't fetch until the seams are confirmed.
-
-**Delete or block `verify.php` once you're done** — it exposes raw API output.
-
-## 5. Run the worker (cron on Local)
-
-```cron
-*/5 * * * * /usr/bin/php /mnt/user/appdata/farfetched/webroot/worker.php >> /mnt/user/appdata/farfetched/private/worker.log 2>&1
-```
-
-A lock file prevents overlap; empty-queue runs exit instantly. The worker
-self-paces at 120s/file regardless of cron frequency. Watch progress on the
-**Queue** page (auto-refreshes while active).
-
-## Unraid permissions
-
-`/mnt/user/...` shares are owned by `nobody:users`. If the download dir shows
-amber/not-writable, ensure the Apache/PHP process user can write there
-(match the container user, or `chmod`/`chown` the target share), then re-save.
-
-## Tuning
-
-- Pace: `DOWNLOAD_DELAY_SECONDS` in `bootstrap.php` (default 120).
-- Retry cap: `MAX_ATTEMPTS` in `worker.php` (default 3).
-- Batch cap: 2000 models per submit (`enqueue.php`).
-
-
+Open source. See `LICENSE` for details.

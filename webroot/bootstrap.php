@@ -657,12 +657,21 @@ function db(): PDO
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
+        // Wait up to 30s for a held lock at the driver level before giving up.
+        PDO::ATTR_TIMEOUT            => 30,
     ]);
 
     // WAL = better concurrency between the web UI (enqueue) and the worker.
     $pdo->exec('PRAGMA journal_mode = WAL;');
     $pdo->exec('PRAGMA foreign_keys = ON;');
-    $pdo->exec('PRAGMA busy_timeout = 5000;');
+    // busy_timeout: how long SQLite retries a locked DB before throwing.
+    // Generous (30s) because the worker can hold write intent across a paced
+    // download, and on some bind-mounted/FUSE volumes advisory flock between
+    // the cron worker and a manual run isn't fully reliable — the timeout is
+    // the real guard against "database is locked".
+    $pdo->exec('PRAGMA busy_timeout = 30000;');
+    // NORMAL is safe under WAL and reduces fsync contention between writers.
+    $pdo->exec('PRAGMA synchronous = NORMAL;');
 
     if ($fresh) {
         @chmod(DB_PATH, 0600);
