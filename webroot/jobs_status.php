@@ -29,7 +29,7 @@ $done = (int) ($by['done'] ?? 0);
 // Job rows (same ordering as the page; capped).
 $jobs = [];
 $q = $pdo->query(
-    "SELECT id, model_id, name, creator, file_type, status, attempts, last_error
+    "SELECT id, model_id, name, creator, source, file_type, status, attempts, last_error
      FROM download_jobs
      ORDER BY CASE status WHEN 'working' THEN 0 WHEN 'queued' THEN 1 WHEN 'failed' THEN 2
                           WHEN 'skipped' THEN 3 ELSE 4 END, updated_at DESC
@@ -41,6 +41,7 @@ foreach ($q as $r) {
         'model_id'   => (string) $r['model_id'],
         'name'       => (string) ($r['name'] ?? ''),
         'creator'    => (string) ($r['creator'] ?? ''),
+        'source'     => (string) ($r['source'] ?? ''),
         'file_type'  => (string) $r['file_type'],
         'status'     => (string) $r['status'],
         'attempts'   => (int) $r['attempts'],

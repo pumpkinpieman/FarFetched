@@ -228,7 +228,7 @@ $csrf = csrf_token();
   nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
   nav a:not(.active){color:#c8d4c9;}
   .msize{color:#f5a623 !important;}
-  .btn-primary{background:#39a85c;color:#0a1a0e;} .btn-primary:hover{background:#2a7d44;}
+  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
   .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
   .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
   .srcBtn.active{background:rgba(255,107,26,.1);color:#ff6b1a;}
@@ -248,9 +248,9 @@ $csrf = csrf_token();
   .pill.fetch{background:#0d1f12;color:#ff6b1a;}
   .pill{background:#1a140c;}
   a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .track{background:#2a3028;} .fill{background:#39a85c;}
-  .rowfill.green{background:#39a85c;}
-  .overall .live .dot{background:#39a85c;}
+  .track{background:#2e2218;} .fill{background:#ff6b1a;}
+  .rowfill.green{background:#c8a020;}
+  .overall .live .dot{background:#ff6b1a;}
   .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
   .filebtn{background:#1a140c;border-color:#2a3028;color:#e8ede9;}
   .filebtn:hover{border-color:#ff6b1a;}
@@ -427,7 +427,13 @@ $csrf = csrf_token();
              data-name="<?= e($m['name']) ?>" data-creator="<?= e($m['creator']) ?>">
           <input type="checkbox" class="pick" aria-label="Select model">
           <div class="thumb">
-            <?php if ($m['thumb'] !== ''): ?><img src="<?= e($m['thumb']) ?>" alt="" loading="lazy"><?php else: ?><span>no preview</span><?php endif; ?>
+            <?php
+              $thumbUrl = (string) $m['thumb'];
+              if ($thumbUrl !== '' && in_array($source, ['cults3d', 'thingiverse'], true)) {
+                  $thumbUrl = 'proxy.php?url=' . urlencode($thumbUrl);
+              }
+            ?>
+            <?php if ($thumbUrl !== ''): ?><img src="<?= e($thumbUrl) ?>" alt="" loading="lazy"><?php else: ?><span>no preview</span><?php endif; ?>
           </div>
           <div class="meta">
             <div class="mname"><?= e($m['name']) ?></div>

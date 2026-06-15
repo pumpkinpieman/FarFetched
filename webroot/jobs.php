@@ -40,7 +40,7 @@ $rows = $pdo->query(
 
 $csrf = csrf_token();
 $badge = static function (string $s): string {
-    $map = ['done' => '#3F7D5B', 'working' => '#C2613F', 'queued' => '#6B6862',
+    $map = ['done' => '#3F7D5B', 'working' => '#ff6b1a', 'queued' => '#6B6862',
             'failed' => '#B23B3B', 'skipped' => '#C9912F'];
     return $map[$s] ?? '#6B6862';
 };
@@ -102,7 +102,7 @@ $badge = static function (string $s): string {
   nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
   nav a:not(.active){color:#c8d4c9;}
   .msize{color:#f5a623 !important;}
-  .btn-primary{background:#39a85c;color:#0a1a0e;} .btn-primary:hover{background:#2a7d44;}
+  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
   .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
   .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
   .srcBtn.active{background:rgba(255,107,26,.1);color:#ff6b1a;}
@@ -122,9 +122,9 @@ $badge = static function (string $s): string {
   .pill.fetch{background:#0d1f12;color:#ff6b1a;}
   .pill{background:#1a140c;}
   a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .track{background:#2a3028;} .fill{background:#39a85c;}
-  .rowfill.green{background:#39a85c;}
-  .overall .live .dot{background:#39a85c;}
+  .track{background:#2e2218;} .fill{background:#ff6b1a;}
+  .rowfill.green{background:#c8a020;}
+  .overall .live .dot{background:#ff6b1a;}
   .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
   .filebtn{background:#1a140c;border-color:#2a3028;color:#e8ede9;}
   .filebtn:hover{border-color:#ff6b1a;}
@@ -235,9 +235,9 @@ $badge = static function (string $s): string {
             <?php
               $srcSlug = strtolower((string)($r['source'] ?? ''));
               $srcLabels = ['printables'=>'PT','makerworld'=>'MW','thingiverse'=>'TV','cults3d'=>'C3D','stlflix'=>'SF'];
-              $srcLabel = $srcLabels[$srcSlug] ?? strtoupper(substr($srcSlug,0,3));
+              $srcLabel = $srcLabels[$srcSlug] ?? ($srcSlug !== '' ? strtoupper(substr($srcSlug,0,3)) : '');
             ?>
-            <td><span class="src-badge <?= e($srcSlug) ?>"><?= e($srcLabel) ?></span></td>
+            <td><?php if ($srcLabel !== ''): ?><span class="src-badge <?= e($srcSlug) ?>"><?= e($srcLabel) ?></span><?php else: ?><span class="muted">—</span><?php endif; ?></td>
             <td><?= e($r['name'] !== '' ? $r['name'] : $r['model_id']) ?></td>
             <td class="muted"><?= e($r['model_id']) ?></td>
             <td class="muted"><?= e($r['creator']) ?></td>
@@ -267,7 +267,7 @@ $badge = static function (string $s): string {
   <script>
   (function () {
     const CSRF = <?= json_encode($csrf) ?>;
-    const BADGE = { done:'#3F7D5B', working:'#C2613F', queued:'#6B6862', failed:'#B23B3B', skipped:'#C9912F', error:'#B23B3B' };
+    const BADGE = { done:'#3F7D5B', working:'#ff6b1a', queued:'#6B6862', failed:'#B23B3B', skipped:'#C9912F', error:'#B23B3B' };
     const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     const fmtBytes = b => { if (!b) return ''; const u=['B','KB','MB','GB']; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+' '+u[i]; };
     const fmtClock = s => { s=Math.max(0,s|0); const m=(s/60)|0, ss=s%60; return m+':'+String(ss).padStart(2,'0'); };
@@ -364,7 +364,7 @@ $badge = static function (string $s): string {
         } else {
           body.innerHTML = data.jobs.map(j =>
             '<tr data-job="' + j.id + '">' +
-            (function(s){ const m={'printables':'PT','makerworld':'MW','thingiverse':'TV','cults3d':'C3D','stlflix':'SF'}; return '<td><span class="src-badge '+s+'">'+(m[s]||s.substring(0,3).toUpperCase())+'</span></td>'; })(j.source||'') +
+            (function(s){ const m={'printables':'PT','makerworld':'MW','thingiverse':'TV','cults3d':'C3D','stlflix':'SF'}; const lbl = m[s] || (s ? s.substring(0,3).toUpperCase() : ''); return '<td>' + (lbl ? '<span class="src-badge '+s+'">'+lbl+'</span>' : '<span class="muted">—</span>') + '</td>'; })(j.source||'') +
             '<td>' + esc(j.name || j.model_id) + '</td>' +
             '<td class="muted">' + esc(j.model_id) + '</td>' +
             '<td class="muted">' + esc(j.creator) + '</td>' +
