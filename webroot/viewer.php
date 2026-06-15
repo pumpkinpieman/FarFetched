@@ -177,9 +177,7 @@ foreach ($sources as $s) {
     <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
     <div class="navlabel">Tool</div>
     <nav>
-      <a href="home.php">← Sources</a>
-      <a href="index.php">Printables</a>
-      <a href="index.php?src=makerworld">MakerWorld</a>
+      <a href="index.php">Browse Models</a>
       <a href="jobs.php">Queue</a>
       <a href="viewer.php" class="active">3D Viewer</a>
       <a href="settings.php">Settings</a>

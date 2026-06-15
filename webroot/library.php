@@ -211,8 +211,9 @@ function tile_style(string $name): string
   <aside>
     <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
     <nav>
-      <a href="home.php">← Sources</a>
-      <a href="library.php?src=<?= e($src) ?>" class="active"><?= e($label) ?></a>
+      <a href="index.php">Browse Models</a>
+      <a href="jobs.php">Queue</a>
+      <a href="viewer.php">3D Viewer</a>
       <a href="settings.php">Settings</a>
     </nav>
   </aside>
