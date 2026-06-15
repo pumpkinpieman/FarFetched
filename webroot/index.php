@@ -284,7 +284,7 @@ $csrf = csrf_token();
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:visible;position:relative;transition:border-color .15s,box-shadow .15s;cursor:pointer;user-select:none;}
   .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(255,107,26,.2);}
-  .thumb{aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;border-radius:14px 14px 0 0;overflow:hidden;}
+  .thumb{position:relative;aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;border-radius:14px 14px 0 0;overflow:hidden;}
   .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
   .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
 
@@ -426,6 +426,13 @@ $csrf = csrf_token();
              data-id="<?= e($m['id']) ?>" data-slug="<?= e($m['slug']) ?>"
              data-name="<?= e($m['name']) ?>" data-creator="<?= e($m['creator']) ?>">
           <input type="checkbox" class="pick" aria-label="Select model">
+          <?php
+            if (!empty($m['club'])) {
+                echo '<span class="badge club">Club</span>';
+            } elseif (!empty($m['price']) && (int) $m['price'] > 0) {
+                echo '<span class="badge paid">Paid</span>';
+            }
+          ?>
           <div class="thumb">
             <?php
               $thumbUrl = (string) $m['thumb'];

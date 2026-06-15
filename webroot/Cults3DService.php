@@ -78,6 +78,7 @@ final class Cults3DService
                   slug
                   name
                   illustrationImageUrl
+                  price { cents }
                   category { slug }
                   creator { nick }
                 }
@@ -104,6 +105,7 @@ final class Cults3DService
                   slug
                   name
                   illustrationImageUrl
+                  price { cents }
                   category { slug }
                   creator { nick }
                 }
@@ -370,6 +372,7 @@ final class Cults3DService
                 'thumb'   => $thumb,
                 'images'  => array_values(array_filter($images)),
                 'size'    => $size,
+                'price'   => (int)($it['price']['cents'] ?? 0),
                 'source'  => 'cults3d',
             ];
         }
