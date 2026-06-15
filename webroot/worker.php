@@ -158,8 +158,31 @@ if (!is_dir($baseDir) && !@mkdir($baseDir, 0775, true) && !is_dir($baseDir)) {
     exit(1);
 }
 if (!is_writable($baseDir)) {
-    logln('FATAL: download dir not writable: ' . $baseDir . ' (fix share permissions).');
+    logln('FATAL: download dir not writable: ' . $baseDir . ' (fix share permissions on the Unraid share).');
     exit(1);
+}
+
+// Pre-create all source subdirectories at startup.
+// If any fail, log a clear warning — jobs for that source will error out.
+$sourceDirs = [
+    'printables'  => $baseDir,
+    'makerworld'  => get_makerworld_dir(),
+    'thingiverse' => get_thingiverse_dir(),
+    'cults3d'     => get_cults3d_dir(),
+    'stlflix'     => get_stlflix_dir(),
+];
+foreach ($sourceDirs as $srcName => $srcDir) {
+    if ($srcDir === '') continue;
+    if (!is_dir($srcDir)) {
+        if (!@mkdir($srcDir, 0775, true) && !is_dir($srcDir)) {
+            logln('WARN: Cannot create ' . $srcName . ' dir: ' . $srcDir . ' — check Docker volume permissions (chown -R nobody:users ' . dirname($srcDir) . ')');
+        } else {
+            logln('Created ' . $srcName . ' dir: ' . $srcDir);
+        }
+    }
+    if (is_dir($srcDir) && !is_writable($srcDir)) {
+        logln('WARN: ' . $srcName . ' dir not writable: ' . $srcDir . ' — jobs for this source will fail.');
+    }
 }
 
 $pdo = db();
@@ -204,12 +227,42 @@ while (true) {
     $slug    = $job['slug'] !== '' ? $job['slug'] : $modelId;
     $name    = (string) ($job['name'] ?? '');
 
-    $upd = $pdo->prepare(
-        "UPDATE download_jobs
-         SET status = :st, attempts = attempts + :inc, last_error = :err,
-             saved_path = :path, updated_at = datetime('now')
-         WHERE id = :id"
-    );
+    // Helper: always re-prepares to avoid SQLite PDO "bad parameter" state
+    // after a previous execute() error on the same statement handle.
+    $updJob = static function (string $st, int $inc, string $err, string $path, int $id) use ($pdo): void {
+        $stmt = $pdo->prepare(
+            "UPDATE download_jobs
+             SET status = :st, attempts = attempts + :inc, last_error = :err,
+                 saved_path = :path, updated_at = datetime('now')
+             WHERE id = :id"
+        );
+        $stmt->execute([
+            ':st'   => $st,
+            ':inc'  => $inc,
+            ':err'  => $err,
+            ':path' => $path,
+            ':id'   => $id,
+        ]);
+    };
+    $upd = new class($pdo) {
+        private \PDO $pdo;
+        public function __construct(\PDO $pdo) { $this->pdo = $pdo; }
+        public function execute(array $p): void {
+            $stmt = $this->pdo->prepare(
+                "UPDATE download_jobs
+                 SET status = :st, attempts = attempts + :inc, last_error = :err,
+                     saved_path = :path, updated_at = datetime('now')
+                 WHERE id = :id"
+            );
+            $stmt->execute([
+                ':st'   => (string) ($p[':st']   ?? ''),
+                ':inc'  => (int)    ($p[':inc']  ?? 0),
+                ':err'  => (string) ($p[':err']  ?? ''),
+                ':path' => (string) ($p[':path'] ?? ''),
+                ':id'   => (int)    ($p[':id']   ?? 0),
+            ]);
+        }
+    };
 
     // Mark working.
     $pdo->prepare("UPDATE download_jobs SET status='working', updated_at=datetime('now') WHERE id = :id")
