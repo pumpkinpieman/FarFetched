@@ -201,7 +201,7 @@ final class STLFlixService
             $attrs = $data['products']['data'][0]['attributes'] ?? null;
             if (!is_array($attrs)) continue;
 
-            // Check stl_file and bambu_file (UploadFile relations with id).
+            // Prefer stl_file (ZIP with STL files), then bambu_file, then files relation.
             foreach (['stl_file', 'bambu_file'] as $key) {
                 $entry = $attrs[$key]['data'] ?? null;
                 if (!is_array($entry)) continue;
@@ -211,7 +211,6 @@ final class STLFlixService
                     if (function_exists('logln')) logln('  STLFlix fid=' . $fid . ' from ' . $key);
                     return $fid;
                 }
-                // Also grab direct URL if present (fallback).
                 $u = (string) ($entry['attributes']['url'] ?? '');
                 if ($u !== '') return '__URL__:' . $this->absoluteUrl($u);
             }

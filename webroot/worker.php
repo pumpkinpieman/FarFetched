@@ -441,7 +441,10 @@ while (true) {
             }
 
             logln('  Downloading: ' . $zipName . ' from ' . $link);
-            if ($stlfix->downloadToFile($link, $dest, progress_writer($jobId, $zipName))) {
+            $pwFn = progress_writer($jobId, $zipName);
+            // STLFlixService calls progressFn($bytesWritten); progress_writer expects ($total,$now).
+            $progressCb = static function (int $bytes) use ($pwFn): void { $pwFn(0, $bytes); };
+            if ($stlfix->downloadToFile($link, $dest, $progressCb)) {
                 logln('  Saved: ' . $dest);
 
                 if (extract_zip_safe($dest, $destDir)) {
