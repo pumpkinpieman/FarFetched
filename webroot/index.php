@@ -506,8 +506,15 @@ $csrf = csrf_token();
       : (m.thumb ? [m.thumb] : []);
     const multi = imgs.length > 1;
 
+    const PROXY_SOURCES = ['cults3d', 'thingiverse'];
+    function thumbSrc(url) {
+      if (!url) return '';
+      if (PROXY_SOURCES.includes(SOURCE)) return 'proxy.php?url=' + encodeURIComponent(url);
+      return encodeURI(url);
+    }
+
     const thumb = imgs.length
-      ? '<img class="thumb-img" src="'+encodeURI(imgs[0])+'" alt="" loading="lazy">'
+      ? '<img class="thumb-img" src="'+thumbSrc(imgs[0])+'" alt="" loading="lazy">'
       : '<span>no preview</span>';
 
     // Badge paid/club models so you know which may not be fetchable.
@@ -550,7 +557,7 @@ $csrf = csrf_token();
 
     function show(i){
       idx = (i + imgs.length) % imgs.length;
-      img.src = encodeURI(imgs[idx]);
+      img.src = thumbSrc(imgs[idx]);
     }
     function nav(delta, ev){
       ev.preventDefault(); ev.stopPropagation();
@@ -594,7 +601,7 @@ $csrf = csrf_token();
       if (imgs.length > 1) prev.style.display = next.style.display = 'block';
       if (!preloaded){
         preloaded = true;
-        for (let i = 1; i < imgs.length; i++){ const p = new Image(); p.src = encodeURI(imgs[i]); }
+        for (let i = 1; i < imgs.length; i++){ const p = new Image(); p.src = thumbSrc(imgs[i]); }
       }
     });
     card.addEventListener('mouseleave', ()=>{

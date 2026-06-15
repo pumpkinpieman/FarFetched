@@ -682,22 +682,43 @@ function pace(?int $delay = null): void
 /** Make a filesystem-safe path segment (no traversal, no separators). */
 function safe_segment(string $s): string
 {
-    $s = preg_replace("/['"`]/", '', $s) ?? $s;
-    $s = preg_replace('/[\/\\\x00-\x1F:*?<>|]+/', '_', $s) ?? $s;
-    $s = trim($s, " .");
+    // 1. Force UTF-8 cleanliness and remove control characters first
+    $s = preg_replace('/[\x00-\x1F\x7F]/', '', $s) ?? $s;
+
+    // 2. Strip quotes and dangerous OS characters
+    $s = preg_replace("/['\"`]/", '', $s) ?? $s;
+    $s = preg_replace('/[\/\\\:*?<>|]+/', '_', $s) ?? $s;
+
+    // 3. Compress multiple spaces and underscores
     $s = preg_replace('/\s+/', ' ', $s) ?? $s;
     $s = preg_replace('/_+/', '_', $s) ?? $s;
-    if ($s === '' || $s === '.' || $s === '..') {
+
+    // 4. Clean edges *before* checking for reserved names
+    $s = trim($s, " .-_");
+
+    // 5. Hard lockdown against traversal and OS reserved words (e.g. CON, NUL)
+    $lowercase = strtolower($s);
+    $reserved = ['file', '.', '..', 'con', 'prn', 'aux', 'nul', 'com1', 'lpt1'];
+    
+    if ($s === '' || in_array($lowercase, $reserved, true)) {
         $s = 'file';
     }
+
     return substr($s, 0, 150);
 }
 
 /** Build a human-readable folder name: "{modelId} - {model name}" */
 function model_folder(string $modelId, string $name, string $slug = ''): string
 {
-    // Prefer the human-readable name; fall back to slug, then bare id.
-    $label = $name !== '' ? $name : ($slug !== '' && $slug !== $modelId ? $slug : '');
+    // Clean, readable fallback chain using standard if/else
+    if ($name !== '') {
+        $label = $name;
+    } elseif ($slug !== '') {
+        $label = $slug;
+    } else {
+        $label = '';
+    }
+
     $folder = $label !== '' ? $modelId . ' - ' . $label : $modelId;
     return safe_segment($folder);
 }
