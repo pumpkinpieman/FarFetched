@@ -430,11 +430,19 @@ final class Cults3DService
         $downloadPath = html_entity_decode($dm[1], ENT_QUOTES);
 
         // 4) GET the download link -> 302 to the signed CloudFront URL.
+        //    With FOLLOWLOCATION off, read the Location header from the response.
         $ch = $this->webCurl(self::WEB . $downloadPath);
-        curl_exec($ch);
-        $signed = (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL);
-        $code   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_setopt($ch, CURLOPT_HEADER, true);
+        $resp = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $hlen = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         curl_close($ch);
+
+        $headers = is_string($resp) ? substr($resp, 0, $hlen) : '';
+        $signed  = '';
+        if (preg_match('/^location:\s*(\S+)/im', $headers, $lm)) {
+            $signed = trim($lm[1]);
+        }
 
         if ($signed === '' || stripos($signed, 'download.cults3d.com') === false) {
             $this->lastError = 'Cults3D did not return a signed download URL (HTTP ' . $code . ').';
@@ -462,10 +470,17 @@ final class Cults3DService
             'Referer: ' . self::WEB . '/en/3d-model/_/' . rawurlencode($slug),
             $this->sessionCookieHeader(),
         ]);
-        curl_exec($ch);
-        $loc  = (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+        curl_setopt($ch, CURLOPT_HEADER, true);
+        $resp = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $hlen = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         curl_close($ch);
+
+        $headers = is_string($resp) ? substr($resp, 0, $hlen) : '';
+        $loc = '';
+        if (preg_match('/^location:\s*(\S+)/im', $headers, $lm)) {
+            $loc = trim($lm[1]);
+        }
 
         if ($loc === '' || stripos($loc, '/orders/') === false) {
             $this->lastError = 'Cults3D free-order step failed (HTTP ' . $code . '). '
