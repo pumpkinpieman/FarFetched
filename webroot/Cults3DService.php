@@ -345,7 +345,11 @@ final class Cults3DService
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_TIMEOUT        => 60,
             CURLOPT_CONNECTTIMEOUT => 15,
-            CURLOPT_ENCODING       => '',
+            // Explicit gzip/deflate/br only. An empty CURLOPT_ENCODING advertises
+            // zstd too, which some libcurl builds can't decode — the response
+            // then comes back empty / the request appears to hang.
+            CURLOPT_ENCODING       => 'gzip, deflate, br',
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
             CURLOPT_HTTPHEADER     => [
                 'User-Agent: ' . self::UA,
                 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -378,29 +382,17 @@ final class Cults3DService
             return '';
         }
 
-        // Locale-prefixed model URL needs a category segment we don't know, so
-        // use the canonical /en/3d-model lookup the site itself accepts. The
-        // model page is reachable via the short /:id or the full slug path;
-        // we fetch the slug page directly (Cults3D resolves the category).
-        // 1) Fetch the model page for the CSRF token.
-        $modelUrl = self::WEB . '/en/3d-model/_/' . rawurlencode($slug);
+        // 1) Resolve the exact model page URL via GraphQL (gives the correct
+        //    category segment), then fetch it for the Rails CSRF token.
+        $modelUrl = $this->lookupModelUrl($slug);
+        if ($modelUrl === '') {
+            // Fallback: category-agnostic path (Cults3D usually redirects it).
+            $modelUrl = self::WEB . '/en/3d-model/_/' . rawurlencode($slug);
+        }
         $ch   = $this->webCurl($modelUrl);
         $html = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
-
-        // The /_/ category placeholder may 301/404; if so, follow the GraphQL
-        // url() field which gives the exact category path.
-        if (!is_string($html) || $code >= 400 || $code === 0
-            || !preg_match('/name="csrf-token" content="([^"]+)"/', $html)) {
-            $realUrl = $this->lookupModelUrl($slug);
-            if ($realUrl !== '') {
-                $ch   = $this->webCurl($realUrl);
-                $html = curl_exec($ch);
-                $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-            }
-        }
 
         if (!is_string($html) || $html === '') {
             $this->lastError = 'Could not load Cults3D model page (HTTP ' . $code . ').';
