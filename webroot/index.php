@@ -177,135 +177,16 @@ $csrf = csrf_token();
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browse · FarFetched</title>
-<style>
-  :root{--bg:#0c0a08;--panel:#141009;--card:#1a140c;--ink:#f0e6d3;--muted:#7a6a52;--line:#2e2218;--clay:#ff6b1a;--clay-deep:#c44d0d;--ok:#c8a020;--err:#e05c5c;--warn:#f5c842;}
-  body{background-image:radial-gradient(ellipse at 0% 100%, rgba(255,107,26,0.06) 0%, transparent 60%);}
-  .brand{color:#ff6b1a !important;font-weight:800 !important;letter-spacing:-.5px;}
-  nav a{color:#8a8070;}
-  nav a:hover{background:#1a140c;color:#f0e6d3;}
-  nav a.active{background:rgba(255,107,26,0.1);color:#ff6b1a;border:1px solid rgba(255,107,26,0.2);font-weight:600;}
-  .mcreator{color:#f5c842 !important;}
-  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
-  .btn-primary:disabled{background:#2e1a0a;color:#5a4a32;cursor:not-allowed;}
-  .btn-ghost{color:#8a8070;border-color:#2e2218;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .srcBtn.active{background:rgba(245,200,66,0.08);color:#f5c842;}
-  select{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
-  .card.sel{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.2);}
-  .pick{accent-color:#ff6b1a;}
-  .banner{background:#1a1000;color:#f5c842;border-color:#3d2800;}
-  .notice.ok{background:#1a1200;color:#f5c842;}
-  .notice.err{background:#1f0d0d;color:#e05c5c;}
-  .badge.paid{background:#3d2000;color:#f5c842;}
-  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
-  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2e2218;}
-  th{background:#141009;}
-  .pill.fetch{background:#1a1200;color:#f5c842;}
-  .pill{background:#1a140c;}
-  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
-  .track{background:#2e2218;} .fill{background:#ff6b1a;}
-  .rowfill{background:#ff6b1a;} .rowfill.green{background:#c8a020;}
-  .overall .live .dot{background:#ff6b1a;}
-  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .filebtn{background:#1a140c;border-color:#2e2218;color:#f0e6d3;}
-  .filebtn:hover{border-color:#ff6b1a;}
-  .filebtn.active{border-color:#f5c842;box-shadow:0 0 0 2px rgba(245,200,66,0.15);}
-  .folder-hdr{border-color:#2e2218;color:#7a6a52;}
-  .bar{background:#1a1000;color:#f5c842;border-color:#3d2800;}
-  .file-counter{background:#2e2218;color:#f0e6d3;}
-  .srcBtn{color:#7a6a52;}
-  .navlabel{color:#5a4a32;}
-  code{background:#1a140c;}
-  .notice{background:#1a140c;}
-  .step a{color:#ff6b1a;}
-  .act button{background:#1a140c;border-color:#2e2218;color:#7a6a52;}
-  .tag{background:#ff6b1a;}
-
-  body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
-  .brand{color:#ff6b1a !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
-  nav a:hover{background:#1a140c;color:#e8ede9;}
-  nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
-  nav a:not(.active){color:#c8d4c9;}
-  .mcreator{color:#f5a623 !important;}
-  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
-  .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
-  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .srcBtn.active{background:rgba(255,107,26,.1);color:#ff6b1a;}
-  select{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(255,107,26,.2);}
-  .pick{accent-color:#d4820a;}
-  .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-  .notice.ok,.notice{background:#0d1f12;color:#ff6b1a;}
-  .notice.err{background:#1f0d0d;color:#e05c5c;}
-  .notice.warn{background:#1a1200;color:#d4820a;}
-  .badge.paid{background:#3d2600;color:#f5a623;}
-  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
-  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2a3028;}
-  th{background:#161a17;}
-  .pill.fetch{background:#0d1f12;color:#ff6b1a;}
-  .pill{background:#1a140c;}
-  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .track{background:#2e2218;} .fill{background:#ff6b1a;}
-  .rowfill.green{background:#c8a020;}
-  .overall .live .dot{background:#ff6b1a;}
-  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .filebtn{background:#1a140c;border-color:#2a3028;color:#e8ede9;}
-  .filebtn:hover{border-color:#ff6b1a;}
-  .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
-  .folder-hdr{border-color:#2a3028;color:#6b8070;}
-  .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh;}
-  aside{width:240px;background:var(--panel);border-right:1px solid var(--line);padding:24px 16px;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto;}
-  .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 16px;letter-spacing:-0.3px;}
-  .navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#6b8070;padding:12px 12px 6px;}
-  nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;cursor:pointer;}
-  nav a:hover{background:#1a140c;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
-  main{flex:1;padding:28px 32px;}
-  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);padding:14px 0 12px;margin-bottom:10px;box-shadow:0 6px 14px -10px rgba(0,0,0,.18);}
-  h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;}
-  .actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
-  .selcount{font-size:13px;color:var(--muted);}
-  select,button{font:inherit;cursor:pointer;border-radius:9px;font-size:14px;}
-  select{padding:9px 12px;border:1px solid var(--line);background:var(--card);color:var(--ink);}
-  button{border:none;padding:10px 18px;font-weight:500;}
-  .btn-primary{background:var(--clay);color:#fff;} .btn-primary:hover{background:var(--clay-deep);} .btn-primary:disabled{background:#D8C9C0;cursor:not-allowed;}
-  .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line);} .btn-ghost:hover{border-color:var(--clay);color:var(--clay-deep);}
-  .banner{background:#FBF1D9;color:#8A6D1F;border:1px solid #ECD9A6;padding:11px 14px;border-radius:9px;font-size:14px;margin-bottom:18px;}
-  .pastebar{background:var(--card,#fff);border:1px solid var(--line,#E5E2D8);border-radius:12px;padding:14px 16px;margin-bottom:18px;}
-  .pastebar-label{font-size:13px;color:var(--muted,#6B6862);margin-bottom:8px;}
-  .pastebar-row{display:flex;gap:8px;}
-  .pastebar-row input{flex:1;padding:9px 12px;border:1px solid var(--line,#E5E2D8);border-radius:8px;font:inherit;font-size:14px;}
-  .pastebar-status{font-size:13px;color:var(--muted,#6B6862);margin-top:8px;min-height:18px;}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px;}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:visible;position:relative;transition:border-color .15s,box-shadow .15s;cursor:pointer;user-select:none;}
-  .card.sel{border-color:var(--clay);box-shadow:0 0 0 2px rgba(255,107,26,.2);}
-  .thumb{position:relative;aspect-ratio:1;background:var(--panel);display:flex;align-items:center;justify-content:center;color:#B9B4A6;font-size:13px;border-radius:14px 14px 0 0;overflow:hidden;}
-  .thumb img{width:100%;height:100%;object-fit:cover;display:block;}
-  .meta{padding:12px 14px;} .mname{font-size:14px;font-weight:600;line-height:1.3;margin-bottom:3px;} .mcreator{font-size:12px;color:var(--muted);}
-
-  .searchbar{display:flex;gap:8px;margin-bottom:18px;align-items:center;}
-  .srcToggle{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;}
-  .srcBtn{padding:7px 12px;font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;background:var(--card);}
-  .srcBtn+.srcBtn{border-left:1px solid var(--line);}
-  .srcBtn.active{background:var(--clay);color:#fff;}
-  .ftype-fixed{font-size:13px;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--card);}
-  .nsfwToggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);white-space:nowrap;cursor:pointer;}
-  .searchbar input{flex:1;padding:11px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:15px;background:var(--card);color:var(--ink);}
-  .searchbar input:focus{outline:none;border-color:var(--clay);box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .badge{position:absolute;top:10px;right:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:#fff;}
-  .badge.paid{background:#C9912F;} .badge.club{background:#6E59C2;}
-  .pick{position:absolute;top:10px;left:10px;width:22px;height:22px;cursor:pointer;accent-color:var(--clay);z-index:4;}
-  @media (max-width:640px){aside{width:170px;}main{padding:20px 16px;}}
-</style>
+<link rel="stylesheet" href="css/styles.css">
 </head>
+
+
+
 <body>
   <aside>
     <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
+
+
 
     <?php if ($source === 'makerworld'): ?>
     <div class="navlabel">MakerWorld Categories</div>
@@ -363,6 +244,9 @@ $csrf = csrf_token();
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="settings.php">Settings</a>
+		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
+		<span id="theme-toggle-icon">🌙</span> Change Appearance
+		</button>
     </nav>
   </aside>
 
@@ -384,7 +268,7 @@ $csrf = csrf_token();
           <option value="PACK" <?= $fileType==='PACK'?'selected':'' ?>>Whole model (ZIP)</option>
         </select>
         <?php else: ?>
-        <span class="ftype-fixed" title="Downloads include all available formats">All formats</span>
+        
         <?php endif; ?>
         <span class="selcount" id="selcount">0 selected</span>
         <button class="btn-ghost" id="selectAll">Select all on page</button>
@@ -430,7 +314,7 @@ $csrf = csrf_token();
             if (!empty($m['club'])) {
                 echo '<span class="badge club">Club</span>';
             } elseif (!empty($m['price']) && (int) $m['price'] > 0) {
-                echo '<span class="badge paid">Paid</span>';
+                echo '<span class="badge paid">Payment Required</span>';
             }
           ?>
           <div class="thumb">
@@ -533,7 +417,7 @@ $csrf = csrf_token();
     // Badge paid/club models so you know which may not be fetchable.
     let badge = '';
     if (m.club) badge = '<span class="badge club">Club</span>';
-    else if (m.price > 0) badge = '<span class="badge paid">Paid</span>';
+    else if (m.price > 0) badge = '<span class="badge paid">Payment Required</span>';
 
     // textContent-safe insertion for name/creator
     card.innerHTML =
@@ -1033,5 +917,36 @@ $csrf = csrf_token();
   });
 
 </script>
+
+<script>
+  const toggleBtn = document.getElementById('theme-toggle');
+  const toggleIcon = document.getElementById('theme-toggle-icon');
+  
+  // Check for saved user preference, otherwise default to dark
+  const currentTheme = localStorage.getItem('theme') || 'dark';
+  
+  if (currentTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    toggleIcon.textContent = '☀️';
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    let theme = 'dark';
+    
+    if (document.documentElement.getAttribute('data-theme') !== 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      toggleIcon.textContent = '☀️';
+      theme = 'light';
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+      toggleIcon.textContent = '🌙';
+    }
+    
+    localStorage.setItem('theme', theme);
+  });
+</script>
+
+
+
 </body>
 </html>

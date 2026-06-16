@@ -332,168 +332,9 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Settings · FarFetched</title>
-<style>
-  :root{--bg:#0c0a08;--panel:#141009;--card:#1a140c;--ink:#f0e6d3;--muted:#7a6a52;--line:#2e2218;--clay:#ff6b1a;--clay-deep:#c44d0d;--ok:#c8a020;--err:#e05c5c;--warn:#f5c842;}
-  body{background-image:radial-gradient(ellipse at 0% 100%, rgba(255,107,26,0.06) 0%, transparent 60%);}
-  .brand{color:#ff6b1a !important;font-weight:800 !important;letter-spacing:-.5px;}
-  nav a{color:#8a8070;}
-  nav a:hover{background:#1a140c;color:#f0e6d3;}
-  nav a.active{background:rgba(255,107,26,0.1);color:#ff6b1a;border:1px solid rgba(255,107,26,0.2);font-weight:600;}
-  .msize{color:#f5c842 !important;}
-  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
-  .btn-primary:disabled{background:#2e1a0a;color:#5a4a32;cursor:not-allowed;}
-  .btn-ghost{color:#8a8070;border-color:#2e2218;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .srcBtn.active{background:rgba(245,200,66,0.08);color:#f5c842;}
-  select{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
-  .card.sel{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.2);}
-  .pick{accent-color:#ff6b1a;}
-  .banner{background:#1a1000;color:#f5c842;border-color:#3d2800;}
-  .notice.ok{background:#1a1200;color:#f5c842;}
-  .notice.err{background:#1f0d0d;color:#e05c5c;}
-  .badge.paid{background:#3d2000;color:#f5c842;}
-  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
-  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2e2218;}
-  th{background:#141009;}
-  .pill.fetch{background:#1a1200;color:#f5c842;}
-  .pill{background:#1a140c;}
-  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
-  .track{background:#2e2218;} .fill{background:#ff6b1a;}
-  .rowfill{background:#ff6b1a;} .rowfill.green{background:#c8a020;}
-  .overall .live .dot{background:#ff6b1a;}
-  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .filebtn{background:#1a140c;border-color:#2e2218;color:#f0e6d3;}
-  .filebtn:hover{border-color:#ff6b1a;}
-  .filebtn.active{border-color:#f5c842;box-shadow:0 0 0 2px rgba(245,200,66,0.15);}
-  .folder-hdr{border-color:#2e2218;color:#7a6a52;}
-  .bar{background:#1a1000;color:#f5c842;border-color:#3d2800;}
-  .file-counter{background:#2e2218;color:#f0e6d3;}
-  .srcBtn{color:#7a6a52;}
-  .navlabel{color:#5a4a32;}
-  code{background:#1a140c;}
-  .notice{background:#1a140c;}
-  .step a{color:#ff6b1a;}
-  .act button{background:#1a140c;border-color:#2e2218;color:#7a6a52;}
-  .tag{background:#ff6b1a;}
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/styles_settings.css">
 
-  body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
-  .brand{color:#ff6b1a !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
-  nav a:hover{background:#1a140c;color:#e8ede9;}
-  nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
-  nav a:not(.active){color:#c8d4c9;}
-  .msize{color:#f5a623 !important;}
-  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
-  .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
-  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .srcBtn.active{background:rgba(255,107,26,.1);color:#ff6b1a;}
-  select{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(255,107,26,.2);}
-  .pick{accent-color:#d4820a;}
-  .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-  .notice.ok,.notice{background:#0d1f12;color:#ff6b1a;}
-  .notice.err{background:#1f0d0d;color:#e05c5c;}
-  .notice.warn{background:#1a1200;color:#d4820a;}
-  .badge.paid{background:#3d2600;color:#f5a623;}
-  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
-  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2a3028;}
-  th{background:#161a17;}
-  .pill.fetch{background:#0d1f12;color:#ff6b1a;}
-  .pill{background:#1a140c;}
-  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .track{background:#2e2218;} .fill{background:#ff6b1a;}
-  .rowfill.green{background:#c8a020;}
-  .overall .live .dot{background:#ff6b1a;}
-  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .filebtn{background:#1a140c;border-color:#2a3028;color:#e8ede9;}
-  .filebtn:hover{border-color:#ff6b1a;}
-  .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
-  .folder-hdr{border-color:#2a3028;color:#6b8070;}
-  .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh;}
-  aside{width:220px;background:var(--panel);border-right:1px solid var(--line);padding:24px 16px;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto;}
-  .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 20px;letter-spacing:-0.3px;}
-  nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;}
-  nav a:hover{background:#1a140c;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
-  main{flex:1;padding:28px 36px;max-width:900px;}
-  h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;margin-bottom:4px;}
-  .sub{color:var(--muted);font-size:14px;margin-bottom:24px;}
-
-  /* Tabs */
-  .tabs{display:flex;gap:4px;margin-bottom:28px;border-bottom:1px solid var(--line);padding-bottom:0;}
-  .tab-btn{background:none;border:none;border-bottom:2px solid transparent;padding:10px 18px;font:inherit;font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;margin-bottom:-1px;border-radius:8px 8px 0 0;}
-  .tab-btn:hover{color:var(--ink);background:var(--panel);}
-  .tab-btn.active{color:var(--clay-deep);border-bottom-color:var(--clay);background:none;}
-  .tab-content{display:none;} .tab-content.active{display:block;}
-  /* Donate tab */
-  .donate-wrap{display:flex;justify-content:center;padding:30px 0;}
-  .donate-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:36px 40px;max-width:440px;text-align:center;box-shadow:0 0 0 1px rgba(255,107,26,.06),0 8px 40px rgba(0,0,0,.3);}
-  .donate-logo{border-radius:16px;margin-bottom:22px;background:#0c0a08;}
-  .donate-title{font-size:22px;font-weight:800;color:var(--ink);margin-bottom:10px;letter-spacing:-.01em;}
-  .donate-text{font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:24px;}
-  .donate-btn{display:inline-block;background:linear-gradient(90deg,#ff6b1a,#f5c842);color:#1a0e00;font-weight:800;font-size:15px;padding:13px 32px;border-radius:10px;text-decoration:none;transition:transform .12s,box-shadow .12s;box-shadow:0 4px 18px rgba(255,107,26,.25);}
-  .donate-btn:hover{transform:translateY(-2px);box-shadow:0 6px 24px rgba(255,107,26,.4);}
-  .donate-handle{font-size:12px;color:var(--muted);margin-top:16px;font-family:ui-monospace,monospace;}
-
-  /* Source cards */
-  .src-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:28px;}
-  @media(max-width:760px){.src-grid{grid-template-columns:1fr;}}
-  .src-card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;}
-  .src-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 14px;border-bottom:1px solid var(--line);}
-  .src-name{font-size:15px;font-weight:600;}
-  .src-body{padding:16px 18px;}
-  .src-body+.src-body{border-top:1px solid var(--line);}
-
-  /* Status */
-  .status{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin-bottom:12px;}
-  .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
-  .dot.on{background:var(--ok);} .dot.off{background:#C9C4B6;} .dot.warn{background:var(--warn);}
-
-  /* Forms */
-  label{display:block;font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;}
-  textarea,input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 12px;font:13px ui-monospace,Menlo,monospace;color:var(--ink);background:var(--bg);}
-  textarea{min-height:72px;resize:vertical;}
-  textarea:focus,input:focus{outline:none;border-color:var(--clay);}
-  input[type=text].short{width:100px;}
-  .row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;}
-  button{font:inherit;cursor:pointer;border:none;border-radius:8px;padding:8px 16px;font-size:13.5px;font-weight:500;}
-  .btn-primary{background:var(--clay);color:#fff;} .btn-primary:hover{background:var(--clay-deep);}
-  .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line);} .btn-ghost:hover{border-color:var(--clay);color:var(--clay-deep);}
-  .btn-sm{padding:6px 12px;font-size:12.5px;}
-  .notice{padding:10px 14px;border-radius:8px;font-size:14px;margin-bottom:20px;}
-  .notice.ok{background:#E8F1EC;color:var(--ok);} .notice.err{background:#F6E7E7;color:var(--err);}
-  .hint{font-size:12px;color:var(--muted);line-height:1.55;margin-top:10px;}
-  code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:11.5px;}
-  hr{border:none;border-top:1px solid var(--line);margin:14px 0;}
-
-  /* Worker panel */
-  .worker-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;}
-  @media(max-width:680px){.worker-grid{grid-template-columns:1fr;}}
-  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;}
-  .panel h2{font-size:14px;font-weight:600;margin-bottom:14px;}
-  .panel label{margin-top:12px;}
-  .panel label:first-of-type{margin-top:0;}
-
-  .oauth-steps{display:flex;flex-direction:column;gap:8px;}
-  .step{display:flex;align-items:flex-start;gap:10px;font-size:13px;line-height:1.5;}
-  .step a{color:var(--clay-deep);text-decoration:none;} .step a:hover{text-decoration:underline;}
-  .step-n{background:var(--clay);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px;}
-
-  /* Modal */
-  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center;}
-  .modal-overlay.open{display:flex;}
-  .modal{background:var(--card);border-radius:16px;padding:28px;max-width:480px;width:calc(100% - 40px);position:relative;box-shadow:0 20px 60px rgba(0,0,0,.25);}
-  .modal h3{font-family:ui-serif,Georgia,serif;font-size:18px;font-weight:600;margin-bottom:12px;}
-  .modal p{font-size:14px;line-height:1.6;color:var(--muted);margin-bottom:10px;}
-  .modal p strong{color:var(--ink);}
-  .modal-close{position:absolute;top:14px;right:16px;background:none;border:none;font-size:22px;cursor:pointer;color:var(--muted);line-height:1;padding:4px;}
-  .modal-close:hover{color:var(--ink);}
-  pre.log{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:0;max-height:300px;overflow:auto;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
-</style>
 </head>
 <body>
 <aside>
@@ -503,6 +344,9 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
     <a href="jobs.php">Queue</a>
     <a href="viewer.php">3D Viewer</a>
     <a href="settings.php" class="active">Settings</a>
+		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
+		<span id="theme-toggle-icon">🌙</span> Change Appearance
+		</button>
   </nav>
 </aside>
 
@@ -646,9 +490,9 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
             <label for="tv_client_id">Client ID <span style="font-weight:400;text-transform:none;">(optional — for OAuth downloads)</span></label>
-            <input type="text" id="tv_client_id" name="tv_client_id" value="<?= e($tvClientId) ?>" placeholder="your-app-client-id">
+            <input type="password" id="tv_client_id" name="tv_client_id" value="<?= e($tvClientId) ?>" placeholder="your-app-client-id"><button type="button" class="reveal-btn" data-target="tv_client_id" aria-label="Show/hide value">👁</button>
             <label for="tv_api_key" style="margin-top:10px;">App Token / API Key</label>
-            <input type="text" id="tv_api_key" name="tv_api_key" value="<?= e($tvApiKey) ?>" placeholder="paste your Thingiverse app token">
+            <input type="password" id="tv_api_key" name="tv_api_key" value="<?= e($tvApiKey) ?>" placeholder="paste your Thingiverse app token"><button type="button" class="reveal-btn" data-target="tv_api_key" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_tv_token">Save &amp; Connect</button>
               <?php if ($tvReady): ?>
@@ -696,7 +540,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
             <label for="cults_username">Cults3D Username</label>
             <input type="text" id="cults_username" name="cults_username" value="<?= e($cultsUser) ?>" placeholder="your-cults3d-username">
             <label for="cults_api_key" style="margin-top:10px;">API Key</label>
-            <input type="text" id="cults_api_key" name="cults_api_key" value="<?= e($cultsTok) ?>" placeholder="paste your Cults3D API key">
+            <input type="password" id="cults_api_key" name="cults_api_key" value="<?= e($cultsTok) ?>" placeholder="paste your Cults3D API key"><button type="button" class="reveal-btn" data-target="cults_api_key" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_cults_token">Save &amp; Connect</button>
               <?php if ($cultsReady): ?>
@@ -711,9 +555,9 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
             <label for="cults_session">Download session — <code>_session_id</code> cookie <?php if ($cultsSess !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="text" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value">
+            <input type="password" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value"><button type="button" class="reveal-btn" data-target="cults_session" aria-label="Show/hide value">👁</button>
             <label for="cults_cf_clearance" style="margin-top:10px;"><code>cf_clearance</code> cookie (optional, helps avoid Cloudflare blocks)</label>
-            <input type="text" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)">
+            <input type="password" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)"><button type="button" class="reveal-btn" data-target="cults_cf_clearance" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_cults_session">Save Session</button>
               <?php if ($cultsSess !== ''): ?>
@@ -800,15 +644,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
     </div><!-- /.src-grid -->
 
 
-    <div style="margin-top:24px;">
-      <h2 style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;">More Sources</h2>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
-        <div style="background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:16px;opacity:.7;">
-          <div style="font-size:14px;font-weight:600;margin-bottom:4px;">Thangs</div>
-          <div style="font-size:12px;color:var(--muted);line-height:1.5;">Planned — no public API yet.</div>
-        </div>
-      </div>
-    </div>
+    
   </div>
 
   <!-- ===================== WORKER TAB ===================== -->
@@ -954,6 +790,48 @@ document.addEventListener('keydown', e => {
     });
   }
 });
+</script>
+<script>
+  const toggleBtn = document.getElementById('theme-toggle');
+  const toggleIcon = document.getElementById('theme-toggle-icon');
+
+  // Check for saved user preference, otherwise default to dark
+  const currentTheme = localStorage.getItem('theme') || 'dark';
+
+  if (currentTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    if (toggleIcon) toggleIcon.textContent = '☀️';
+  }
+
+  if (toggleBtn) toggleBtn.addEventListener('click', () => {
+    let theme = 'dark';
+    if (document.documentElement.getAttribute('data-theme') !== 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      toggleIcon.textContent = '☀️';
+      theme = 'light';
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+      toggleIcon.textContent = '🌙';
+    }
+    localStorage.setItem('theme', theme);
+  });
+</script>
+
+<script>
+  // Show/hide toggles for masked credential fields
+  document.querySelectorAll('.reveal-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var input = document.getElementById(btn.getAttribute('data-target'));
+      if (!input) return;
+      if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '🙈';
+      } else {
+        input.type = 'password';
+        btn.textContent = '👁';
+      }
+    });
+  });
 </script>
 </body>
 </html>

@@ -29,63 +29,9 @@ foreach ($sources as $s) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FarFetched — Sources</title>
-<style>
-  :root{--bg:#0c0a08;--panel:#141009;--card:#1a140c;--ink:#f0e6d3;--muted:#7a6a52;--line:#2e2218;--clay:#ff6b1a;--clay-deep:#c44d0d;--gold:#f5c842;}
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;background-image:radial-gradient(ellipse at 0% 100%,rgba(255,107,26,.06) 0%,transparent 60%);}
-  a{color:inherit;text-decoration:none;}
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/styles_home.css">
 
-  /* ── Top nav ── */
-  .topnav{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;background:rgba(12,10,8,.9);backdrop-filter:blur(8px);}
-  .brand{font-size:18px;font-weight:800;color:var(--clay);letter-spacing:-.5px;display:flex;align-items:center;gap:8px;}
-  .brand img{height:1.2em;width:auto;vertical-align:-.15em;}
-  .nav-links{display:flex;gap:20px;font-size:13px;color:var(--muted);}
-  .nav-links a:hover{color:var(--ink);}
-
-  /* ── Hero ── */
-  .hero{max-width:900px;margin:0 auto;padding:56px 32px 36px;}
-  .hero-eyebrow{font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--clay);margin-bottom:14px;}
-  .hero h1{font-size:clamp(32px,5vw,52px);font-weight:800;line-height:1.05;letter-spacing:-.02em;margin-bottom:18px;}
-  .hero h1 em{font-style:italic;color:var(--clay);}
-  .hero-lede{font-size:17px;color:var(--muted);line-height:1.65;max-width:58ch;margin-bottom:28px;}
-  .hero-stats{display:flex;gap:32px;flex-wrap:wrap;}
-  .hero-stat{font-size:13px;color:var(--muted);}
-  .hero-stat strong{display:block;font-size:22px;font-weight:800;color:var(--clay);line-height:1;}
-
-  /* ── Sources grid ── */
-  .section{max-width:900px;margin:0 auto;padding:0 32px 48px;}
-  .section-label{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:16px;}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:48px;}
-  a.tile{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;transition:border-color .15s,box-shadow .15s;}
-  a.tile:hover{border-color:var(--clay);box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .tname{font-size:17px;font-weight:700;margin-bottom:5px;}
-  .tdesc{font-size:12px;color:var(--muted);line-height:1.5;min-height:34px;}
-  .tmeta{margin-top:14px;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);}
-  .pill{border-radius:20px;padding:3px 10px;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.04em;background:var(--panel);}
-  .pill.fetch{background:rgba(255,107,26,.12);color:var(--clay);}
-
-  /* ── Feature cards ── */
-  .feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:48px;}
-  .feat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;}
-  .feat-icon{font-size:20px;margin-bottom:10px;}
-  .feat-title{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:4px;}
-  .feat-desc{font-size:12px;color:var(--muted);line-height:1.5;}
-
-  /* ── Token guide ── */
-  .token-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:48px;}
-  .token-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;}
-  .token-source{font-size:13px;font-weight:700;color:var(--clay);margin-bottom:10px;display:flex;align-items:center;gap:7px;}
-  .token-source span{width:6px;height:6px;background:var(--clay);border-radius:50%;display:inline-block;}
-  .token-step{font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:6px;padding-left:12px;position:relative;}
-  .token-step::before{content:"→";position:absolute;left:0;color:var(--clay);font-size:10px;}
-  .token-note{font-size:11px;color:var(--muted);margin-top:8px;padding:6px 10px;background:var(--panel);border-radius:6px;line-height:1.5;}
-  .browser-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
-  .btab{font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:var(--panel);color:var(--muted);}
-
-  /* ── Footer links ── */
-  .foot{max-width:900px;margin:0 auto;padding:0 32px 40px;display:flex;gap:20px;font-size:13px;color:var(--muted);flex-wrap:wrap;}
-  .foot a:hover{color:var(--clay);}
-</style>
 </head>
 <body>
 
@@ -96,6 +42,9 @@ foreach ($sources as $s) {
     <a href="jobs.php">Queue</a>
     <a href="viewer.php">3D Viewer</a>
     <a href="settings.php">Settings</a>
+		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
+		<span id="theme-toggle-icon">🌙</span> Change Appearance
+		</button>
   </div>
 </nav>
 
@@ -211,6 +160,32 @@ foreach ($sources as $s) {
   <a href="viewer.php">3D Viewer</a>
   <a href="settings.php">Settings</a>
 </div>
+
+<script>
+  const toggleBtn = document.getElementById('theme-toggle');
+  const toggleIcon = document.getElementById('theme-toggle-icon');
+
+  // Check for saved user preference, otherwise default to dark
+  const currentTheme = localStorage.getItem('theme') || 'dark';
+
+  if (currentTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    if (toggleIcon) toggleIcon.textContent = '☀️';
+  }
+
+  if (toggleBtn) toggleBtn.addEventListener('click', () => {
+    let theme = 'dark';
+    if (document.documentElement.getAttribute('data-theme') !== 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      toggleIcon.textContent = '☀️';
+      theme = 'light';
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+      toggleIcon.textContent = '🌙';
+    }
+    localStorage.setItem('theme', theme);
+  });
+</script>
 
 </body>
 </html>

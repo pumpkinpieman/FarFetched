@@ -51,137 +51,9 @@ $badge = static function (string $s): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Queue · FarFetched</title>
-<style>
-  :root{--bg:#0c0a08;--panel:#141009;--card:#1a140c;--ink:#f0e6d3;--muted:#7a6a52;--line:#2e2218;--clay:#ff6b1a;--clay-deep:#c44d0d;--ok:#c8a020;--err:#e05c5c;--warn:#f5c842;}
-  body{background-image:radial-gradient(ellipse at 0% 100%, rgba(255,107,26,0.06) 0%, transparent 60%);}
-  .brand{color:#ff6b1a !important;font-weight:800 !important;letter-spacing:-.5px;}
-  nav a{color:#8a8070;}
-  nav a:hover{background:#1a140c;color:#f0e6d3;}
-  nav a.active{background:rgba(255,107,26,0.1);color:#ff6b1a;border:1px solid rgba(255,107,26,0.2);font-weight:600;}
-  .msize{color:#f5c842 !important;}
-  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
-  .btn-primary:disabled{background:#2e1a0a;color:#5a4a32;cursor:not-allowed;}
-  .btn-ghost{color:#8a8070;border-color:#2e2218;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .srcBtn.active{background:rgba(245,200,66,0.08);color:#f5c842;}
-  select{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#f0e6d3;border-color:#2e2218;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
-  .card.sel{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.2);}
-  .pick{accent-color:#ff6b1a;}
-  .banner{background:#1a1000;color:#f5c842;border-color:#3d2800;}
-  .notice.ok{background:#1a1200;color:#f5c842;}
-  .notice.err{background:#1f0d0d;color:#e05c5c;}
-  .badge.paid{background:#3d2000;color:#f5c842;}
-  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
-  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2e2218;}
-  th{background:#141009;}
-  .pill.fetch{background:#1a1200;color:#f5c842;}
-  .pill{background:#1a140c;}
-  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,0.15);}
-  .track{background:#2e2218;} .fill{background:#ff6b1a;}
-  .rowfill{background:#ff6b1a;} .rowfill.green{background:#c8a020;}
-  .overall .live .dot{background:#ff6b1a;}
-  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .filebtn{background:#1a140c;border-color:#2e2218;color:#f0e6d3;}
-  .filebtn:hover{border-color:#ff6b1a;}
-  .filebtn.active{border-color:#f5c842;box-shadow:0 0 0 2px rgba(245,200,66,0.15);}
-  .folder-hdr{border-color:#2e2218;color:#7a6a52;}
-  .bar{background:#1a1000;color:#f5c842;border-color:#3d2800;}
-  .file-counter{background:#2e2218;color:#f0e6d3;}
-  .srcBtn{color:#7a6a52;}
-  .navlabel{color:#5a4a32;}
-  code{background:#1a140c;}
-  .notice{background:#1a140c;}
-  .step a{color:#ff6b1a;}
-  .act button{background:#1a140c;border-color:#2e2218;color:#7a6a52;}
-  .tag{background:#ff6b1a;}
+<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/styles_jobs.css">
 
-  body{background-image:radial-gradient(circle,rgba(57,168,92,.06) 1px,transparent 1px);background-size:24px 24px;}
-  .brand{color:#ff6b1a !important;font-family:ui-monospace,monospace !important;letter-spacing:-.5px;}
-  nav a:hover{background:#1a140c;color:#e8ede9;}
-  nav a.active{background:rgba(255,107,26,.1);color:#ff6b1a;border:1px solid rgba(57,168,92,.2);font-weight:500;}
-  nav a:not(.active){color:#c8d4c9;}
-  .msize{color:#f5a623 !important;}
-  .btn-primary{background:#ff6b1a;color:#fff;} .btn-primary:hover{background:#c44d0d;}
-  .btn-primary:disabled{background:#1c3023;color:#6b8070;cursor:not-allowed;}
-  .btn-ghost{color:#c8d4c9;border-color:#2a3028;} .btn-ghost:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .srcBtn.active{background:rgba(255,107,26,.1);color:#ff6b1a;}
-  select{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input,.pastebar-row input,textarea,input[type=text]{background:#1a140c;color:#e8ede9;border-color:#2a3028;}
-  .searchbar input:focus,textarea:focus,input:focus{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .card.sel{border-color:#d4820a;box-shadow:0 0 0 2px rgba(255,107,26,.2);}
-  .pick{accent-color:#d4820a;}
-  .banner{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-  .notice.ok,.notice{background:#0d1f12;color:#ff6b1a;}
-  .notice.err{background:#1f0d0d;color:#e05c5c;}
-  .notice.warn{background:#1a1200;color:#d4820a;}
-  .badge.paid{background:#3d2600;color:#f5a623;}
-  .tab-btn.active{color:#ff6b1a;border-bottom-color:#ff6b1a;}
-  .stat,.panel,.src-card,.overall,table{background:#1a140c;border-color:#2a3028;}
-  th{background:#161a17;}
-  .pill.fetch{background:#0d1f12;color:#ff6b1a;}
-  .pill{background:#1a140c;}
-  a.tile:hover{border-color:#ff6b1a;box-shadow:0 0 0 2px rgba(255,107,26,.15);}
-  .track{background:#2e2218;} .fill{background:#ff6b1a;}
-  .rowfill.green{background:#c8a020;}
-  .overall .live .dot{background:#ff6b1a;}
-  .act button:hover{border-color:#ff6b1a;color:#ff6b1a;}
-  .filebtn{background:#1a140c;border-color:#2a3028;color:#e8ede9;}
-  .filebtn:hover{border-color:#ff6b1a;}
-  .filebtn.active{border-color:#d4820a;box-shadow:0 0 0 2px rgba(212,130,10,.2);}
-  .folder-hdr{border-color:#2a3028;color:#6b8070;}
-  .bar{background:#1a1500;color:#f5a623;border-color:#3d3000;}
-
-  *{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;min-height:100vh;}
-  aside{width:240px;background:var(--panel);border-right:1px solid var(--line);padding:24px 16px;flex-shrink:0;}
-  .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 20px;letter-spacing:-0.3px;}
-  nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;}
-  nav a:hover{background:#1a140c;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
-  main{flex:1;padding:28px 32px;}
-  h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;margin-bottom:18px;}
-  .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;}
-  .stat{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 18px;min-width:96px;}
-  .stat .n{font-size:22px;font-weight:600;} .stat .l{font-size:12px;color:var(--muted);text-transform:capitalize;}
-  .toolbar{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;}
-  button{font:inherit;cursor:pointer;border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:500;}
-  .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line);} .btn-ghost:hover{border-color:var(--clay);color:var(--clay-deep);}
-  .notice{background:#E8F1EC;color:#3F7D5B;padding:10px 14px;border-radius:9px;font-size:14px;margin-bottom:16px;}
-  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;}
-  th,td{text-align:left;padding:11px 14px;font-size:13px;border-bottom:1px solid var(--line);}
-  th{background:var(--panel);font-weight:600;color:var(--muted);}
-  tr:last-child td{border-bottom:none;}
-  .tag{display:inline-block;padding:2px 9px;border-radius:20px;color:#fff;font-size:11px;font-weight:600;text-transform:capitalize;}
-  .err{color:#B23B3B;font-size:12px;} .muted{color:var(--muted);}
-  /* live progress */
-  .overall{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:20px;}
-  .overall .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;gap:12px;flex-wrap:wrap;}
-  .overall .label{font-size:14px;font-weight:600;}
-  .overall .live{font-size:13px;color:var(--clay-deep);}
-  .overall .live .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--clay);margin-right:6px;animation:pulse 1.2s ease-in-out infinite;}
-  @keyframes pulse{0%,100%{opacity:.35;}50%{opacity:1;}}
-  .track{height:9px;border-radius:6px;background:var(--line);overflow:hidden;}
-  .fill{height:100%;background:linear-gradient(90deg,var(--clay),var(--clay-deep));width:0;transition:width .4s ease;}
-  .rowbar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;width:120px;margin-top:4px;}
-  .rowfill{height:100%;background:var(--clay);width:0;transition:width .25s ease;}
-  .rowfill.green{background:#3F7D5B;}
-  .pacefill{transition:width 1s linear;}
-  .rowbar.indet{position:relative;}
-  .rowbar.indet .rowfill{width:40%;transition:none;position:absolute;animation:indet 1.1s ease-in-out infinite;}
-  @keyframes indet{0%{left:-40%;}100%{left:100%;}}
-  .rowprog{font-size:11px;color:var(--muted);white-space:nowrap;}
-  .file-counter{display:inline-block;font-size:11px;font-weight:600;color:var(--fg);background:var(--line);border-radius:3px;padding:0 4px;margin-right:3px;}
-  .src-badge{display:inline-block;font-size:10px;font-weight:800;padding:2px 6px;border-radius:5px;letter-spacing:.04em;background:#2e2218;color:#7a6a52;font-family:ui-monospace,monospace;}
-  .src-badge.printables{background:rgba(255,107,26,.12);color:#ff6b1a;}
-  .src-badge.makerworld{background:rgba(39,120,248,.12);color:#6fa8f5;}
-  .src-badge.thingiverse{background:rgba(0,188,212,.12);color:#4dd6e8;}
-  .src-badge.cults3d{background:rgba(180,60,200,.12);color:#d07be0;}
-  .src-badge.stlflix{background:rgba(245,200,66,.12);color:#f5c842;}
-  .act{display:inline-flex;gap:6px;}
-  .act button{padding:5px 9px;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:7px;}
-  .act button:hover{border-color:var(--clay);color:var(--clay-deep);}
-  .act button.rm:hover{border-color:#B23B3B;color:#B23B3B;}
-</style>
 </head>
 <body>
   <aside>
@@ -191,6 +63,9 @@ $badge = static function (string $s): string {
       <a href="jobs.php" class="active">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="settings.php">Settings</a>
+		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
+		<span id="theme-toggle-icon">🌙</span> Change Appearance
+		</button>
     </nav>
   </aside>
   <main>
@@ -481,5 +356,31 @@ $badge = static function (string $s): string {
     startPolling();
   })();
   </script>
+<script>
+  const toggleBtn = document.getElementById('theme-toggle');
+  const toggleIcon = document.getElementById('theme-toggle-icon');
+
+  // Check for saved user preference, otherwise default to dark
+  const currentTheme = localStorage.getItem('theme') || 'dark';
+
+  if (currentTheme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    if (toggleIcon) toggleIcon.textContent = '☀️';
+  }
+
+  if (toggleBtn) toggleBtn.addEventListener('click', () => {
+    let theme = 'dark';
+    if (document.documentElement.getAttribute('data-theme') !== 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
+      toggleIcon.textContent = '☀️';
+      theme = 'light';
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+      toggleIcon.textContent = '🌙';
+    }
+    localStorage.setItem('theme', theme);
+  });
+</script>
+
 </body>
 </html>
