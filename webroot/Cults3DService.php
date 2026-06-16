@@ -17,19 +17,32 @@ declare(strict_types=1);
 final class Cults3DService
 {
     private const ENDPOINT = 'https://cults3d.com/graphql';
-    private const UA        = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FarFetched/1.0';
+    private const UA        = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0';
     private const CDN       = 'files.cults3d.com';
+    private const WEB       = 'https://cults3d.com';
 
     public string $lastError = '';
     public int    $lastTotal = 0;
 
     private string $username;
     private string $apiKey;
+    private string $sessionId;
+    private string $cfClearance;
 
     public function __construct(?string $username = null, ?string $apiKey = null)
     {
         $this->username = trim($username ?? (function_exists('cfg') ? (string) cfg('cults3d_username') : ''));
         $this->apiKey   = trim($apiKey   ?? (function_exists('cfg') ? (string) cfg('cults3d_token')    : ''));
+        // Session cookies used only for the web download flow (the public API
+        // never exposes a download URL). Browse/search still use the API key.
+        $this->sessionId   = function_exists('cfg') ? trim((string) cfg('cults3d_session'))      : '';
+        $this->cfClearance = function_exists('cfg') ? trim((string) cfg('cults3d_cf_clearance')) : '';
+    }
+
+    /** Whether the web-download session cookie is configured. */
+    public function hasSession(): bool
+    {
+        return $this->sessionId !== '';
     }
 
     public function isAuthed(): bool
@@ -194,18 +207,17 @@ final class Cults3DService
         }
 
         if ($out === []) {
-            // Blueprints exist but their URLs are withheld -> this is a paid /
-            // pay-what-you-want model you don't own. Cults3D only populates
-            // fileUrl for free models or ones you've purchased.
-            $cents      = (int) ($creation['price']['cents'] ?? 0);
-            $formatted  = trim((string) ($creation['price']['formatted'] ?? ''));
-            $openPriced = (bool) ($creation['openPriced'] ?? false);
-            if ($hadBlueprintWithoutUrl && ($cents > 0 || $openPriced)) {
+            // Blueprints exist but their URLs are withheld. This normally means
+            // a paid model you don't own — Cults3D only populates fileUrl for
+            // free models or ones you've purchased. A pay-what-you-want model
+            // with a zero floor (cents == 0) is still FREE to download, so only
+            // a positive price counts as "paid".
+            $cents     = (int) ($creation['price']['cents'] ?? 0);
+            $formatted = trim((string) ($creation['price']['formatted'] ?? ''));
+            if ($hadBlueprintWithoutUrl && $cents > 0) {
                 // Prefer Cults3D's own localized price string (correct currency
                 // symbol/format); fall back to a generic label if absent.
-                $price = $formatted !== ''
-                    ? $formatted
-                    : ($cents > 0 ? $cents . ' cents' : 'pay-what-you-want');
+                $price = $formatted !== '' ? $formatted : ($cents . ' cents');
                 $this->lastError = 'Paid Cults3D model (' . $price . ') — download URL is '
                     . 'only available after purchase, so it cannot be fetched.';
             } elseif ($hadBlueprintWithoutUrl) {
@@ -306,6 +318,174 @@ final class Cults3DService
             return null;
         }
         return $json['data'] ?? null;
+    }
+
+    /**
+     * Build the Cookie header for authenticated web (session) requests.
+     */
+    private function sessionCookieHeader(): string
+    {
+        $parts = [];
+        if ($this->cfClearance !== '') $parts[] = 'cf_clearance=' . $this->cfClearance;
+        $parts[] = 'age_gate=true';
+        if ($this->sessionId !== '')   $parts[] = '_session_id=' . $this->sessionId;
+        return 'Cookie: ' . implode('; ', $parts);
+    }
+
+    /**
+     * A cURL handle for authenticated web requests (browser-like headers +
+     * session cookies). Does NOT auto-follow redirects so callers can inspect
+     * the 302 Location themselves.
+     */
+    private function webCurl(string $url): \CurlHandle
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_HTTPHEADER     => [
+                'User-Agent: ' . self::UA,
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: en-US,en;q=0.9',
+                $this->sessionCookieHeader(),
+            ],
+        ]);
+        return $ch;
+    }
+
+    /**
+     * Resolve a model slug to a single downloadable ZIP URL using the
+     * authenticated web flow (the public API never exposes file URLs).
+     *
+     * Flow, mirroring the browser:
+     *   1. GET model page          -> scrape Rails CSRF (authenticity_token)
+     *   2. POST /en/free_orders    -> 302 to /en/orders/{orderId}
+     *   3. GET  /en/orders/{id}    -> scrape /en/downloads/{id}?creation=slug
+     *   4. GET  /en/downloads/{id} -> 302 to signed CloudFront .zip URL
+     *
+     * Returns the signed CloudFront URL, or '' on failure (sets lastError).
+     * Note: only works for FREE models (free_orders). Paid models need a
+     * purchase and are out of scope.
+     */
+    public function resolveSessionDownloadUrl(string $slug): string
+    {
+        $this->lastError = '';
+        if (!$this->hasSession()) {
+            $this->lastError = 'No Cults3D session cookie set (add _session_id in Settings).';
+            return '';
+        }
+
+        // Locale-prefixed model URL needs a category segment we don't know, so
+        // use the canonical /en/3d-model lookup the site itself accepts. The
+        // model page is reachable via the short /:id or the full slug path;
+        // we fetch the slug page directly (Cults3D resolves the category).
+        // 1) Fetch the model page for the CSRF token.
+        $modelUrl = self::WEB . '/en/3d-model/_/' . rawurlencode($slug);
+        $ch   = $this->webCurl($modelUrl);
+        $html = curl_exec($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        // The /_/ category placeholder may 301/404; if so, follow the GraphQL
+        // url() field which gives the exact category path.
+        if (!is_string($html) || $code >= 400 || $code === 0
+            || !preg_match('/name="csrf-token" content="([^"]+)"/', $html)) {
+            $realUrl = $this->lookupModelUrl($slug);
+            if ($realUrl !== '') {
+                $ch   = $this->webCurl($realUrl);
+                $html = curl_exec($ch);
+                $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+            }
+        }
+
+        if (!is_string($html) || $html === '') {
+            $this->lastError = 'Could not load Cults3D model page (HTTP ' . $code . ').';
+            return '';
+        }
+        if (!preg_match('/name="csrf-token" content="([^"]+)"/', $html, $m)) {
+            $this->lastError = 'Cults3D session invalid or expired (no CSRF token on page). Re-paste _session_id in Settings.';
+            return '';
+        }
+        $csrf = html_entity_decode($m[1], ENT_QUOTES);
+
+        // 2) POST free_orders to "acquire" the free model -> 302 to the order.
+        $orderUrl = $this->postFreeOrder($slug, $csrf);
+        if ($orderUrl === '') {
+            // lastError already set
+            return '';
+        }
+
+        // 3) GET the order page; scrape the /en/downloads/{id}?creation=slug link.
+        $ch    = $this->webCurl($orderUrl);
+        $oHtml = curl_exec($ch);
+        curl_close($ch);
+        if (!is_string($oHtml) || !preg_match('#(/en/downloads/\d+\?creation=[^"\'\s]+)#', $oHtml, $dm)) {
+            $this->lastError = 'Could not find a download link on the Cults3D order page.';
+            return '';
+        }
+        $downloadPath = html_entity_decode($dm[1], ENT_QUOTES);
+
+        // 4) GET the download link -> 302 to the signed CloudFront URL.
+        $ch = $this->webCurl(self::WEB . $downloadPath);
+        curl_exec($ch);
+        $signed = (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+        $code   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($signed === '' || stripos($signed, 'download.cults3d.com') === false) {
+            $this->lastError = 'Cults3D did not return a signed download URL (HTTP ' . $code . ').';
+            return '';
+        }
+        return $signed;
+    }
+
+    /**
+     * POST /en/free_orders to acquire a free model. Returns the absolute order
+     * URL from the 302 Location, or '' on failure.
+     */
+    private function postFreeOrder(string $slug, string $csrf): string
+    {
+        $url = self::WEB . '/en/free_orders?creation_slug=' . rawurlencode($slug);
+        $ch  = $this->webCurl($url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, 'authenticity_token=' . rawurlencode($csrf));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'User-Agent: ' . self::UA,
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.9',
+            'Content-Type: application/x-www-form-urlencoded',
+            'Origin: ' . self::WEB,
+            'Referer: ' . self::WEB . '/en/3d-model/_/' . rawurlencode($slug),
+            $this->sessionCookieHeader(),
+        ]);
+        curl_exec($ch);
+        $loc  = (string) curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($loc === '' || stripos($loc, '/orders/') === false) {
+            $this->lastError = 'Cults3D free-order step failed (HTTP ' . $code . '). '
+                . 'The model may be paid, or the session/cf_clearance cookie expired.';
+            return '';
+        }
+        // Location may be absolute already.
+        return str_starts_with($loc, 'http') ? $loc : self::WEB . $loc;
+    }
+
+    /**
+     * Look up a model's exact web URL via the GraphQL `url` field, used when
+     * the /_/ category placeholder doesn't resolve.
+     */
+    private function lookupModelUrl(string $slug): string
+    {
+        if (!$this->isAuthed()) return '';
+        $gql = '{ creation(slug: ' . json_encode($slug) . ') { url } }';
+        $data = $this->gql($gql);
+        return (string) ($data['creation']['url'] ?? '');
     }
 
     private function baseCurl(string $url): \CurlHandle
