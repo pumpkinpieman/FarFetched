@@ -436,8 +436,22 @@ final class Cults3DService
             $signed = trim($lm[1]);
         }
 
-        if ($signed === '' || stripos($signed, 'download.cults3d.com') === false) {
-            $this->lastError = 'Cults3D did not return a signed download URL (HTTP ' . $code . ').';
+        // Cults3D serves signed download URLs from several CDNs/buckets
+        // (download.cults3d.com / CloudFront, *.scw.cloud / Scaleway S3, etc).
+        // Accept any absolute URL that carries a signature query and is not a
+        // redirect back into the site (e.g. /en/log-in-choice on a dead session).
+        $isSigned = $signed !== ''
+            && preg_match('#^https?://#i', $signed)
+            && stripos($signed, 'cults3d.com/en/') === false
+            && (stripos($signed, 'signature=') !== false
+                || stripos($signed, 'x-amz-signature=') !== false
+                || stripos($signed, 'expires=') !== false);
+
+        if (!$isSigned) {
+            $hint = (stripos($signed, 'log-in') !== false)
+                ? ' Session expired — re-paste _session_id in Settings.'
+                : '';
+            $this->lastError = 'Cults3D did not return a signed download URL (HTTP ' . $code . ').' . $hint;
             return '';
         }
         return $signed;
