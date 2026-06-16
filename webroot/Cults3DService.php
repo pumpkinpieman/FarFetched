@@ -510,38 +510,40 @@ final class Cults3DService
     }
 
     /**
-     * Full web-session download: resolve the signed URL for a free model and
-     * stream the ZIP to $destPath. Returns true on success.
+     * Full web-session download for a free model. Cults3D may serve EITHER a
+     * multi-file ZIP or a single raw file (e.g. one .stl), from any of several
+     * CDN hosts. Returns the absolute saved path on success, or '' on failure.
+     *
+     * $destDir is the directory to save into; the on-disk filename comes from
+     * the server's Content-Disposition (falling back to the slug).
      */
-    public function downloadAllViaSession(string $slug, string $destPath, ?callable $onProgress = null): bool
+    public function downloadAllViaSession(string $slug, string $destDir, ?callable $onProgress = null): string
     {
         $signed = $this->resolveSessionDownloadUrl($slug);
         if ($signed === '') {
-            return false; // lastError already set
+            return ''; // lastError already set
         }
-        // The signed CDN URL must be fetched WITHOUT the API auth/JSON headers
-        // (those make S3/Scaleway/CloudFront return an XML/JSON error body that
-        // would be saved as a corrupt ".zip"). Use a clean downloader.
-        return $this->downloadCdnFile($signed, $destPath, $onProgress);
+        return $this->downloadCdnFile($signed, $destDir, $slug, $onProgress);
     }
 
     /**
-     * Download a signed CDN URL to disk with browser-like, header-clean
-     * settings. No Authorization header, explicit gzip/deflate/br (no zstd),
-     * HTTP/1.1 — mirrors the working session requests.
+     * Download a signed CDN URL into $destDir. Determines the filename and type
+     * from the response (Content-Disposition / Content-Type), saving a .zip or
+     * a raw model file as appropriate. No API auth headers; explicit
+     * gzip/deflate/br (no zstd) + HTTP/1.1. Returns saved path or ''.
      */
-    private function downloadCdnFile(string $url, string $destPath, ?callable $onProgress = null): bool
+    private function downloadCdnFile(string $url, string $destDir, string $slug, ?callable $onProgress = null): string
     {
         $this->lastError = '';
-        $dir = dirname($destPath);
-        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
-            $this->lastError = 'Cannot create destination dir: ' . $dir;
-            return false;
+        if (!is_dir($destDir) && !@mkdir($destDir, 0775, true) && !is_dir($destDir)) {
+            $this->lastError = 'Cannot create destination dir: ' . $destDir;
+            return '';
         }
-        $tmp = $destPath . '.part';
+        $tmp = $destDir . '/.cults3d-download.part';
         $fh  = @fopen($tmp, 'wb');
-        if ($fh === false) { $this->lastError = 'Cannot open temp file.'; return false; }
+        if ($fh === false) { $this->lastError = 'Cannot open temp file.'; return ''; }
 
+        $cdHeader = '';
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_FILE           => $fh,
@@ -556,6 +558,10 @@ final class Cults3DService
                 'User-Agent: ' . self::UA,
                 'Accept: */*',
             ],
+            CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$cdHeader) {
+                if (stripos($line, 'content-disposition:') === 0) $cdHeader .= $line;
+                return strlen($line);
+            },
         ]);
         if ($onProgress !== null) {
             curl_setopt($ch, CURLOPT_NOPROGRESS, false);
@@ -575,31 +581,39 @@ final class Cults3DService
         if ($ok === false || $status >= 400) {
             @unlink($tmp);
             $this->lastError = $cerr !== '' ? 'Download error: ' . $cerr : 'HTTP ' . $status;
-            return false;
+            return '';
         }
 
-        // Guard: verify we actually got a ZIP, not an HTML/XML/JSON error body
-        // saved with a .zip name. Real zips start with "PK".
-        $magic = '';
-        if (($vf = @fopen($tmp, 'rb')) !== false) {
-            $magic = (string) fread($vf, 2);
-            fclose($vf);
-        }
-        if ($magic !== 'PK') {
+        // Reject obvious error bodies (HTML/XML/JSON saved as a file).
+        if (stripos($ctype, 'text/html') !== false
+            || stripos($ctype, 'application/xml') !== false
+            || stripos($ctype, 'application/json') !== false) {
             @unlink($tmp);
-            $hint = stripos($ctype, 'xml') !== false || stripos($ctype, 'html') !== false || stripos($ctype, 'json') !== false
-                ? ' (CDN returned ' . $ctype . ', not a ZIP — the signed URL may have expired or the session is stale).'
-                : '';
-            $this->lastError = 'Downloaded file is not a valid ZIP' . $hint;
-            return false;
+            $this->lastError = 'CDN returned ' . $ctype . ' instead of a file '
+                . '(signed URL expired or session stale).';
+            return '';
         }
 
+        // Determine the real filename from Content-Disposition, else slug.
+        $fname = '';
+        if ($cdHeader !== '' && preg_match('/filename\*?=(?:UTF-8\'\')?"?([^";\r\n]+)"?/i', $cdHeader, $fm)) {
+            $fname = rawurldecode(trim($fm[1]));
+        }
+        if ($fname === '') {
+            // Fall back: detect zip by magic, name from slug.
+            $magic = '';
+            if (($vf = @fopen($tmp, 'rb')) !== false) { $magic = (string) fread($vf, 2); fclose($vf); }
+            $fname = preg_replace('/[^A-Za-z0-9._-]+/', '_', $slug) . ($magic === 'PK' ? '.zip' : '.bin');
+        }
+        $fname = basename($fname); // strip any path components
+
+        $destPath = $destDir . '/' . $fname;
         if (!@rename($tmp, $destPath)) {
             @unlink($tmp);
             $this->lastError = 'Could not finalize file (rename failed).';
-            return false;
+            return '';
         }
-        return true;
+        return $destPath;
     }
 
     private function baseCurl(string $url): \CurlHandle

@@ -455,21 +455,20 @@ while (true) {
             // (model page -> free order -> order page -> signed CDN zip).
             if ($cults->hasSession()) {
                 if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
-                $zipDest = $destDir . '/' . safe_segment($name !== '' ? $name : $slug) . '.zip';
 
-                if (!cfg('overwrite') && is_file($zipDest)) {
-                    logln('  Exists, skip: ' . basename($zipDest));
-                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
-                } elseif ($cults->downloadAllViaSession($slug ?: $modelId, $zipDest, progress_writer($jobId, basename($zipDest)))) {
-                    logln('  Saved Cults3D zip: ' . $zipDest);
-                    if (extract_zip_safe($zipDest, $destDir)) {
-                        logln('  Extracted into: ' . $destDir);
-                        if (cfg('keep_zip') !== true) { @unlink($zipDest); logln('  Removed zip (keep_zip off).'); }
+                $savedPath = $cults->downloadAllViaSession($slug ?: $modelId, $destDir, progress_writer($jobId, $name !== '' ? $name : $slug));
+                if ($savedPath !== '') {
+                    logln('  Saved Cults3D file: ' . $savedPath);
+                    // If it's a ZIP, extract and honor keep_zip; raw files stay as-is.
+                    if (strtolower(substr($savedPath, -4)) === '.zip') {
+                        if (extract_zip_safe($savedPath, $destDir)) {
+                            logln('  Extracted into: ' . $destDir);
+                            if (cfg('keep_zip') !== true) { @unlink($savedPath); logln('  Removed zip (keep_zip off).'); }
+                        }
                     }
                     $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
                 } else {
-                    // Session resolve/download failed. Distinguish paid (skip)
-                    // from a real error (retryable / session issue).
+                    // Resolve/download failed. Distinguish paid (skip) from error.
                     $msg = $cults->lastError !== '' ? $cults->lastError : 'Cults3D download failed.';
                     $isPaid = stripos($msg, 'paid') !== false || stripos($msg, 'free-order') !== false;
                     $upd->execute([':st' => $isPaid ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
