@@ -219,3 +219,21 @@
 [data-theme="light"] .meta .msub {
   color: #b9b0a0;
 }
+
+/* ── Toast notification (bottom-right) ───────────────────────────────── */
+#ff-toast{
+  position:fixed; right:24px; bottom:24px; z-index:9999;
+  display:flex; align-items:center; gap:14px;
+  background:#ff6b1a; color:#fff;
+  padding:14px 18px; border-radius:11px;
+  font-size:14px; font-weight:600;
+  box-shadow:0 8px 28px rgba(0,0,0,.35);
+  opacity:0; transform:translateY(12px);
+  pointer-events:none; transition:opacity .22s ease, transform .22s ease;
+  max-width:360px;
+}
+#ff-toast.show{ opacity:1; transform:translateY(0); pointer-events:auto; }
+#ff-toast .ff-toast-link{
+  color:#fff; text-decoration:underline; font-weight:700; white-space:nowrap;
+}
+#ff-toast .ff-toast-link:hover{ opacity:.85; }

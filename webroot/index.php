@@ -292,8 +292,15 @@ $csrf = csrf_token();
     </div>
 
     <?php if ($banner): ?><div class="banner"><?= e($banner) ?></div><?php endif; ?>
+
     <?php if ($source === 'printables'): ?>
-    
+    <div class="pastebar">
+      <div class="pastebar-row">
+        <input type="text" id="pasteId" placeholder="https://www.printables.com/model/1743150-… or just 1743150">
+        <button class="btn-primary" id="pasteGo">Queue ZIP</button>
+      </div>
+      <div class="pastebar-status" id="pasteStatus"></div>
+    </div>
     <?php endif; ?>
 
     <div class="grid" id="grid">
@@ -338,6 +345,27 @@ $csrf = csrf_token();
   const FILE_TYPE = <?= json_encode($fileType) ?>;
   const SOURCE = <?= json_encode($source) ?>;
   const ACTIVE_CAT = <?= json_encode($active) ?>;
+
+  // ---- Toast notification (bottom-right) ------------------------------------
+  let _toastTimer = null;
+  function showToast(message, opts) {
+    opts = opts || {};
+    let t = document.getElementById('ff-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'ff-toast';
+      document.body.appendChild(t);
+    }
+    // Optional "View queue" link.
+    const link = opts.link
+      ? '<a href="jobs.php" class="ff-toast-link">View queue →</a>'
+      : '';
+    t.innerHTML = '<span class="ff-toast-msg"></span>' + link;
+    t.querySelector('.ff-toast-msg').textContent = message;
+    t.classList.add('show');
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { t.classList.remove('show'); }, opts.duration || 3500);
+  }
   const nsfwEl = document.getElementById('nsfwToggle');
   const showNsfw = () => (nsfwEl && nsfwEl.checked) ? '1' : '0';
 
@@ -852,8 +880,22 @@ $csrf = csrf_token();
       });
       const data = await res.json();
       if (data.ok) {
+        const n = data.queued || 0;
+        const skipped = data.skipped || 0;
         selStore.clear();
-        window.location.href = 'jobs.php';
+        // Clear any selected checkboxes / selection UI without leaving the page.
+        document.querySelectorAll('.pick:checked').forEach(c => { c.checked = false; });
+        document.querySelectorAll('.card.sel').forEach(c => c.classList.remove('sel'));
+        if (typeof refresh === 'function') refresh();
+        let msg;
+        if (n > 0) {
+          msg = n + (n === 1 ? ' model' : ' models') + ' added to the queue'
+              + (skipped ? ' (' + skipped + ' already queued)' : '');
+        } else {
+          msg = skipped ? 'Already in the queue' : 'Nothing new to add';
+        }
+        showToast(msg, { link: true });
+        dlBtn.disabled = false; dlBtn.textContent = 'Download Selected';
       } else {
         alert('Queue failed: ' + (data.error || 'unknown'));
         dlBtn.disabled = false; dlBtn.textContent = 'Download Selected';
