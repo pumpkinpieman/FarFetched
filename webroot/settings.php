@@ -210,6 +210,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         cfg_save(['cults3d_username' => '', 'cults3d_token' => '']);
         $notice = ['type' => 'ok', 'text' => 'Cults3D credentials cleared.'];
     }
+    elseif ($action === 'save_cults_session') {
+        $session = trim((string) ($_POST['cults_session'] ?? ''));
+        $cf      = trim((string) ($_POST['cults_cf_clearance'] ?? ''));
+        cfg_save(['cults3d_session' => $session, 'cults3d_cf_clearance' => $cf]);
+        $notice = $session !== ''
+            ? ['type' => 'ok', 'text' => 'Cults3D download session saved. Free models can now be downloaded.']
+            : ['type' => 'ok', 'text' => 'Cults3D download session cleared.'];
+    }
+    elseif ($action === 'clear_cults_session') {
+        cfg_save(['cults3d_session' => '', 'cults3d_cf_clearance' => '']);
+        $notice = ['type' => 'ok', 'text' => 'Cults3D download session cleared.'];
+    }
     elseif ($action === 'save_cults_dir') {
         $r = apply_source_dir((string) ($_POST['cults_dir'] ?? ''), 'cults3d');
         $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
@@ -296,6 +308,8 @@ $tvDelay = (int) cfg('thingiverse_delay');
 
 $cultsUser  = (string) cfg('cults3d_username');
 $cultsTok   = (string) cfg('cults3d_token');
+$cultsSess  = (string) cfg('cults3d_session');
+$cultsCf    = (string) cfg('cults3d_cf_clearance');
 $cultsDir   = get_cults3d_dir();
 $cultsWrite = is_dir($cultsDir) && is_writable($cultsDir);
 $cultsDelay = (int) cfg('cults3d_delay');
@@ -691,6 +705,23 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
             </div>
           </form>
           <p class="hint">cults3d.com → Account → Settings → API → Generate key. Enter your username and the generated key.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_session">Download session — <code>_session_id</code> cookie <?php if ($cultsSess !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="text" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value">
+            <label for="cults_cf_clearance" style="margin-top:10px;"><code>cf_clearance</code> cookie (optional, helps avoid Cloudflare blocks)</label>
+            <input type="text" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_session">Save Session</button>
+              <?php if ($cultsSess !== ''): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_cults_session" onclick="return confirm('Clear Cults3D download session?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">The public Cults3D API can't download files, so free-model downloads use your browser session. In a logged-in cults3d.com tab: DevTools → Storage/Application → Cookies → copy the <code>_session_id</code> value (and optionally <code>cf_clearance</code>). These expire periodically — re-paste when downloads start failing. Paid models still require purchasing on the site.</p>
         </div>
         <div class="src-body">
           <form method="post">

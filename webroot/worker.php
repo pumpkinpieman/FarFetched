@@ -445,19 +445,56 @@ while (true) {
         continue;
     }
 
-    // ---- Cults3D: per-file downloads ----------------------------------------
+    // ---- Cults3D: whole-model ZIP via authenticated web session -------------
     if (($job['source'] ?? '') === 'cults3d') {
         try {
+            $destDir = rtrim(get_cults3d_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+
+            // Primary path: the public API never exposes file URLs, so free
+            // models download through the authenticated web session flow
+            // (model page -> free order -> order page -> signed CDN zip).
+            if ($cults->hasSession()) {
+                if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
+                $zipDest = $destDir . '/' . safe_segment($name !== '' ? $name : $slug) . '.zip';
+
+                if (!cfg('overwrite') && is_file($zipDest)) {
+                    logln('  Exists, skip: ' . basename($zipDest));
+                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                } elseif ($cults->downloadAllViaSession($slug ?: $modelId, $zipDest, progress_writer($jobId, basename($zipDest)))) {
+                    logln('  Saved Cults3D zip: ' . $zipDest);
+                    if (extract_zip_safe($zipDest, $destDir)) {
+                        logln('  Extracted into: ' . $destDir);
+                        if (cfg('keep_zip') !== true) { @unlink($zipDest); logln('  Removed zip (keep_zip off).'); }
+                    }
+                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                } else {
+                    // Session resolve/download failed. Distinguish paid (skip)
+                    // from a real error (retryable / session issue).
+                    $msg = $cults->lastError !== '' ? $cults->lastError : 'Cults3D download failed.';
+                    $isPaid = stripos($msg, 'paid') !== false || stripos($msg, 'free-order') !== false;
+                    $upd->execute([':st' => $isPaid ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                    logerr('warn', '  Cults3D ' . ($isPaid ? 'skipped' : 'error') . ': ' . $msg);
+                }
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(CULTS3D_DELAY_SECONDS);
+                continue;
+            }
+
+            // No session configured: fall back to the API blueprints path.
+            // fileUrl is always null there, so this effectively reports that a
+            // session cookie is required (or flags paid models).
             $files = $cults->getFiles($slug ?: $modelId);
             if (empty($files)) {
                 $msg = $cults->lastError !== '' ? $cults->lastError : 'No files found for this Cults3D creation.';
+                if (stripos($msg, 'no downloadable') !== false || stripos($msg, 'withheld') !== false) {
+                    $msg .= ' Add a Cults3D download session (_session_id) in Settings to enable free downloads.';
+                }
                 $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
                 logerr('warn', '  Skipped: ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(CULTS3D_DELAY_SECONDS);
                 continue;
             }
-            $destDir = rtrim(get_cults3d_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
             if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
             $anyOk = false;
             foreach ($files as $f) {

@@ -492,6 +492,8 @@ function cfg_defaults(): array
         'thingiverse_delay'          => 60,
         'cults3d_username'           => (string) (getenv('FETCHER_CULTS3D_USERNAME') ?: ''),
         'cults3d_token'              => (string) (getenv('FETCHER_CULTS3D_TOKEN') ?: ''),
+        'cults3d_session'            => '',
+        'cults3d_cf_clearance'       => '',
         'cults3d_download_dir'       => '',
         'cults3d_delay'              => 60,
         'stlflix_token'              => (string) (getenv('FETCHER_STLFLIX_TOKEN') ?: ''),
@@ -581,6 +583,12 @@ function cfg_save(array $patch): bool
     }
     if (array_key_exists('cults3d_token', $patch)) {
         $current['cults3d_token'] = trim((string) $patch['cults3d_token']);
+    }
+    if (array_key_exists('cults3d_session', $patch)) {
+        $current['cults3d_session'] = trim((string) $patch['cults3d_session']);
+    }
+    if (array_key_exists('cults3d_cf_clearance', $patch)) {
+        $current['cults3d_cf_clearance'] = trim((string) $patch['cults3d_cf_clearance']);
     }
     if (array_key_exists('cults3d_download_dir', $patch)) {
         $current['cults3d_download_dir'] = trim((string) $patch['cults3d_download_dir']);

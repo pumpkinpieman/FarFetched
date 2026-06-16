@@ -509,6 +509,20 @@ final class Cults3DService
         return (string) ($data['creation']['url'] ?? '');
     }
 
+    /**
+     * Full web-session download: resolve the signed URL for a free model and
+     * stream the ZIP to $destPath. Returns true on success.
+     */
+    public function downloadAllViaSession(string $slug, string $destPath, ?callable $onProgress = null): bool
+    {
+        $signed = $this->resolveSessionDownloadUrl($slug);
+        if ($signed === '') {
+            return false; // lastError already set
+        }
+        // The signed CDN URL needs no cookies; reuse the standard downloader.
+        return $this->downloadToFile($signed, $destPath, $onProgress);
+    }
+
     private function baseCurl(string $url): \CurlHandle
     {
         $ch = curl_init($url);
