@@ -519,8 +519,87 @@ final class Cults3DService
         if ($signed === '') {
             return false; // lastError already set
         }
-        // The signed CDN URL needs no cookies; reuse the standard downloader.
-        return $this->downloadToFile($signed, $destPath, $onProgress);
+        // The signed CDN URL must be fetched WITHOUT the API auth/JSON headers
+        // (those make S3/Scaleway/CloudFront return an XML/JSON error body that
+        // would be saved as a corrupt ".zip"). Use a clean downloader.
+        return $this->downloadCdnFile($signed, $destPath, $onProgress);
+    }
+
+    /**
+     * Download a signed CDN URL to disk with browser-like, header-clean
+     * settings. No Authorization header, explicit gzip/deflate/br (no zstd),
+     * HTTP/1.1 — mirrors the working session requests.
+     */
+    private function downloadCdnFile(string $url, string $destPath, ?callable $onProgress = null): bool
+    {
+        $this->lastError = '';
+        $dir = dirname($destPath);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            $this->lastError = 'Cannot create destination dir: ' . $dir;
+            return false;
+        }
+        $tmp = $destPath . '.part';
+        $fh  = @fopen($tmp, 'wb');
+        if ($fh === false) { $this->lastError = 'Cannot open temp file.'; return false; }
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_FILE           => $fh,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 300,
+            CURLOPT_CONNECTTIMEOUT => 20,
+            CURLOPT_FAILONERROR    => true,
+            CURLOPT_ENCODING       => 'gzip, deflate, br',
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => [
+                'User-Agent: ' . self::UA,
+                'Accept: */*',
+            ],
+        ]);
+        if ($onProgress !== null) {
+            curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+            curl_setopt($ch, CURLOPT_XFERINFOFUNCTION,
+                static function ($ch, $dt, $dn, $ut, $un) use ($onProgress) {
+                    $onProgress((int)$dt, (int)$dn); return 0;
+                }
+            );
+        }
+        $ok     = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $ctype  = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $cerr   = curl_error($ch);
+        curl_close($ch);
+        fclose($fh);
+
+        if ($ok === false || $status >= 400) {
+            @unlink($tmp);
+            $this->lastError = $cerr !== '' ? 'Download error: ' . $cerr : 'HTTP ' . $status;
+            return false;
+        }
+
+        // Guard: verify we actually got a ZIP, not an HTML/XML/JSON error body
+        // saved with a .zip name. Real zips start with "PK".
+        $magic = '';
+        if (($vf = @fopen($tmp, 'rb')) !== false) {
+            $magic = (string) fread($vf, 2);
+            fclose($vf);
+        }
+        if ($magic !== 'PK') {
+            @unlink($tmp);
+            $hint = stripos($ctype, 'xml') !== false || stripos($ctype, 'html') !== false || stripos($ctype, 'json') !== false
+                ? ' (CDN returned ' . $ctype . ', not a ZIP — the signed URL may have expired or the session is stale).'
+                : '';
+            $this->lastError = 'Downloaded file is not a valid ZIP' . $hint;
+            return false;
+        }
+
+        if (!@rename($tmp, $destPath)) {
+            @unlink($tmp);
+            $this->lastError = 'Could not finalize file (rename failed).';
+            return false;
+        }
+        return true;
     }
 
     private function baseCurl(string $url): \CurlHandle
