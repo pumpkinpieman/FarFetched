@@ -278,6 +278,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         cfg_save(['paused' => !$now]);
         $notice = ['type' => 'ok', 'text' => $now ? 'Downloads resumed.' : 'Downloads paused (queue preserved).'];
     }
+
+    // AJAX requests (from the source modals) get a JSON reply instead of a full
+    // page re-render. The action handlers above have already run and set
+    // $notice; we just report the result plus the current per-source connection
+    // state so the buttons can update without a reload.
+    $isAjax = (($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'XMLHttpRequest')
+           || (isset($_POST['ajax']) && $_POST['ajax'] === '1');
+    if ($isAjax) {
+        header('Content-Type: application/json');
+        $n = $notice ?? ['type' => 'ok', 'text' => 'Saved.'];
+        echo json_encode([
+            'ok'     => ($n['type'] ?? 'ok') !== 'err',
+            'type'   => $n['type'] ?? 'ok',
+            'text'   => $n['text'] ?? '',
+            'status' => [
+                'printables'  => get_token() !== '' || get_refresh_token() !== '',
+                'makerworld'  => (string) cfg('makerworld_token') !== '',
+                'thingiverse' => (string) cfg('thingiverse_token') !== '',
+                'cults3d'     => (string) cfg('cults3d_username') !== '' && (string) cfg('cults3d_token') !== '',
+                'stlflix'     => (string) cfg('stlflix_token') !== '',
+            ],
+        ]);
+        exit;
+    }
 }
 
 // ---- State ------------------------------------------------------------------
@@ -368,280 +392,13 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
 
   <!-- ===================== SOURCES TAB ===================== -->
   <div class="tab-content <?= $tab==='sources'?'active':'' ?>" id="tab-sources">
-    <div class="src-grid">
-
-      <!-- Printables -->
-      <?php
-        $pbDot = ($hasRefresh || $hasTok) ? 'on' : 'off';
-        $pbTxt = $hasRefresh ? 'Auto-renewing (refresh token)' : ($hasTok ? 'Access-token mode' : 'Not connected');
-      ?>
-      <div class="src-card">
-        <div class="src-head">
-          <span class="src-name">Printables</span>
-          <span class="status" style="margin:0;flex-direction:column;align-items:flex-end;gap:3px;">
-            <span><span class="dot <?= $pbDot ?>"></span> <?= e($pbTxt) ?></span>
-            <?php if ($hasRefresh): $rs = refresh_token_status(); ?>
-            <span style="font-size:11.5px;color:var(--muted);">Refresh: <?= human_duration((int)($rs['seconds']??0)) ?> left</span>
-            <?php endif; ?>
-          </span>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="printables_refresh">Refresh token <span style="font-weight:400;text-transform:none;">(auto-renews for ~2 months)</span></label>
-            <textarea id="printables_refresh" name="printables_refresh" placeholder="eyJ… paste auth.refresh_token cookie value"></textarea>
-            <label for="printables_access" style="margin-top:10px;">Access token <span style="font-weight:400;text-transform:none;">(optional — valid ~2h, auto-minted from refresh)</span></label>
-            <textarea id="printables_access" name="printables_access" placeholder="eyJ… paste auth.access_token cookie value"></textarea>
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_printables_token">Save &amp; Connect</button>
-              <?php if ($hasRefresh||$hasTok): ?>
-              <button class="btn-ghost btn-sm" name="action" value="validate_printables_token">Validate</button>
-              <button class="btn-ghost btn-sm" name="action" value="clear_printables_token" onclick="return confirm('Clear Printables tokens?')">Clear</button>
-              <?php endif; ?>
-            </div>
-          </form>
-          <p class="hint">printables.com → DevTools → Application → Cookies. Paste <code>auth.refresh_token</code> — it auto-renews every ~2 months. Optionally also paste <code>auth.access_token</code> so it works immediately without waiting for the first refresh. The app detects which is which automatically.</p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="pb_dir">Download folder</label>
-            <input type="text" id="pb_dir" name="printables_dir" value="<?= e($pbDir) ?>">
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_printables_dir">Save &amp; Create</button>
-              <span class="status" style="margin:0;"><span class="dot <?= $pbWrite?'on':'off' ?>"></span><?= $pbWrite?'Writable':'Not found / not writable' ?></span>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      <!-- MakerWorld -->
-      <div class="src-card">
-        <div class="src-head">
-          <span class="src-name">MakerWorld</span>
-          <span class="status" style="margin:0;"><span class="dot <?= $mwTok!==''?'on':'off' ?>"></span><?= $mwTok!==''?'Token stored':'Not connected' ?></span>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="mw_token"><?= $mwTok!==''?'Replace token':'Paste token' ?></label>
-            <textarea id="mw_token" name="mw_token" placeholder="AQA… paste the `token` cookie value from makerworld.com"></textarea>
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_mw_token">Save &amp; Connect</button>
-              <?php if ($mwTok !== ''): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_mw_token" onclick="return confirm('Clear MakerWorld token?')">Clear</button>
-              <?php endif; ?>
-            </div>
-          </form>
-          <p class="hint">makerworld.com → DevTools → Application → Cookies → copy <code>token</code> value. Won't auto-renew — re-paste when downloads start failing auth.</p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="mw_dir">Download folder</label>
-            <input type="text" id="mw_dir" name="mw_dir" value="<?= e($mwDir) ?>">
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_mw_dir">Save &amp; Create</button>
-              <span class="status" style="margin:0;"><span class="dot <?= $mwWrite?'on':'off' ?>"></span><?= $mwWrite?'Writable':'Not found / not writable' ?></span>
-            </div>
-          </form>
-          <p class="hint">Default: <code><?= e(MAKERWORLD_DOWNLOAD_DIR) ?></code></p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="mw_delay">Delay between downloads (seconds)</label>
-            <div class="row">
-              <input type="text" class="short" id="mw_delay" name="mw_delay" inputmode="numeric" value="<?= e((string)$mwDelay) ?>">
-              <button class="btn-primary btn-sm" name="action" value="save_mw_delay">Save</button>
-            </div>
-            <p class="hint">Keep ≥ 45s — MakerWorld's anti-bot check triggers below that.</p>
-          </form>
-        </div>
-      </div>
-
-      <!-- Thingiverse -->
-      <?php
-        $tvClientId = (string) cfg('thingiverse_client_id');
-        $tvApiKey   = (string) cfg('thingiverse_token');
-        $tvReady    = $tvApiKey !== '';
-      ?>
-      <div class="src-card">
-        <div class="src-head">
-          <span class="src-name">Thingiverse</span>
-          <span style="display:flex;align-items:center;gap:10px;">
-            <button type="button" class="btn-ghost btn-sm" onclick="openModal('tv')">More info</button>
-            <span class="status" style="margin:0;"><span class="dot <?= $tvReady?'on':'off' ?>"></span><?= $tvReady?'Connected':'Not connected' ?></span>
-          </span>
-        </div>
-        <div class="src-body">
-          <div class="oauth-steps">
-            <div class="step"><span class="step-n">1</span>Go to <a href="https://www.thingiverse.com/apps/create" target="_blank">thingiverse.com/apps/create</a></div>
-            <div class="step"><span class="step-n">2</span>Fill in Name, Client Key (slug), Homepage URL, Redirect URI — any values work</div>
-            <div class="step"><span class="step-n">3</span>Save → copy the generated <strong>App Token</strong></div>
-            <div class="step"><span class="step-n">4</span>Paste it below</div>
-          </div>
-          <form method="post" style="margin-top:14px;">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="tv_client_id">Client ID <span style="font-weight:400;text-transform:none;">(optional — for OAuth downloads)</span></label>
-            <input type="password" id="tv_client_id" name="tv_client_id" value="<?= e($tvClientId) ?>" placeholder="your-app-client-id"><button type="button" class="reveal-btn" data-target="tv_client_id" aria-label="Show/hide value">👁</button>
-            <label for="tv_api_key" style="margin-top:10px;">App Token / API Key</label>
-            <input type="password" id="tv_api_key" name="tv_api_key" value="<?= e($tvApiKey) ?>" placeholder="paste your Thingiverse app token"><button type="button" class="reveal-btn" data-target="tv_api_key" aria-label="Show/hide value">👁</button>
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_tv_token">Save &amp; Connect</button>
-              <?php if ($tvReady): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_tv_token" onclick="return confirm('Clear Thingiverse credentials?')">Clear</button>
-              <?php endif; ?>
-            </div>
-          </form>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="tv_dir">Download folder</label>
-            <input type="text" id="tv_dir" name="tv_dir" value="<?= e($tvDir) ?>">
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_tv_dir">Save &amp; Create</button>
-              <span class="status" style="margin:0;"><span class="dot <?= $tvWrite?'on':'off' ?>"></span><?= $tvWrite?'Writable':'Not found / not writable' ?></span>
-            </div>
-          </form>
-          <p class="hint">Default: <code><?= e(THINGIVERSE_DOWNLOAD_DIR) ?></code></p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="tv_delay">Delay between downloads (seconds)</label>
-            <div class="row">
-              <input type="text" class="short" id="tv_delay" name="tv_delay" inputmode="numeric" value="<?= e((string)$tvDelay) ?>">
-              <button class="btn-primary btn-sm" name="action" value="save_tv_delay">Save</button>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      <!-- Cults3D -->
-      <div class="src-card">
-        <div class="src-head">
-          <span class="src-name">Cults3D</span>
-          <span class="status" style="margin:0;"><span class="dot <?= $cultsReady?'on':'off' ?>"></span><?= $cultsReady?'Connected':'Not connected' ?></span>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="cults_username">Cults3D Username</label>
-            <input type="text" id="cults_username" name="cults_username" value="<?= e($cultsUser) ?>" placeholder="your-cults3d-username">
-            <label for="cults_api_key" style="margin-top:10px;">API Key</label>
-            <input type="password" id="cults_api_key" name="cults_api_key" value="<?= e($cultsTok) ?>" placeholder="paste your Cults3D API key"><button type="button" class="reveal-btn" data-target="cults_api_key" aria-label="Show/hide value">👁</button>
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_cults_token">Save &amp; Connect</button>
-              <?php if ($cultsReady): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_cults_token" onclick="return confirm('Clear Cults3D credentials?')">Clear</button>
-              <?php endif; ?>
-            </div>
-          </form>
-          <p class="hint">cults3d.com → Account → Settings → API → Generate key. Enter your username and the generated key.</p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="cults_session">Download session — <code>_session_id</code> cookie <?php if ($cultsSess !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value"><button type="button" class="reveal-btn" data-target="cults_session" aria-label="Show/hide value">👁</button>
-            <label for="cults_cf_clearance" style="margin-top:10px;"><code>cf_clearance</code> cookie (optional, helps avoid Cloudflare blocks)</label>
-            <input type="password" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)"><button type="button" class="reveal-btn" data-target="cults_cf_clearance" aria-label="Show/hide value">👁</button>
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_cults_session">Save Session</button>
-              <?php if ($cultsSess !== ''): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_cults_session" onclick="return confirm('Clear Cults3D download session?')">Clear</button>
-              <?php endif; ?>
-            </div>
-          </form>
-          <p class="hint">The public Cults3D API can't download files, so free-model downloads use your browser session. In a logged-in cults3d.com tab: DevTools → Storage/Application → Cookies → copy the <code>_session_id</code> value (and optionally <code>cf_clearance</code>). These expire periodically — re-paste when downloads start failing. Paid models still require purchasing on the site.</p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="cults_dir">Download folder</label>
-            <input type="text" id="cults_dir" name="cults_dir" value="<?= e($cultsDir) ?>">
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_cults_dir">Save &amp; Create</button>
-              <span class="status" style="margin:0;"><span class="dot <?= $cultsWrite?'on':'off' ?>"></span><?= $cultsWrite?'Writable':'Not found / not writable' ?></span>
-            </div>
-          </form>
-          <p class="hint">Default: <code><?= e(CULTS3D_DOWNLOAD_DIR) ?></code></p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="cults_delay">Delay between downloads (seconds)</label>
-            <div class="row">
-              <input type="text" class="short" id="cults_delay" name="cults_delay" inputmode="numeric" value="<?= e((string)$cultsDelay) ?>">
-              <button class="btn-primary btn-sm" name="action" value="save_cults_delay">Save</button>
-            </div>
-          </form>
-          <p class="hint">Cults3D rate limit: ~500 requests/day. Keep ≥ 60s to stay well within limits.</p>
-        </div>
-      </div>
-
-      <!-- STLFlix -->
-      <div class="src-card">
-        <div class="src-head">
-          <span class="src-name">STLFlix</span>
-          <span class="status" style="margin:0;"><span class="dot <?= $stlflixReady?'on':'off' ?>"></span><?= $stlflixReady?'Connected':'Not connected' ?></span>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="stlflix_token"><?= $stlflixReady?'Replace jwt':'Paste jwt' ?></label>
-            <textarea id="stlflix_token" name="stlflix_token" placeholder="paste the jwt value from platform.stlflix.com local storage"></textarea>
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_stlflix_token">Save &amp; Connect</button>
-              <?php if ($stlflixReady): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_stlflix_token" onclick="return confirm('Clear STLFlix token?')">Clear</button>
-              <?php endif; ?>
-            </div>
-          </form>
-          <p class="hint">platform.stlflix.com → DevTools → Application → Local Storage → copy <code>jwt</code>. Re-paste when STLFlix asks you to log in again.</p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="stlflix_dir">Download folder</label>
-            <input type="text" id="stlflix_dir" name="stlflix_dir" value="<?= e($stlflixDir) ?>">
-            <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_stlflix_dir">Save &amp; Create</button>
-              <span class="status" style="margin:0;"><span class="dot <?= $stlflixWrite?'on':'off' ?>"></span><?= $stlflixWrite?'Writable':'Not found / not writable' ?></span>
-            </div>
-          </form>
-          <p class="hint">Default: <code><?= e(STLFLIX_DOWNLOAD_DIR) ?></code></p>
-        </div>
-        <div class="src-body">
-          <form method="post">
-            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-            <input type="hidden" name="_tab" value="sources">
-            <label for="stlflix_delay">Delay between downloads (seconds)</label>
-            <div class="row">
-              <input type="text" class="short" id="stlflix_delay" name="stlflix_delay" inputmode="numeric" value="<?= e((string)$stlflixDelay) ?>">
-              <button class="btn-primary btn-sm" name="action" value="save_stlflix_delay">Save</button>
-            </div>
-          </form>
-        </div>
-      </div>
-
-    </div><!-- /.src-grid -->
+    <div class="src-btn-row">
+      <button type="button" class="src-btn <?= ($hasRefresh || $hasTok) ? 'connected' : '' ?>" onclick="openModal('src-printables')">Printables</button>
+      <button type="button" class="src-btn <?= ($mwTok !== '') ? 'connected' : '' ?>" onclick="openModal('src-mw')">MakerWorld</button>
+      <button type="button" class="src-btn <?= ((string) cfg('thingiverse_token') !== '') ? 'connected' : '' ?>" onclick="openModal('src-thingiverse')">Thingiverse</button>
+      <button type="button" class="src-btn <?= $cultsReady ? 'connected' : '' ?>" onclick="openModal('src-cults')">Cults3D</button>
+      <button type="button" class="src-btn <?= $stlflixReady ? 'connected' : '' ?>" onclick="openModal('src-stlflix')">STLFlix</button>
+    </div>
 
 
     
@@ -790,6 +547,70 @@ document.addEventListener('keydown', e => {
     });
   }
 });
+
+// ---- AJAX submit for source modals -----------------------------------------
+// Maps the modal id suffix to the source key returned in the JSON status.
+const SRC_STATUS_KEY = {
+  'src-printables': 'printables',
+  'src-mw': 'makerworld',
+  'src-thingiverse': 'thingiverse',
+  'src-cults': 'cults3d',
+  'src-stlflix': 'stlflix',
+};
+// Map each source button (by onclick target) so we can flip its state.
+function srcButtonFor(modalId) {
+  return document.querySelector('.src-btn[onclick*="' + modalId + '"]');
+}
+function showModalNotice(modalEl, type, text) {
+  let n = modalEl.querySelector('.modal-notice');
+  if (!n) {
+    n = document.createElement('div');
+    n.className = 'modal-notice';
+    modalEl.querySelector('.modal-src').prepend(n);
+  }
+  n.className = 'modal-notice notice ' + (type === 'err' ? 'err' : 'ok');
+  n.textContent = text;
+  n.style.display = 'block';
+}
+document.querySelectorAll('.modal-src form').forEach(function (form) {
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    const overlay = form.closest('.modal-overlay');
+    const modalId = overlay ? overlay.id.replace('modal-', '') : '';
+    // Which submit button was used (carries name="action" value)
+    const submitter = e.submitter || form.querySelector('button[name="action"]');
+    const fd = new FormData(form);
+    if (submitter && submitter.name) fd.append(submitter.name, submitter.value);
+    fd.append('ajax', '1');
+    if (submitter) { submitter.disabled = true; }
+    fetch('settings.php', {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      body: fd,
+    })
+      .then(r => r.json())
+      .then(data => {
+        showModalNotice(overlay, data.type, data.text || 'Saved.');
+        // Update the source button connected state from returned status
+        const key = SRC_STATUS_KEY[modalId];
+        if (data.status && key in data.status) {
+          const btn = srcButtonFor(modalId);
+          if (btn) btn.classList.toggle('connected', !!data.status[key]);
+        }
+        if (submitter) submitter.disabled = false;
+        // Close after save/clear; keep open for validate so the result is visible.
+        const act = (submitter && submitter.value) || '';
+        const isValidate = act.indexOf('validate') !== -1;
+        if (data.ok && !isValidate) {
+          setTimeout(() => closeModal(modalId), 900);
+        }
+      })
+      .catch(() => {
+        showModalNotice(overlay, 'err', 'Network error — try again.');
+        if (submitter) submitter.disabled = false;
+      });
+  });
+});
 </script>
 <script>
   const toggleBtn = document.getElementById('theme-toggle');
@@ -833,5 +654,303 @@ document.addEventListener('keydown', e => {
     });
   });
 </script>
+<div class="modal-overlay" id="modal-src-printables" onclick="if(event.target===this)closeModal('src-printables')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-printables')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <?php
+            $pbDot = ($hasRefresh || $hasTok) ? 'on' : 'off';
+            $pbTxt = $hasRefresh ? 'Auto-renewing (refresh token)' : ($hasTok ? 'Access-token mode' : 'Not connected');
+          ?>
+          <span class="src-name">Printables</span>
+          <span class="status" style="margin:0;flex-direction:column;align-items:flex-end;gap:3px;">
+            <span><span class="dot <?= $pbDot ?>"></span> <?= e($pbTxt) ?></span>
+            <?php if ($hasRefresh): $rs = refresh_token_status(); ?>
+            <span style="font-size:11.5px;color:var(--muted);">Refresh: <?= human_duration((int)($rs['seconds']??0)) ?> left</span>
+            <?php endif; ?>
+          </span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="printables_refresh">Refresh token <span style="font-weight:400;text-transform:none;">(auto-renews for ~2 months)</span></label>
+            <textarea id="printables_refresh" name="printables_refresh" placeholder="eyJ… paste auth.refresh_token cookie value"></textarea>
+            <label for="printables_access" style="margin-top:10px;">Access token <span style="font-weight:400;text-transform:none;">(optional — valid ~2h, auto-minted from refresh)</span></label>
+            <textarea id="printables_access" name="printables_access" placeholder="eyJ… paste auth.access_token cookie value"></textarea>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_printables_token">Save &amp; Connect</button>
+              <?php if ($hasRefresh||$hasTok): ?>
+              <button class="btn-ghost btn-sm" name="action" value="validate_printables_token">Validate</button>
+              <button class="btn-ghost btn-sm" name="action" value="clear_printables_token" onclick="return confirm('Clear Printables tokens?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">printables.com → DevTools → Application → Cookies. Paste <code>auth.refresh_token</code> — it auto-renews every ~2 months. Optionally also paste <code>auth.access_token</code> so it works immediately without waiting for the first refresh. The app detects which is which automatically.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="pb_dir">Download folder</label>
+            <input type="text" id="pb_dir" name="printables_dir" value="<?= e($pbDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_printables_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $pbWrite?'on':'off' ?>"></span><?= $pbWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+        </div>
+      
+
+      <!-- MakerWorld -->
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-src-mw" onclick="if(event.target===this)closeModal('src-mw')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-mw')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <span class="src-name">MakerWorld</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $mwTok!==''?'on':'off' ?>"></span><?= $mwTok!==''?'Token stored':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="mw_token"><?= $mwTok!==''?'Replace token':'Paste token' ?></label>
+            <textarea id="mw_token" name="mw_token" placeholder="AQA… paste the `token` cookie value from makerworld.com"></textarea>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_mw_token">Save &amp; Connect</button>
+              <?php if ($mwTok !== ''): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_mw_token" onclick="return confirm('Clear MakerWorld token?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">makerworld.com → DevTools → Application → Cookies → copy <code>token</code> value. Won't auto-renew — re-paste when downloads start failing auth.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="mw_dir">Download folder</label>
+            <input type="text" id="mw_dir" name="mw_dir" value="<?= e($mwDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_mw_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $mwWrite?'on':'off' ?>"></span><?= $mwWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(MAKERWORLD_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="mw_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="mw_delay" name="mw_delay" inputmode="numeric" value="<?= e((string)$mwDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_mw_delay">Save</button>
+            </div>
+            <p class="hint">Keep ≥ 45s — MakerWorld's anti-bot check triggers below that.</p>
+          </form>
+        </div>
+      
+
+      <!-- Thingiverse -->
+      <?php
+        $tvClientId = (string) cfg('thingiverse_client_id');
+        $tvApiKey   = (string) cfg('thingiverse_token');
+        $tvReady    = $tvApiKey !== '';
+      ?>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-src-thingiverse" onclick="if(event.target===this)closeModal('src-thingiverse')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-thingiverse')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <span class="src-name">Thingiverse</span>
+          <span style="display:flex;align-items:center;gap:10px;">
+            <button type="button" class="btn-ghost btn-sm" onclick="openModal('tv')">More info</button>
+            <span class="status" style="margin:0;"><span class="dot <?= $tvReady?'on':'off' ?>"></span><?= $tvReady?'Connected':'Not connected' ?></span>
+          </span>
+        </div>
+        <div class="src-body">
+          <div class="oauth-steps">
+            <div class="step"><span class="step-n">1</span>Go to <a href="https://www.thingiverse.com/apps/create" target="_blank">thingiverse.com/apps/create</a></div>
+            <div class="step"><span class="step-n">2</span>Fill in Name, Client Key (slug), Homepage URL, Redirect URI — any values work</div>
+            <div class="step"><span class="step-n">3</span>Save → copy the generated <strong>App Token</strong></div>
+            <div class="step"><span class="step-n">4</span>Paste it below</div>
+          </div>
+          <form method="post" style="margin-top:14px;">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="tv_client_id">Client ID <span style="font-weight:400;text-transform:none;">(optional — for OAuth downloads)</span></label>
+            <input type="password" id="tv_client_id" name="tv_client_id" value="<?= e($tvClientId) ?>" placeholder="your-app-client-id"><button type="button" class="reveal-btn" data-target="tv_client_id" aria-label="Show/hide value">👁</button>
+            <label for="tv_api_key" style="margin-top:10px;">App Token / API Key</label>
+            <input type="password" id="tv_api_key" name="tv_api_key" value="<?= e($tvApiKey) ?>" placeholder="paste your Thingiverse app token"><button type="button" class="reveal-btn" data-target="tv_api_key" aria-label="Show/hide value">👁</button>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_tv_token">Save &amp; Connect</button>
+              <?php if ($tvReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_tv_token" onclick="return confirm('Clear Thingiverse credentials?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="tv_dir">Download folder</label>
+            <input type="text" id="tv_dir" name="tv_dir" value="<?= e($tvDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_tv_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $tvWrite?'on':'off' ?>"></span><?= $tvWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(THINGIVERSE_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="tv_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="tv_delay" name="tv_delay" inputmode="numeric" value="<?= e((string)$tvDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_tv_delay">Save</button>
+            </div>
+          </form>
+        </div>
+      
+
+      <!-- Cults3D -->
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-src-cults" onclick="if(event.target===this)closeModal('src-cults')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-cults')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <span class="src-name">Cults3D</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $cultsReady?'on':'off' ?>"></span><?= $cultsReady?'Connected':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_username">Cults3D Username</label>
+            <input type="text" id="cults_username" name="cults_username" value="<?= e($cultsUser) ?>" placeholder="your-cults3d-username">
+            <label for="cults_api_key" style="margin-top:10px;">API Key</label>
+            <input type="password" id="cults_api_key" name="cults_api_key" value="<?= e($cultsTok) ?>" placeholder="paste your Cults3D API key"><button type="button" class="reveal-btn" data-target="cults_api_key" aria-label="Show/hide value">👁</button>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_token">Save &amp; Connect</button>
+              <?php if ($cultsReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_cults_token" onclick="return confirm('Clear Cults3D credentials?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">cults3d.com → Account → Settings → API → Generate key. Enter your username and the generated key.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_session">Download session — <code>_session_id</code> cookie <?php if ($cultsSess !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="password" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value"><button type="button" class="reveal-btn" data-target="cults_session" aria-label="Show/hide value">👁</button>
+            <label for="cults_cf_clearance" style="margin-top:10px;"><code>cf_clearance</code> cookie (optional, helps avoid Cloudflare blocks)</label>
+            <input type="password" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)"><button type="button" class="reveal-btn" data-target="cults_cf_clearance" aria-label="Show/hide value">👁</button>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_session">Save Session</button>
+              <?php if ($cultsSess !== ''): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_cults_session" onclick="return confirm('Clear Cults3D download session?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">The public Cults3D API can't download files, so free-model downloads use your browser session. In a logged-in cults3d.com tab: DevTools → Storage/Application → Cookies → copy the <code>_session_id</code> value (and optionally <code>cf_clearance</code>). These expire periodically — re-paste when downloads start failing. Paid models still require purchasing on the site.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_dir">Download folder</label>
+            <input type="text" id="cults_dir" name="cults_dir" value="<?= e($cultsDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $cultsWrite?'on':'off' ?>"></span><?= $cultsWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(CULTS3D_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="cults_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="cults_delay" name="cults_delay" inputmode="numeric" value="<?= e((string)$cultsDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_cults_delay">Save</button>
+            </div>
+          </form>
+          <p class="hint">Cults3D rate limit: ~500 requests/day. Keep ≥ 60s to stay well within limits.</p>
+        </div>
+      
+
+      <!-- STLFlix -->
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-src-stlflix" onclick="if(event.target===this)closeModal('src-stlflix')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-stlflix')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <span class="src-name">STLFlix</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $stlflixReady?'on':'off' ?>"></span><?= $stlflixReady?'Connected':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="stlflix_token"><?= $stlflixReady?'Replace jwt':'Paste jwt' ?></label>
+            <textarea id="stlflix_token" name="stlflix_token" placeholder="paste the jwt value from platform.stlflix.com local storage"></textarea>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_stlflix_token">Save &amp; Connect</button>
+              <?php if ($stlflixReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_stlflix_token" onclick="return confirm('Clear STLFlix token?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">platform.stlflix.com → DevTools → Application → Local Storage → copy <code>jwt</code>. Re-paste when STLFlix asks you to log in again.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="stlflix_dir">Download folder</label>
+            <input type="text" id="stlflix_dir" name="stlflix_dir" value="<?= e($stlflixDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_stlflix_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $stlflixWrite?'on':'off' ?>"></span><?= $stlflixWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(STLFLIX_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="stlflix_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="stlflix_delay" name="stlflix_delay" inputmode="numeric" value="<?= e((string)$stlflixDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_stlflix_delay">Save</button>
+            </div>
+          </form>
+        </div>
+      
+  </div>
+</div>
 </body>
 </html>

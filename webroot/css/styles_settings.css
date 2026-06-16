@@ -4,7 +4,7 @@
   .brand{font-family:ui-serif,Georgia,serif;font-size:20px;font-weight:600;color:var(--clay-deep);padding:0 8px 20px;letter-spacing:-0.3px;}
   nav a{display:block;padding:9px 12px;margin-bottom:2px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px;}
   nav a:hover{background:#1a140c;color:var(--ink);} nav a.active{background:var(--clay);color:#fff;font-weight:500;}
-  main{flex:1;padding:28px 36px;max-width:900px;}
+  main{flex:1;padding:28px 36px;max-width:1400px;}
   h1{font-family:ui-serif,Georgia,serif;font-size:24px;font-weight:600;letter-spacing:-0.4px;margin-bottom:4px;}
   .sub{color:var(--muted);font-size:14px;margin-bottom:24px;}
 
@@ -25,8 +25,9 @@
   .donate-handle{font-size:12px;color:var(--muted);margin-top:16px;font-family:ui-monospace,monospace;}
 
   /* Source cards */
-  .src-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:28px;}
-  @media(max-width:1000px){.src-grid{grid-template-columns:1fr;}}
+  .src-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:28px;align-items:start;}
+  @media(max-width:1100px){.src-grid{grid-template-columns:1fr 1fr;}}
+  @media(max-width:700px){.src-grid{grid-template-columns:1fr;}}
   .src-card{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;}
   .src-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 14px;border-bottom:1px solid var(--line);}
   .src-name{font-size:15px;font-weight:600;}
@@ -81,3 +82,13 @@
   pre.log{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin:0;max-height:300px;overflow:auto;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
   .reveal-btn{background:transparent;border:1px solid var(--line);border-radius:7px;padding:6px 9px;margin-left:6px;cursor:pointer;font-size:13px;line-height:1;vertical-align:middle;color:var(--muted);}
   .reveal-btn:hover{border-color:var(--clay);}
+
+  /* Source buttons (open per-source modals) */
+  .src-btn-row{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px;}
+  .src-btn{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:14px 26px;font-size:15px;font-weight:600;color:var(--muted);cursor:pointer;transition:border-color .15s,color .15s,opacity .15s;opacity:.55;}
+  .src-btn:hover{border-color:var(--clay);color:var(--clay-deep);opacity:1;}
+  .src-btn.connected{opacity:1;color:var(--ink);border-color:var(--line);}
+  .src-btn.connected::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:8px;vertical-align:middle;}
+  /* Source modals are wider to fit the forms */
+  .modal-src{max-width:560px;max-height:88vh;overflow-y:auto;text-align:left;}
+  .modal-notice{display:none;padding:10px 14px;border-radius:9px;font-size:14px;margin-bottom:14px;}

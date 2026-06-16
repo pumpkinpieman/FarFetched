@@ -594,13 +594,31 @@ final class Cults3DService
             return '';
         }
 
-        // Determine the real filename from Content-Disposition, else slug.
+        // Determine the real filename. Priority:
+        //   1) Content-Disposition header (most authoritative)
+        //   2) the basename in the signed URL path (CDN URLs carry the real
+        //      filename, e.g. .../figura.stl?Expires=... or .../model.zip?X-Amz=)
+        //   3) slug + extension guessed from the magic bytes
         $fname = '';
-        if ($cdHeader !== '' && preg_match('/filename\*?=(?:UTF-8\'\')?"?([^";\r\n]+)"?/i', $cdHeader, $fm)) {
-            $fname = rawurldecode(trim($fm[1]));
+        if ($cdHeader !== '') {
+            // Handle both filename="x.stl" and filename*=UTF-8''x.stl forms.
+            if (preg_match('/filename\*=(?:UTF-8\'\')?"?([^";\r\n]+)"?/i', $cdHeader, $fm)) {
+                $fname = rawurldecode(trim($fm[1]));
+            } elseif (preg_match('/filename="?([^";\r\n]+?)"?\s*(?:;|$)/i', $cdHeader, $fm)) {
+                $fname = trim($fm[1]);
+            }
         }
         if ($fname === '') {
-            // Fall back: detect zip by magic, name from slug.
+            // Pull the basename out of the signed URL path (strip the query).
+            $path = (string) parse_url($url, PHP_URL_PATH);
+            $base = $path !== '' ? rawurldecode(basename($path)) : '';
+            // Only trust it if it has a sensible model/file extension.
+            if ($base !== '' && preg_match('/\.(stl|3mf|obj|zip|step|stp|gcode|ply|scad|7z|rar)$/i', $base)) {
+                $fname = $base;
+            }
+        }
+        if ($fname === '') {
+            // Last resort: slug + extension guessed from the magic bytes.
             $magic = '';
             if (($vf = @fopen($tmp, 'rb')) !== false) { $magic = (string) fread($vf, 2); fclose($vf); }
             $fname = preg_replace('/[^A-Za-z0-9._-]+/', '_', $slug) . ($magic === 'PK' ? '.zip' : '.bin');

@@ -128,7 +128,7 @@ if ($source === 'makerworld') {
         $banner = null;
     } else {
         $banner = $mwReady
-            ? 'MakerWorld — pick a category on the left, or type a keyword above to search.'
+            ? null
             : 'MakerWorld — search & browse work now; add your MakerWorld token in Settings to download.';
     }
 } elseif ($source === 'thingiverse') {
@@ -137,7 +137,7 @@ if ($source === 'makerworld') {
     $initialCursor = null;
     $tvReady       = (string) cfg('thingiverse_token') !== '';
     $banner        = $tvReady
-        ? 'Thingiverse — type a keyword to search, or scroll to browse popular.'
+        ? null
         : 'Thingiverse — add your token in Settings to browse and download.';
 } elseif ($source === 'cults3d') {
     $svc           = null;
@@ -145,7 +145,7 @@ if ($source === 'makerworld') {
     $initialCursor = null;
     $cultsReady    = (string) cfg('cults3d_username') !== '' && (string) cfg('cults3d_token') !== '';
     $banner        = $cultsReady
-        ? 'Cults3D — type a keyword to search, or pick a category on the left.'
+        ? null
         : 'Cults3D — add your username and API key in Settings to browse and download.';
 } elseif ($source === 'stlflix') {
     $svc           = null;
@@ -153,7 +153,7 @@ if ($source === 'makerworld') {
     $initialCursor = null;
     $stlReady      = (string) cfg('stlflix_token') !== '';
     $banner        = $stlReady
-        ? 'STLFlix - pick a category on the left, or type a keyword above to search.'
+        ? null
         : 'STLFlix - add your jwt token in Settings to pull categories and browse models.';
 } else {
     $svc    = new PrintablesService();
@@ -292,16 +292,8 @@ $csrf = csrf_token();
     </div>
 
     <?php if ($banner): ?><div class="banner"><?= e($banner) ?></div><?php endif; ?>
-
     <?php if ($source === 'printables'): ?>
-    <div class="pastebar">
-      <div class="pastebar-label">No token? Paste a Printables model URL or ID — downloads the whole model as a ZIP (no login needed):</div>
-      <div class="pastebar-row">
-        <input type="text" id="pasteId" placeholder="https://www.printables.com/model/1743150-… or just 1743150">
-        <button class="btn-primary" id="pasteGo">Queue ZIP</button>
-      </div>
-      <div class="pastebar-status" id="pasteStatus"></div>
-    </div>
+    
     <?php endif; ?>
 
     <div class="grid" id="grid">
