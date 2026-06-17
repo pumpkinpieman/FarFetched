@@ -404,6 +404,11 @@ function extract_zip_safe(string $zipPath, string $targetDir): bool
         if ($norm[0] === '/' || preg_match('#(^|/)\.\.(/|$)#', $norm)) {
             continue; // skip just this unsafe entry, keep extracting the rest
         }
+        // Skip bulky video files some authors bundle into packs — they're not
+        // needed for printing and just bloat the library.
+        if (preg_match('/\.(mp4|mkv|mov|avi|webm|wmv|flv|m4v|mpg|mpeg|3gp|m2ts|ts)$/i', $norm)) {
+            continue;
+        }
         // Directory entry — ensure it exists.
         if (substr($norm, -1) === '/') {
             @mkdir($realTarget . '/' . $norm, 0777, true);
@@ -522,6 +527,9 @@ function cfg_defaults(): array
         'cults3d_token'              => (string) (getenv('FETCHER_CULTS3D_TOKEN') ?: ''),
         'cults3d_session'            => '',
         'cults3d_cf_clearance'       => '',
+        'cults3d_user_agent'         => '',
+        'curl_impersonate_bin'       => '',
+        'cults3d_browser'            => 'chrome',
         'cults3d_download_dir'       => '',
         'cults3d_delay'              => 60,
         'stlflix_token'              => (string) (getenv('FETCHER_STLFLIX_TOKEN') ?: ''),
@@ -623,6 +631,13 @@ function cfg_save(array $patch): bool
     }
     if (array_key_exists('cults3d_cf_clearance', $patch)) {
         $current['cults3d_cf_clearance'] = trim((string) $patch['cults3d_cf_clearance']);
+    }
+    if (array_key_exists('cults3d_user_agent', $patch)) {
+        $current['cults3d_user_agent'] = trim((string) $patch['cults3d_user_agent']);
+    }
+    if (array_key_exists('cults3d_browser', $patch)) {
+        $b = strtolower(trim((string) $patch['cults3d_browser']));
+        $current['cults3d_browser'] = in_array($b, ['chrome','firefox','edge','safari'], true) ? $b : 'chrome';
     }
     if (array_key_exists('cults3d_download_dir', $patch)) {
         $current['cults3d_download_dir'] = trim((string) $patch['cults3d_download_dir']);
@@ -735,9 +750,25 @@ function db(): PDO
         PDO::ATTR_TIMEOUT            => 30,
     ]);
 
-    // WAL = better concurrency between the web UI (enqueue) and the worker.
-    $pdo->exec('PRAGMA journal_mode = WAL;');
+    // WAL = better concurrency between the web UI (enqueue) and the worker —
+    // but WAL relies on shared-memory/mmap that FUSE and network filesystems
+    // (Unraid user-shares, NFS, SMB) often don't implement correctly, which
+    // surfaces as spurious "database is locked" errors. So we request WAL, then
+    // verify it actually took; if not, fall back to the portable DELETE journal
+    // (plain POSIX file locks) which works on every filesystem.
     $pdo->exec('PRAGMA foreign_keys = ON;');
+    @$pdo->exec('PRAGMA journal_mode = WAL;');
+    $mode = '';
+    try {
+        $mode = (string) $pdo->query('PRAGMA journal_mode;')->fetchColumn();
+    } catch (\Throwable $e) {
+        $mode = '';
+    }
+    if (strtolower($mode) !== 'wal') {
+        // WAL didn't stick (likely a FUSE/network mount). DELETE journaling is
+        // slower under concurrency but reliable everywhere.
+        @$pdo->exec('PRAGMA journal_mode = DELETE;');
+    }
     // busy_timeout: how long SQLite retries a locked DB before throwing.
     // Generous (30s) because the worker can hold write intent across a paced
     // download, and on some bind-mounted/FUSE volumes advisory flock between
@@ -753,6 +784,35 @@ function db(): PDO
 
     init_schema($pdo);
     return $pdo;
+}
+
+/**
+ * Run a write (prepared statement) with retry-on-lock backoff. Use for any
+ * UPDATE/INSERT/DELETE that could collide with another writer. Returns the
+ * statement on success; rethrows if it's still locked after several tries.
+ *
+ * @param array<string,mixed>|array<int,mixed> $params
+ */
+function db_exec_retry(string $sql, array $params = [], int $tries = 5): \PDOStatement
+{
+    $pdo = db();
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt;
+        } catch (\PDOException $e) {
+            $locked = stripos($e->getMessage(), 'locked') !== false
+                   || stripos($e->getMessage(), 'busy') !== false;
+            if (!$locked || $attempt >= $tries) {
+                throw $e;
+            }
+            if (function_exists('logln')) {
+                logln('  DB locked, retrying write (' . $attempt . '/' . $tries . ')…');
+            }
+            usleep(500000 * $attempt); // 0.5s, 1s, 1.5s… backoff
+        }
+    }
 }
 
 /**

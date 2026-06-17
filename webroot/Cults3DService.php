@@ -28,6 +28,7 @@ final class Cults3DService
     private string $apiKey;
     private string $sessionId;
     private string $cfClearance;
+    private string $userAgent;
 
     public function __construct(?string $username = null, ?string $apiKey = null)
     {
@@ -37,6 +38,12 @@ final class Cults3DService
         // never exposes a download URL). Browse/search still use the API key.
         $this->sessionId   = function_exists('cfg') ? trim((string) cfg('cults3d_session'))      : '';
         $this->cfClearance = function_exists('cfg') ? trim((string) cfg('cults3d_cf_clearance')) : '';
+        // cf_clearance is bound to the User-Agent that created it. The worker's
+        // UA must match the browser that produced the cookie or Cloudflare
+        // returns a 403 challenge. Let the user paste their exact UA; fall back
+        // to the built-in default if unset.
+        $ua = function_exists('cfg') ? trim((string) cfg('cults3d_user_agent')) : '';
+        $this->userAgent = $ua !== '' ? $ua : self::UA;
     }
 
     /** Whether the web-download session cookie is configured. */
@@ -337,6 +344,169 @@ final class Cults3DService
      * session cookies). Does NOT auto-follow redirects so callers can inspect
      * the 302 Location themselves.
      */
+    /**
+     * Path to a curl-impersonate binary, if installed. curl-impersonate mimics a
+     * real browser's TLS/JA3 fingerprint, which is required to get past
+     * Cloudflare's bot detection (plain PHP curl is fingerprinted and 403'd even
+     * with a valid cf_clearance cookie + matching UA).
+     *
+     * The chosen browser MUST match the browser the user pulled their
+     * cf_clearance cookie from, so this is user-selectable.
+     */
+    private function impersonateBin(): string
+    {
+        static $bin = null;
+        if ($bin !== null) return $bin;
+
+        // Explicit override wins.
+        $override = (string) (function_exists('cfg') ? cfg('curl_impersonate_bin') : '');
+        if ($override !== '' && is_executable($override)) { return $bin = $override; }
+
+        // Map the user's selected browser to candidate wrapper names. Each maps
+        // to several versions so we tolerate whichever the image actually has.
+        $browser = strtolower((string) (function_exists('cfg') ? cfg('cults3d_browser') : ''));
+        $byBrowser = [
+            'chrome'  => ['curl_chrome116', 'curl_chrome110', 'curl_chrome104', 'curl_chrome100'],
+            'edge'    => ['curl_edge101', 'curl_edge99', 'curl_chrome116'],
+            'firefox' => ['curl_ff117', 'curl_ff109', 'curl_ff102', 'curl_ff100'],
+            'safari'  => ['curl_safari17_0', 'curl_safari15_5', 'curl_safari15_3'],
+        ];
+        $names = $byBrowser[$browser] ?? array_merge(...array_values($byBrowser));
+
+        foreach ($names as $n) {
+            $p = '/usr/local/bin/' . $n;
+            if (is_executable($p)) { return $bin = $p; }
+        }
+        // Last-resort generic wrappers.
+        foreach (['/usr/local/bin/curl-impersonate-chrome', '/usr/local/bin/curl-impersonate'] as $p) {
+            if (is_executable($p)) { return $bin = $p; }
+        }
+        return $bin = '';
+    }
+
+    /**
+     * Fetch a Cloudflare-gated URL via curl-impersonate (browser TLS fingerprint).
+     * Returns ['ok'=>bool, 'status'=>int, 'headers'=>string, 'body'=>string,
+     *          'location'=>string]. Falls back to plain curl if the binary is
+     * missing (which will likely 403 on Cloudflare, but keeps things working on
+     * non-gated requests).
+     *
+     * @param array<int,string> $extraHeaders
+     */
+    private function cfFetch(string $url, string $method = 'GET', string $postBody = '', array $extraHeaders = []): array
+    {
+        $bin = $this->impersonateBin();
+        $headers = array_merge([
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.9',
+            $this->sessionCookieHeader(),
+        ], $extraHeaders);
+
+        if ($bin === '') {
+            // No impersonate binary — fall back to the legacy curl path.
+            return $this->cfFetchPlain($url, $method, $postBody, $headers);
+        }
+
+        // Build the curl-impersonate CLI invocation. -i includes response headers
+        // so we can read the redirect Location without following it.
+        $args = [$bin, '-sS', '-i', '--max-time', '60', '-X', $method];
+        foreach ($headers as $h) {
+            if (trim($h) === '') continue;
+            $args[] = '-H';
+            $args[] = $h;
+        }
+        if ($method === 'POST') {
+            $args[] = '--data';
+            $args[] = $postBody;
+        }
+        $args[] = $url;
+
+        $cmd = implode(' ', array_map('escapeshellarg', $args));
+        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $proc = proc_open($cmd, $descriptors, $pipes);
+        if (!is_resource($proc)) {
+            return $this->cfFetchPlain($url, $method, $postBody, $headers);
+        }
+        $out = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        proc_close($proc);
+
+        $out = (string) $out;
+        // Split headers/body on the first blank line. Handle multiple header
+        // blocks (e.g. a 100-continue or redirect chain) by taking the last one.
+        $parts = preg_split("/\r?\n\r?\n/", $out, 2);
+        $headerBlock = $parts[0] ?? '';
+        $body        = $parts[1] ?? '';
+        // If headers contained a redirect with its own body separator, the real
+        // body may still be in $body; that's fine for our scrape needs.
+
+        $status = 0;
+        if (preg_match('#^HTTP/\S+\s+(\d+)#', $headerBlock, $sm)) {
+            $status = (int) $sm[1];
+        }
+        $location = '';
+        if (preg_match('/^location:\s*(.+)$/im', $headerBlock, $lm)) {
+            $location = trim($lm[1]);
+        }
+
+        return [
+            'ok'       => $status > 0 && $status < 400,
+            'status'   => $status,
+            'headers'  => $headerBlock,
+            'body'     => $body,
+            'location' => $location,
+        ];
+    }
+
+    /**
+     * Legacy plain-curl fallback used only when curl-impersonate isn't present.
+     * @param array<int,string> $headers
+     */
+    private function cfFetchPlain(string $url, string $method, string $postBody, array $headers): array
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_HEADER         => true,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_ENCODING       => 'gzip, deflate, br',
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => array_merge(['User-Agent: ' . $this->userAgent], $headers),
+        ]);
+        if ($method === 'POST') {
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $postBody);
+        }
+        $resp = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $hlen   = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        curl_close($ch);
+
+        $resp = is_string($resp) ? $resp : '';
+        $headerBlock = substr($resp, 0, $hlen);
+        $body        = substr($resp, $hlen);
+        $location = '';
+        if (preg_match('/^location:\s*(.+)$/im', $headerBlock, $lm)) {
+            $location = trim($lm[1]);
+        }
+        return [
+            'ok'       => $status > 0 && $status < 400,
+            'status'   => $status,
+            'headers'  => $headerBlock,
+            'body'     => $body,
+            'location' => $location,
+        ];
+    }
+
+    /** True when a curl-impersonate binary is available. */
+    public function hasImpersonate(): bool
+    {
+        return $this->impersonateBin() !== '';
+    }
+
     private function webCurl(string $url): \CurlHandle
     {
         $ch = curl_init($url);
@@ -351,7 +521,7 @@ final class Cults3DService
             CURLOPT_ENCODING       => 'gzip, deflate, br',
             CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
             CURLOPT_HTTPHEADER     => [
-                'User-Agent: ' . self::UA,
+                'User-Agent: ' . $this->userAgent,
                 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language: en-US,en;q=0.9',
                 $this->sessionCookieHeader(),
@@ -389,13 +559,18 @@ final class Cults3DService
             // Fallback: category-agnostic path (Cults3D usually redirects it).
             $modelUrl = self::WEB . '/en/3d-model/_/' . rawurlencode($slug);
         }
-        $ch   = $this->webCurl($modelUrl);
-        $html = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $resp = $this->cfFetch($modelUrl, 'GET');
+        $html = $resp['body'];
+        $code = $resp['status'];
 
         if (!is_string($html) || $html === '') {
             $this->lastError = 'Could not load Cults3D model page (HTTP ' . $code . ').';
+            return '';
+        }
+        if (stripos($html, 'Just a moment') !== false || stripos($html, 'challenge-platform') !== false) {
+            $this->lastError = $this->hasImpersonate()
+                ? 'Cloudflare challenged the request even with curl-impersonate — re-paste a fresh cf_clearance + matching User-Agent.'
+                : 'Cloudflare blocked the request. Install curl-impersonate (see Dockerfile) so FarFetched can pass the TLS check.';
             return '';
         }
         if (!preg_match('/name="csrf-token" content="([^"]+)"/', $html, $m)) {
@@ -412,9 +587,8 @@ final class Cults3DService
         }
 
         // 3) GET the order page; scrape the /en/downloads/{id}?creation=slug link.
-        $ch    = $this->webCurl($orderUrl);
-        $oHtml = curl_exec($ch);
-        curl_close($ch);
+        $oResp = $this->cfFetch($orderUrl, 'GET');
+        $oHtml = $oResp['body'];
         if (!is_string($oHtml) || !preg_match('#(/en/downloads/\d+\?creation=[^"\'\s]+)#', $oHtml, $dm)) {
             $this->lastError = 'Could not find a download link on the Cults3D order page.';
             return '';
@@ -422,15 +596,8 @@ final class Cults3DService
         $downloadPath = html_entity_decode($dm[1], ENT_QUOTES);
 
         // 4) GET the download link -> 302 to the signed CloudFront URL.
-        //    With FOLLOWLOCATION off, read the Location header from the response.
-        $ch = $this->webCurl(self::WEB . $downloadPath);
-        curl_setopt($ch, CURLOPT_HEADER, true);
-        $resp = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $hlen = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        curl_close($ch);
-
-        $headers = is_string($resp) ? substr($resp, 0, $hlen) : '';
+        $dlResp  = $this->cfFetch(self::WEB . $downloadPath, 'GET');
+        $headers = $dlResp['headers'];
         $signed  = '';
         if (preg_match('/^location:\s*(\S+)/im', $headers, $lm)) {
             $signed = trim($lm[1]);
@@ -464,29 +631,13 @@ final class Cults3DService
     private function postFreeOrder(string $slug, string $csrf): string
     {
         $url = self::WEB . '/en/free_orders?creation_slug=' . rawurlencode($slug);
-        $ch  = $this->webCurl($url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, 'authenticity_token=' . rawurlencode($csrf));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'User-Agent: ' . self::UA,
-            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language: en-US,en;q=0.9',
+        $resp = $this->cfFetch($url, 'POST', 'authenticity_token=' . rawurlencode($csrf), [
             'Content-Type: application/x-www-form-urlencoded',
             'Origin: ' . self::WEB,
             'Referer: ' . self::WEB . '/en/3d-model/_/' . rawurlencode($slug),
-            $this->sessionCookieHeader(),
         ]);
-        curl_setopt($ch, CURLOPT_HEADER, true);
-        $resp = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $hlen = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        curl_close($ch);
-
-        $headers = is_string($resp) ? substr($resp, 0, $hlen) : '';
-        $loc = '';
-        if (preg_match('/^location:\s*(\S+)/im', $headers, $lm)) {
-            $loc = trim($lm[1]);
-        }
+        $code = $resp['status'];
+        $loc  = $resp['location'];
 
         if ($loc === '' || stripos($loc, '/orders/') === false) {
             $this->lastError = 'Cults3D free-order step failed (HTTP ' . $code . '). '
@@ -555,7 +706,7 @@ final class Cults3DService
             CURLOPT_ENCODING       => 'gzip, deflate, br',
             CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
             CURLOPT_HTTPHEADER     => [
-                'User-Agent: ' . self::UA,
+                'User-Agent: ' . $this->userAgent,
                 'Accept: */*',
             ],
             CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$cdHeader) {
@@ -648,7 +799,7 @@ final class Cults3DService
                 $this->authHeader(),
                 'Content-Type: application/json',
                 'Accept: application/json',
-                'User-Agent: ' . self::UA,
+                'User-Agent: ' . $this->userAgent,
             ],
         ]);
         return $ch;
