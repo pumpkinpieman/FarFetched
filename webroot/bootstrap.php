@@ -755,6 +755,23 @@ function init_schema(PDO $pdo): void
 
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status ON download_jobs(status);');
 
+    // Favorites: starred models, server-side so they persist across devices.
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS favorites (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            source       TEXT    NOT NULL,
+            model_id     TEXT    NOT NULL,
+            slug         TEXT    NOT NULL DEFAULT '',
+            name         TEXT    NOT NULL DEFAULT '',
+            creator      TEXT    NOT NULL DEFAULT '',
+            thumb        TEXT    NOT NULL DEFAULT '',
+            price        INTEGER NOT NULL DEFAULT 0,
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(source, model_id)
+        );
+    SQL);
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_fav_source ON favorites(source);');
+
     // Migration: add `source` to pre-existing installs (CREATE TABLE won't alter).
     $cols = $pdo->query("PRAGMA table_info(download_jobs)")->fetchAll(PDO::FETCH_COLUMN, 1);
     if (!in_array('source', $cols, true)) {
@@ -768,6 +785,93 @@ function init_schema(PDO $pdo): void
 function e(string $s): string
 {
     return htmlspecialchars($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+}
+
+// ---- Favorites ------------------------------------------------------------
+
+/** Add (or update) a favorite. Returns true on success. */
+function favorite_add(array $m): bool
+{
+    $source = strtolower(trim((string) ($m['source'] ?? '')));
+    $id     = trim((string) ($m['id'] ?? $m['model_id'] ?? ''));
+    if ($source === '' || $id === '') return false;
+
+    $stmt = db()->prepare(
+        'INSERT INTO favorites (source, model_id, slug, name, creator, thumb, price)
+         VALUES (:source, :model_id, :slug, :name, :creator, :thumb, :price)
+         ON CONFLICT(source, model_id) DO UPDATE SET
+            slug=excluded.slug, name=excluded.name, creator=excluded.creator,
+            thumb=excluded.thumb, price=excluded.price'
+    );
+    return $stmt->execute([
+        ':source'   => $source,
+        ':model_id' => $id,
+        ':slug'     => (string) ($m['slug'] ?? ''),
+        ':name'     => (string) ($m['name'] ?? ''),
+        ':creator'  => (string) ($m['creator'] ?? ''),
+        ':thumb'    => (string) ($m['thumb'] ?? ''),
+        ':price'    => (int) ($m['price'] ?? 0),
+    ]);
+}
+
+/** Remove a favorite by source + model id. */
+function favorite_remove(string $source, string $modelId): bool
+{
+    $stmt = db()->prepare('DELETE FROM favorites WHERE source = :s AND model_id = :m');
+    return $stmt->execute([':s' => strtolower(trim($source)), ':m' => trim($modelId)]);
+}
+
+/** Is a given model favorited? */
+function favorite_exists(string $source, string $modelId): bool
+{
+    $stmt = db()->prepare('SELECT 1 FROM favorites WHERE source = :s AND model_id = :m LIMIT 1');
+    $stmt->execute([':s' => strtolower(trim($source)), ':m' => trim($modelId)]);
+    return (bool) $stmt->fetchColumn();
+}
+
+/** All favorites, newest first. @return array<int,array<string,mixed>> */
+function favorites_all(): array
+{
+    $rows = db()->query('SELECT * FROM favorites ORDER BY created_at DESC')->fetchAll(PDO::FETCH_ASSOC);
+    return is_array($rows) ? $rows : [];
+}
+
+/** Set of "source:model_id" keys for quick membership checks in the grid. */
+function favorites_key_set(): array
+{
+    $rows = db()->query('SELECT source, model_id FROM favorites')->fetchAll(PDO::FETCH_ASSOC);
+    $set = [];
+    foreach ($rows as $r) { $set[$r['source'] . ':' . $r['model_id']] = true; }
+    return $set;
+}
+
+/**
+ * Rebuild the public model URL on the source site for a favorite.
+ * Returns '' when we can't construct one.
+ */
+function favorite_source_url(string $source, string $modelId, string $slug = ''): string
+{
+    $source = strtolower($source);
+    switch ($source) {
+        case 'printables':
+            // Printables URLs are /model/<id>-<slug>; id alone redirects fine.
+            return 'https://www.printables.com/model/' . rawurlencode($modelId);
+        case 'makerworld':
+            return 'https://makerworld.com/en/models/' . rawurlencode($modelId);
+        case 'thingiverse':
+            return 'https://www.thingiverse.com/thing:' . rawurlencode($modelId);
+        case 'cults3d':
+            return $slug !== ''
+                ? 'https://cults3d.com/en/3d-model/various/' . rawurlencode($slug)
+                : 'https://cults3d.com/en/3d-model/various/' . rawurlencode($modelId);
+        case 'stlflix':
+            return 'https://www.stlflix.com/model/' . rawurlencode($modelId);
+        case 'creality':
+            // Creality detail pages key off the group id via profileId.
+            return 'https://www.crealitycloud.com/model-detail/' . rawurlencode($slug !== '' ? $slug : $modelId);
+        default:
+            return '';
+    }
 }
 
 function csrf_token(): string

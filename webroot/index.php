@@ -117,9 +117,11 @@ $stlCat = preg_replace('/[^0-9]/', '', (string) ($_GET['stlcat'] ?? ''));
 $stlBrowse = $source === 'stlflix' && (isset($_GET['stlcat']) || isset($_GET['browse']));
 $crealityBrowse = $source === 'creality';
 $crealityCat = $source === 'creality' ? trim((string) ($_GET['crealitycat'] ?? '')) : '';
+$favSet = favorites_key_set();
 $crealityCategories = [];
+$crealityCatTree    = [];
 if ($source === 'creality' && creality_ready()) {
-    $crealityCategories = (new CrealityCloudService())->categories();
+    $crealityCatTree = (new CrealityCloudService())->categoryTree();
 }
 if ($source === 'stlflix') {
     $stlflixCategories = (new STLFlixService())->categories();
@@ -196,7 +198,7 @@ $csrf = csrf_token();
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browse · FarFetched</title>
-<link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/styles.css?v=20260617d">
 </head>
 
 
@@ -216,7 +218,7 @@ $csrf = csrf_token();
       <?php endforeach; ?>
     </nav>
     <?php elseif ($source === 'thingiverse'): ?>
-    <div class="navlabel">Thingiverse</div>
+    <div class="navlabel">Thingiverse Categories</div>
     <nav id="tvCatNav">
       <?php foreach (TV_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
         <a href="javascript:void(0)" data-tvcat="<?= e($cid) ?>" data-tvlabel="<?= e($label) ?>"
@@ -224,7 +226,7 @@ $csrf = csrf_token();
       <?php endforeach; ?>
     </nav>
     <?php elseif ($source === 'cults3d'): ?>
-    <div class="navlabel">Cults3D</div>
+    <div class="navlabel">Cults3D Categories</div>
     <nav id="cultsCatNav">
       <?php foreach (CULTS3D_CATEGORIES as $cid => $label): $cid = (string) $cid; ?>
         <a href="javascript:void(0)" data-cultscat="<?= e($cid) ?>" data-cultslabel="<?= e($label) ?>"
@@ -232,7 +234,7 @@ $csrf = csrf_token();
       <?php endforeach; ?>
     </nav>
     <?php elseif ($source === 'stlflix'): ?>
-    <div class="navlabel">STLFlix</div>
+    <div class="navlabel">STLFlix Categories</div>
     <nav id="stlCatNav">
       <?php foreach ($stlflixCategories as $cid => $label): $cid = (string) $cid; ?>
         <a href="javascript:void(0)" data-stlcat="<?= e($cid) ?>" data-stllabel="<?= e($label) ?>"
@@ -241,23 +243,37 @@ $csrf = csrf_token();
     </nav>
     <?php elseif ($source === 'creality'): ?>
     <div class="navlabel">Creality Categories</div>
-    <nav id="crealityCatNav">
+    <nav id="crealityCatNav" class="creality-accordion">
       <a href="javascript:void(0)" data-crealitycat="" data-crealitylabel="Trending"
-         class="<?= $crealityCat === '' ? 'active' : '' ?>">Trending</a>
-      <?php foreach ($crealityCategories as $cid => $label): $cid = (string) $cid; ?>
-        <a href="javascript:void(0)" data-crealitycat="<?= e($cid) ?>" data-crealitylabel="<?= e($label) ?>"
-           class="<?= ($cid === $crealityCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+         class="cat-trending <?= $crealityCat === '' ? 'active' : '' ?>">Trending</a>
+      <?php foreach ($crealityCatTree as $parent):
+        $pid = (string) $parent['id'];
+        $hasKids = !empty($parent['children']);
+        // Is this parent (or one of its children) the active category?
+        $childActive = false;
+        foreach ($parent['children'] as $ch) { if ((string) $ch['id'] === $crealityCat) { $childActive = true; break; } }
+        $parentActive = ($pid === $crealityCat);
+        $expanded = $childActive; // auto-open the group containing the active child
+      ?>
+        <div class="cat-group <?= $expanded ? 'open' : '' ?>">
+          <button type="button" class="cat-parent <?= $parentActive ? 'active' : '' ?>"
+                  data-crealitycat="<?= e($pid) ?>" data-crealitylabel="<?= e($parent['name']) ?>">
+            <span class="cat-parent-name"><?= e($parent['name']) ?></span>
+            <?php if ($hasKids): ?><span class="cat-caret" aria-hidden="true">▸</span><?php endif; ?>
+          </button>
+          <?php if ($hasKids): ?>
+          <div class="cat-children">
+            <?php foreach ($parent['children'] as $ch): $cid = (string) $ch['id']; ?>
+              <a href="javascript:void(0)" data-crealitycat="<?= e($cid) ?>" data-crealitylabel="<?= e($parent['name'].' › '.$ch['name']) ?>"
+                 class="cat-child <?= ($cid === $crealityCat) ? 'active' : '' ?>"><?= e($ch['name']) ?></a>
+            <?php endforeach; ?>
+          </div>
+          <?php endif; ?>
+        </div>
       <?php endforeach; ?>
     </nav>
     <?php else: ?>
-    <div class="navlabel">Category ID</div>
-    <form method="get" style="padding:0 8px 6px;">
-      <input type="hidden" name="type" value="<?= e($fileType) ?>">
-      <input type="text" name="cat" inputmode="numeric" pattern="[0-9]*"
-             placeholder="paste # → Go"
-             value="<?= $isRawId ? e($active) : '' ?>"
-             style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:13px ui-monospace,monospace;background:var(--card);color:var(--ink);">
-    </form>
+    
 
     <div class="navlabel">Categories</div>
     <nav id="pbCatNav">
@@ -272,6 +288,7 @@ $csrf = csrf_token();
       <a href="index.php">Browse Models</a>
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
+      <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
 		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
 		<span id="theme-toggle-icon">🌙</span> Change Appearance
@@ -326,22 +343,20 @@ $csrf = csrf_token();
 
     <?php if ($banner): ?><div class="banner"><?= e($banner) ?></div><?php endif; ?>
 
-    <?php if ($source === 'printables'): ?>
-    <div class="pastebar">
-      <div class="pastebar-row">
-        <input type="text" id="pasteId" placeholder="https://www.printables.com/model/1743150-… or just 1743150">
-        <button class="btn-primary" id="pasteGo">Queue ZIP</button>
-      </div>
-      <div class="pastebar-status" id="pasteStatus"></div>
-    </div>
-    <?php endif; ?>
-
+    
     <div class="grid" id="grid">
       <?php foreach ($models as $m): ?>
         <div class="card"
              data-id="<?= e($m['id']) ?>" data-slug="<?= e($m['slug']) ?>"
              data-name="<?= e($m['name']) ?>" data-creator="<?= e($m['creator']) ?>">
           <input type="checkbox" class="pick" aria-label="Select model">
+          <?php $isFav = isset($favSet[$source . ':' . $m['id']]); ?>
+          <button type="button" class="fav-star <?= $isFav ? 'on' : '' ?>"
+                  data-fav-source="<?= e($source) ?>" data-fav-id="<?= e($m['id']) ?>"
+                  data-fav-slug="<?= e($m['slug']) ?>" data-fav-name="<?= e($m['name']) ?>"
+                  data-fav-creator="<?= e($m['creator']) ?>" data-fav-thumb="<?= e($m['thumb']) ?>"
+                  data-fav-price="<?= (int) ($m['price'] ?? 0) ?>"
+                  aria-label="Favorite" title="Save to Favorites"><?= $isFav ? '★' : '☆' ?></button>
           <?php
             if (!empty($m['club'])) {
                 echo '<span class="badge club">Club</span>';
@@ -414,6 +429,45 @@ $csrf = csrf_token();
       _toastExit = setTimeout(() => t.classList.remove('hide'), 500);
     }, hold);
   }
+
+  // ---- Favorite star toggle (delegated for both PHP- and JS-rendered tiles) --
+  document.addEventListener('click', async e => {
+    const star = e.target.closest('.fav-star');
+    if (!star) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const payload = {
+      action:  'toggle',
+      source:  star.dataset.favSource,
+      model_id: decodeURIComponent(star.dataset.favId || ''),
+      slug:    star.dataset.favSlug || '',
+      name:    star.dataset.favName || '',
+      creator: star.dataset.favCreator || '',
+      thumb:   star.dataset.favThumb || '',
+      price:   parseInt(star.dataset.favPrice || '0', 10),
+    };
+    star.disabled = true;
+    try {
+      const res = await fetch('favorite.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        star.classList.toggle('on', data.favorited);
+        star.textContent = data.favorited ? '★' : '☆';
+        if (typeof favSet !== 'undefined') {
+          const k = payload.source + ':' + payload.model_id;
+          if (data.favorited) favSet.add(k); else favSet.delete(k);
+        }
+        if (typeof showToast === 'function') {
+          showToast(data.favorited ? 'Added to Favorites' : 'Removed from Favorites', {});
+        }
+      }
+    } catch (_) { /* ignore network blip */ }
+    star.disabled = false;
+  });
   const nsfwEl = document.getElementById('nsfwToggle');
   const showNsfw = () => (nsfwEl && nsfwEl.checked) ? '1' : '0';
 
@@ -488,10 +542,25 @@ $csrf = csrf_token();
     else if (m.price > 0) badge = '<span class="badge paid">Payment Required</span>';
 
     // textContent-safe insertion for name/creator
+    const favKey = SOURCE + ':' + m.id;
+    const isFav = favSet.has(favKey);
+    const starBtn = '<button type="button" class="fav-star' + (isFav ? ' on' : '') + '"'
+      + ' data-fav-source="' + SOURCE + '" data-fav-id="' + encodeURIComponent(m.id) + '"'
+      + ' aria-label="Favorite" title="Save to Favorites">' + (isFav ? '★' : '☆') + '</button>';
     card.innerHTML =
       '<input type="checkbox" class="pick" aria-label="Select model"' + (selHas(m.id) ? ' checked' : '') + '>' +
+      starBtn +
       '<div class="thumb" style="position:relative;">'+thumb+'</div>' + badge +
       '<div class="meta"><div class="mname"></div><div class="mcreator"></div></div>';
+    // Stash the rest of the model data on the star for the toggle handler.
+    const sb = card.querySelector('.fav-star');
+    if (sb) {
+      sb.dataset.favSlug = m.slug || '';
+      sb.dataset.favName = m.name || '';
+      sb.dataset.favCreator = m.creator || '';
+      sb.dataset.favThumb = m.thumb || '';
+      sb.dataset.favPrice = String(m.price || 0);
+    }
     card.querySelector('.mname').textContent = m.name;
     if (m.creator && m.creator !== '') {
       card.querySelector('.mcreator').textContent = 'by ' + m.creator;
@@ -593,6 +662,8 @@ $csrf = csrf_token();
   const TV_BROWSE = <?= json_encode($tvBrowse) ?>;
   const CULTS_CAT    = <?= json_encode($cultsCat) ?>;
   const CREALITY_CAT = <?= json_encode($crealityCat ?? '') ?>;
+  const FAV_SET = <?= json_encode(array_keys($favSet)) ?>;
+  const favSet = new Set(FAV_SET);
   const CULTS_BROWSE = <?= json_encode($cultsBrowse) ?>;
   const STL_CAT    = <?= json_encode($stlCat) ?>;
   const STL_BROWSE = <?= json_encode($stlBrowse) ?>;
@@ -845,13 +916,40 @@ $csrf = csrf_token();
   // Creality category nav
   const crealityCatNav = document.getElementById('crealityCatNav');
   if (crealityCatNav) {
+    function setCrealityActive(el) {
+      crealityCatNav.querySelectorAll('.active').forEach(a => a.classList.remove('active'));
+      if (el) el.classList.add('active');
+    }
     crealityCatNav.addEventListener('click', e => {
-      const link = e.target.closest('a[data-crealitylabel]');
-      if (!link) return;
-      e.preventDefault();
-      crealityCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
-      link.classList.add('active');
-      browseCrealityCategory(link.dataset.crealitycat, link.dataset.crealitylabel);
+      const parentBtn = e.target.closest('.cat-parent');
+      const childLink = e.target.closest('.cat-child');
+      const trending  = e.target.closest('.cat-trending');
+
+      if (parentBtn) {
+        e.preventDefault();
+        const grp = parentBtn.closest('.cat-group');
+        const wasOpen = grp && grp.classList.contains('open');
+        // Clicking the parent toggles its group open/closed.
+        if (grp) grp.classList.toggle('open');
+        // Only browse the category when opening it (not when collapsing).
+        if (!wasOpen) {
+          setCrealityActive(parentBtn);
+          browseCrealityCategory(parentBtn.dataset.crealitycat, parentBtn.dataset.crealitylabel);
+        }
+        return;
+      }
+      if (childLink) {
+        e.preventDefault();
+        setCrealityActive(childLink);
+        browseCrealityCategory(childLink.dataset.crealitycat, childLink.dataset.crealitylabel);
+        return;
+      }
+      if (trending) {
+        e.preventDefault();
+        setCrealityActive(trending);
+        browseCrealityCategory('', 'Trending');
+        return;
+      }
     });
   }
 
@@ -933,8 +1031,9 @@ $csrf = csrf_token();
 
   // Click anywhere on a card (image, title, blank space) to toggle selection.
   if (grid) grid.addEventListener('click', e => {
-    // Let the checkbox handle its own clicks (avoids double-toggle).
+    // Let the checkbox and the favorite star handle their own clicks.
     if (e.target.classList.contains('pick')) return;
+    if (e.target.closest('.fav-star')) return;
     const card = e.target.closest('.card');
     if (!card) return;
     const box = card.querySelector('.pick');

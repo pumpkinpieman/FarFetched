@@ -1,0 +1,77 @@
+/* Favorites page — relies on styles.css for the aside/main sidebar layout. */
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.topbar h1 { margin: 0; }
+.fav-count {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Grid reuses the shared .grid/.card styles from styles.css. */
+.fav-card { position: relative; }
+
+.fav-card .src-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .5);
+  color: #fff;
+}
+/* Source-tinted badges (mirror the queue badge colors). */
+.fav-card .src-badge.printables  { background: rgba(255,107,26,.85); }
+.fav-card .src-badge.makerworld  { background: rgba(39,120,248,.85); }
+.fav-card .src-badge.thingiverse { background: rgba(0,160,190,.85); }
+.fav-card .src-badge.cults3d     { background: rgba(170,55,190,.85); }
+.fav-card .src-badge.stlflix     { background: rgba(210,165,40,.9); color:#1a1408; }
+.fav-card .src-badge.creality    { background: rgba(110,200,32,.9); color:#10220a; }
+
+.fav-card .thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.fav-actions {
+  padding: 8px 12px 12px;
+}
+.fav-link {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--clay);
+  text-decoration: none;
+}
+.fav-link:hover { text-decoration: underline; }
+
+/* Empty state */
+.fav-empty {
+  text-align: center;
+  padding: 70px 20px;
+  color: var(--muted);
+}
+.fav-empty-star {
+  font-size: 52px;
+  color: var(--line);
+  line-height: 1;
+  margin-bottom: 12px;
+}
+.fav-empty p { margin: 4px 0; font-size: 16px; color: var(--ink); }
+.fav-empty .fav-empty-sub { font-size: 14px; color: var(--muted); margin-bottom: 20px; }
+.fav-empty .btn-primary { display: inline-block; text-decoration: none; }

@@ -88,6 +88,45 @@ final class CrealityCloudService
     }
 
     /**
+     * Like categories() but preserves the parent→children hierarchy, for an
+     * accordion-style sidebar. Each entry:
+     *   ['id'=>, 'name'=>, 'children'=>[ ['id'=>, 'name'=>], ... ]]
+     * @return array<int,array<string,mixed>>
+     */
+    public function categoryTree(): array
+    {
+        $this->lastError = '';
+        if (!$this->isAuthed()) return [];
+
+        $resp = $this->apiPost('/api/cxy/v2/common/categoryList', ['type' => 7]);
+        if ($resp === null) return [];
+        $list = $resp['result']['list'] ?? [];
+        if (!is_array($list)) return [];
+
+        $tree = [];
+        foreach ($list as $top) {
+            if (!is_array($top)) continue;
+            $tid   = (string) ($top['id'] ?? '');
+            $tname = (string) ($top['en_name'] ?? ($top['name'] ?? ''));
+            if ($tid === '' || $tname === '') continue;
+
+            $children = [];
+            $kids = $top['children'] ?? [];
+            if (is_array($kids)) {
+                foreach ($kids as $c) {
+                    if (!is_array($c)) continue;
+                    $cid   = (string) ($c['id'] ?? '');
+                    $cname = (string) ($c['en_name'] ?? ($c['name'] ?? ''));
+                    if ($cid === '' || $cname === '') continue;
+                    $children[] = ['id' => $cid, 'name' => $cname];
+                }
+            }
+            $tree[] = ['id' => $tid, 'name' => $tname, 'children' => $children];
+        }
+        return $tree;
+    }
+
+    /**
      * Browse models within a category via the trending/feed endpoint.
      * @return array<int,array<string,mixed>>
      */

@@ -41,7 +41,8 @@ foreach ($sources as $s) {
     <a href="index.php">Browse</a>
     <a href="jobs.php">Queue</a>
     <a href="viewer.php">3D Viewer</a>
-    <a href="settings.php">Settings</a>
+    <a href="favorites.php">Favorites</a>
+  <a href="settings.php">Settings</a>
 		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
 		<span id="theme-toggle-icon">🌙</span> Change Appearance
 		</button>
@@ -158,6 +159,7 @@ foreach ($sources as $s) {
   <a href="index.php">Browse Models</a>
   <a href="jobs.php">Queue</a>
   <a href="viewer.php">3D Viewer</a>
+  <a href="favorites.php">Favorites</a>
   <a href="settings.php">Settings</a>
 </div>
 

@@ -250,3 +250,51 @@
   color:#fff; text-decoration:underline; font-weight:700; white-space:nowrap;
 }
 #ff-toast .ff-toast-link:hover{ opacity:.85; }
+
+/* ── Creality category accordion sidebar ─────────────────────────────── */
+.creality-accordion .cat-group{margin-bottom:1px;}
+.creality-accordion .cat-parent{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  width:100%;background:transparent;border:none;cursor:pointer;
+  padding:9px 12px;border-radius:8px;color:var(--ink);
+  font-size:14px;font-weight:500;text-align:left;font-family:inherit;
+}
+.creality-accordion .cat-parent:hover{background:rgba(255,107,26,.07);}
+.creality-accordion .cat-parent.active{background:var(--clay);color:#fff;}
+.creality-accordion .cat-caret{
+  font-size:11px;color:var(--muted);transition:transform .18s ease;flex:none;
+  padding:2px 4px;border-radius:4px;pointer-events:none;
+}
+.creality-accordion .cat-parent.active .cat-caret{color:rgba(255,255,255,.85);}
+.creality-accordion .cat-group.open .cat-caret{transform:rotate(90deg);}
+.creality-accordion .cat-children{
+  display:none;margin:2px 0 4px 10px;padding-left:8px;
+  border-left:1px solid var(--line);
+}
+.creality-accordion .cat-group.open .cat-children{display:block;}
+.creality-accordion .cat-child{
+  display:block;padding:7px 12px;border-radius:7px;
+  color:var(--muted);font-size:13px;text-decoration:none;
+}
+.creality-accordion .cat-child:hover{background:rgba(255,107,26,.07);color:var(--ink);}
+.creality-accordion .cat-child.active{background:var(--clay);color:#fff;}
+.creality-accordion .cat-trending{
+  display:block;padding:9px 12px;border-radius:8px;margin-bottom:4px;
+  color:var(--ink);font-size:14px;font-weight:500;text-decoration:none;
+}
+.creality-accordion .cat-trending:hover{background:rgba(255,107,26,.07);}
+.creality-accordion .cat-trending.active{background:var(--clay);color:#fff;}
+
+/* ── Favorite star on model tiles ────────────────────────────────────── */
+.card .fav-star{
+  position:absolute;bottom:8px;right:8px;z-index:5;
+  width:24px;height:24px;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.45);border:none;border-radius:50%;
+  color:#fff;font-size:14px;line-height:1;cursor:pointer;
+  opacity:0;transition:opacity .15s,transform .12s,background .15s;
+  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+}
+.card:hover .fav-star{opacity:1;}
+.card .fav-star.on{opacity:1;color:#f5c842;}            /* starred = always visible, gold */
+.card .fav-star:hover{transform:scale(1.15);background:rgba(0,0,0,.65);}
+.card .fav-star.on:hover{color:#ffd95e;}
