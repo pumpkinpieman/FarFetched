@@ -1,0 +1,43 @@
+# ============================================================================
+# curl-impersonate — adds a curl build with a real-browser TLS/JA3 fingerprint
+# so FarFetched can pass Cloudflare's bot check for Cults3D web downloads.
+#
+# Merge these lines into your existing FarFetched Dockerfile (after the base
+# image / PHP setup). They download a prebuilt curl-impersonate release and
+# symlink the Chrome variant to a stable path the Cults3DService looks for.
+#
+# After rebuilding, no app config is needed — Cults3DService auto-detects the
+# binary at /usr/local/bin/curl_chrome116. (You can override the path with the
+# `curl_impersonate_bin` config key if you install it elsewhere.)
+# ============================================================================
+
+# --- curl-impersonate (Chrome) ---------------------------------------------
+# Pick the release/arch you need. v0.6.1 ships glibc x86_64 + arm64 builds.
+ARG CURL_IMPERSONATE_VERSION=0.6.1
+ARG TARGETARCH=amd64
+
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) CI_ARCH="x86_64-linux-gnu" ;; \
+        arm64) CI_ARCH="aarch64-linux-gnu" ;; \
+        *)     CI_ARCH="x86_64-linux-gnu" ;; \
+    esac; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl tar; \
+    cd /tmp; \
+    curl -L -o curl-impersonate.tar.gz \
+        "https://github.com/lwthiker/curl-impersonate/releases/download/v${CURL_IMPERSONATE_VERSION}/curl-impersonate-v${CURL_IMPERSONATE_VERSION}.${CI_ARCH}.tar.gz"; \
+    mkdir -p /usr/local/curl-impersonate; \
+    tar -xzf curl-impersonate.tar.gz -C /usr/local/curl-impersonate; \
+    # Wrapper scripts (curl_chrome116, curl_ff117, …) live in the archive root.
+    cp /usr/local/curl-impersonate/curl_chrome116 /usr/local/bin/ 2>/dev/null || true; \
+    cp /usr/local/curl-impersonate/curl-impersonate-chrome /usr/local/bin/ 2>/dev/null || true; \
+    cp /usr/local/curl-impersonate/curl-impersonate /usr/local/bin/ 2>/dev/null || true; \
+    chmod +x /usr/local/bin/curl_chrome116 /usr/local/bin/curl-impersonate* 2>/dev/null || true; \
+    rm -f /tmp/curl-impersonate.tar.gz; \
+    # Sanity check (won't fail the build if the variant name differs):
+    (/usr/local/bin/curl_chrome116 --version || true)
+
+# If the wrapper script can't find its libcurl-impersonate, point it at the
+# extracted libs:
+ENV LD_LIBRARY_PATH="/usr/local/curl-impersonate:${LD_LIBRARY_PATH}"
