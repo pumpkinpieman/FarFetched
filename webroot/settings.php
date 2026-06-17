@@ -649,7 +649,11 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
         const act = (submitter && submitter.value) || '';
         const isValidate = act.indexOf('validate') !== -1;
         if (data.ok && !isValidate) {
-          setTimeout(() => closeModal(modalId), 900);
+          // Reload after the notice so the modal's field values and "(set)"
+          // indicators re-render from the now-saved server state. Without this,
+          // the DOM keeps the old PHP-rendered values and a saved credential can
+          // look like it didn't stick when the modal is reopened.
+          setTimeout(() => { window.location.reload(); }, 900);
         }
       })
       .catch(() => {
