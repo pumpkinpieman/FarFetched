@@ -58,7 +58,6 @@ $badge = static function (string $s): string {
 <body>
   <aside>
     <div class="brand"><img src="logo.svg" alt="FarFetched" style="height:1.15em;width:auto;vertical-align:-.2em;margin-right:7px"> FarFetched</div>
-	
     <nav>
       <a href="index.php">Browse Models</a>
       <a href="jobs.php" class="active">Queue</a>
@@ -110,7 +109,7 @@ $badge = static function (string $s): string {
           <tr data-job="<?= (int) $r['id'] ?>">
             <?php
               $srcSlug = strtolower((string)($r['source'] ?? ''));
-              $srcLabels = ['printables'=>'PT','makerworld'=>'MW','thingiverse'=>'TV','cults3d'=>'C3D','stlflix'=>'SF'];
+              $srcLabels = ['printables'=>'PT','makerworld'=>'MW','thingiverse'=>'TV','cults3d'=>'C3D','stlflix'=>'SF','creality'=>'CR'];
               $srcLabel = $srcLabels[$srcSlug] ?? ($srcSlug !== '' ? strtoupper(substr($srcSlug,0,3)) : '');
             ?>
             <td><?php if ($srcLabel !== ''): ?><span class="src-badge <?= e($srcSlug) ?>"><?= e($srcLabel) ?></span><?php else: ?><span class="muted">—</span><?php endif; ?></td>
@@ -240,7 +239,7 @@ $badge = static function (string $s): string {
         } else {
           body.innerHTML = data.jobs.map(j =>
             '<tr data-job="' + j.id + '">' +
-            (function(s){ const m={'printables':'PT','makerworld':'MW','thingiverse':'TV','cults3d':'C3D','stlflix':'SF'}; const lbl = m[s] || (s ? s.substring(0,3).toUpperCase() : ''); return '<td>' + (lbl ? '<span class="src-badge '+s+'">'+lbl+'</span>' : '<span class="muted">—</span>') + '</td>'; })(j.source||'') +
+            (function(s){ const m={'printables':'PT','makerworld':'MW','thingiverse':'TV','cults3d':'C3D','stlflix':'SF','creality':'CR'}; const lbl = m[s] || (s ? s.substring(0,3).toUpperCase() : ''); return '<td>' + (lbl ? '<span class="src-badge '+s+'">'+lbl+'</span>' : '<span class="muted">—</span>') + '</td>'; })(j.source||'') +
             '<td>' + esc(j.name || j.model_id) + '</td>' +
             '<td class="muted">' + esc(j.model_id) + '</td>' +
             '<td class="muted">' + esc(j.creator) + '</td>' +

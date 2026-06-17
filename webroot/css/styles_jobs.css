@@ -43,6 +43,7 @@
   .src-badge.thingiverse{background:rgba(0,188,212,.12);color:#4dd6e8;}
   .src-badge.cults3d{background:rgba(180,60,200,.12);color:#d07be0;}
   .src-badge.stlflix{background:rgba(245,200,66,.12);color:#f5c842;}
+  .src-badge.creality{background:rgba(110,200,32,.12);color:#8fd44a;}
   .act{display:inline-flex;gap:6px;}
   .act button{padding:5px 9px;font-size:12px;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:7px;}
   .act button:hover{border-color:var(--clay);color:var(--clay-deep);}

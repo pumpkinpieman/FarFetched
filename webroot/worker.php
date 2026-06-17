@@ -32,6 +32,7 @@ require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
 require_once __DIR__ . '/Cults3DService.php';
 require_once __DIR__ . '/STLFlixService.php';
+require_once __DIR__ . '/CrealityCloudService.php';
 
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
@@ -102,6 +103,7 @@ $mw     = new MakerWorldService();
 $tv     = new ThingiverseService();
 $cults  = new Cults3DService();
 $stlfix = new STLFlixService();
+$creality = new CrealityCloudService();
 
 // Per-source readiness. A source that isn't configured simply has its jobs wait
 // in the queue (they're filtered out of the claim query below) rather than
@@ -131,6 +133,7 @@ logln($cultsReady
     : 'Cults3D credentials absent — Cults3D jobs will wait.');
 
 $stlflixReady = $stlfix->isAuthed();
+$crealityReady = $creality->isAuthed();
 logln($stlflixReady
     ? 'STLFlix token present.'
     : 'STLFlix token absent — STLFlix jobs will wait.');
@@ -141,6 +144,7 @@ if ($makerworldReady)  { $readySources[] = 'makerworld'; }
 if ($thingiverseReady) { $readySources[] = 'thingiverse'; }
 if ($cultsReady)       { $readySources[] = 'cults3d'; }
 if ($stlflixReady)     { $readySources[] = 'stlflix'; }
+if ($crealityReady)    { $readySources[] = 'creality'; }
 
 if ($readySources === []) {
     logerr('error', 'No source configured — paste at least one token in Settings. Exiting.');
@@ -170,6 +174,7 @@ $sourceDirs = [
     'thingiverse' => get_thingiverse_dir(),
     'cults3d'     => get_cults3d_dir(),
     'stlflix'     => get_stlflix_dir(),
+    'creality'    => get_creality_dir(),
 ];
 foreach ($sourceDirs as $srcName => $srcDir) {
     if ($srcDir === '') continue;
@@ -512,6 +517,40 @@ while (true) {
         }
         $GLOBALS['ACTIVE_JOB_ID'] = null;
         pace(CULTS3D_DELAY_SECONDS);
+        continue;
+    }
+
+    // ---- Creality Cloud: whole-model download (all files in the set) --------
+    if (($job['source'] ?? '') === 'creality') {
+        try {
+            $destDir = rtrim(get_creality_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+
+            // memberDownload returns signed URLs for every file in the model;
+            // downloadModel fetches them all into the model's folder.
+            $saved = $creality->downloadModel($modelId, $destDir, progress_writer($jobId, $name !== '' ? $name : $modelId));
+
+            if ($saved > 0) {
+                logln('  Saved ' . $saved . ' Creality file(s) into: ' . $destDir);
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+            } else {
+                $msg = $creality->lastError !== '' ? $creality->lastError : 'Creality download failed.';
+                // A 403 (Cloudflare) or auth failure should halt so the user can
+                // re-paste a fresh token / cf_clearance rather than burn the queue.
+                if (stripos($msg, '403') !== false || stripos($msg, 'auth') !== false || stripos($msg, 're-paste') !== false) {
+                    $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                    logerr('error', '  Creality auth/cloudflare issue — halting run: ' . $msg);
+                    break;
+                }
+                $isPaid = stripos($msg, 'paid') !== false || stripos($msg, 'region') !== false;
+                $upd->execute([':st' => $isPaid ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Creality ' . ($isPaid ? 'skipped' : 'error') . ': ' . $msg);
+            }
+        } catch (\Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  Creality error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(CREALITY_DELAY_SECONDS);
         continue;
     }
 

@@ -105,6 +105,7 @@ define('MAKERWORLD_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/makerworld');
 define('THINGIVERSE_DOWNLOAD_DIR',   rtrim(MODELS_ROOT, '/') . '/thingiverse');
 define('CULTS3D_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/cults3d');
 define('STLFLIX_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/stlflix');
+define('CREALITY_DOWNLOAD_DIR',      rtrim(MODELS_ROOT, '/') . '/creality');
 
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
@@ -499,6 +500,12 @@ function cfg_defaults(): array
         'stlflix_token'              => (string) (getenv('FETCHER_STLFLIX_TOKEN') ?: ''),
         'stlflix_download_dir'       => '',
         'stlflix_delay'              => 60,
+        'creality_token'             => (string) (getenv('FETCHER_CREALITY_TOKEN') ?: ''),
+        'creality_user_id'           => (string) (getenv('FETCHER_CREALITY_USER_ID') ?: ''),
+        'creality_cf_clearance'      => '',
+        'creality_duid'              => '',
+        'creality_download_dir'      => '',
+        'creality_delay'             => 60,
     ];
 }
 
@@ -605,6 +612,24 @@ function cfg_save(array $patch): bool
     if (isset($patch['stlflix_delay'])) {
         $current['stlflix_delay'] = max(30, min(3600, (int) $patch['stlflix_delay']));
     }
+    if (array_key_exists('creality_token', $patch)) {
+        $current['creality_token'] = trim((string) $patch['creality_token']);
+    }
+    if (array_key_exists('creality_user_id', $patch)) {
+        $current['creality_user_id'] = trim((string) $patch['creality_user_id']);
+    }
+    if (array_key_exists('creality_cf_clearance', $patch)) {
+        $current['creality_cf_clearance'] = trim((string) $patch['creality_cf_clearance']);
+    }
+    if (array_key_exists('creality_duid', $patch)) {
+        $current['creality_duid'] = trim((string) $patch['creality_duid']);
+    }
+    if (array_key_exists('creality_download_dir', $patch)) {
+        $current['creality_download_dir'] = trim((string) $patch['creality_download_dir']);
+    }
+    if (isset($patch['creality_delay'])) {
+        $current['creality_delay'] = max(30, min(3600, (int) $patch['creality_delay']));
+    }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
     if (file_put_contents(CONFIG_STORE, $payload, LOCK_EX) === false) {
@@ -621,6 +646,7 @@ define('MAKERWORLD_DELAY_SECONDS',     (int) cfg('makerworld_delay'));
 define('THINGIVERSE_DELAY_SECONDS',    (int) cfg('thingiverse_delay'));
 define('CULTS3D_DELAY_SECONDS',        (int) cfg('cults3d_delay'));
 define('STLFLIX_DELAY_SECONDS',        (int) cfg('stlflix_delay'));
+define('CREALITY_DELAY_SECONDS',       (int) cfg('creality_delay'));
 
 function get_makerworld_dir(): string
 {
@@ -644,6 +670,19 @@ function get_stlflix_dir(): string
 {
     $v = trim((string) cfg('stlflix_download_dir'));
     return $v !== '' ? $v : STLFLIX_DOWNLOAD_DIR;
+}
+
+function get_creality_dir(): string
+{
+    $v = trim((string) cfg('creality_download_dir'));
+    return $v !== '' ? $v : CREALITY_DOWNLOAD_DIR;
+}
+
+/** True when Creality Cloud credentials (token + user id) are configured. */
+function creality_ready(): bool
+{
+    return trim((string) cfg('creality_token')) !== ''
+        && trim((string) cfg('creality_user_id')) !== '';
 }
 
 // ---- Database (SQLite via PDO) --------------------------------------------

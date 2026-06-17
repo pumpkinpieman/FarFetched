@@ -18,6 +18,7 @@ require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/ThingiverseService.php';
 require_once __DIR__ . '/Cults3DService.php';
 require_once __DIR__ . '/STLFlixService.php';
+require_once __DIR__ . '/CrealityCloudService.php';
 
 header('Content-Type: application/json');
 
@@ -27,7 +28,7 @@ $page   = max(1, (int) ($offset / 20) + 1);
 $paid   = (string) ($_GET['paid'] ?? 'all');
 if (!in_array($paid, ['all', 'free', 'paid'], true)) { $paid = 'all'; }
 $source = strtolower((string) ($_GET['src'] ?? 'printables'));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality'], true)) {
     $source = 'printables';
 }
 $showNsfw = ($_GET['nsfw'] ?? '') === '1';
@@ -37,7 +38,8 @@ $mwBrowse = ($_GET['browse'] ?? '') === '1';
 $allowEmptyQ = ($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))
     || $source === 'thingiverse'
     || $source === 'cults3d'
-    || $source === 'stlflix';
+    || $source === 'stlflix'
+    || $source === 'creality';
 
 if ($q === '' && !$allowEmptyQ) {
     echo json_encode(['ok' => false, 'error' => 'Empty search.']);
@@ -95,6 +97,23 @@ if ($source === 'stlflix') {
     if ($stlflix->lastError !== '') { echo json_encode(['ok' => false, 'error' => $stlflix->lastError]); exit; }
     $nextOffset = (($offset + $limit) < $stlflix->lastTotal) ? $offset + $limit : null;
     echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $stlflix->lastTotal, 'source' => 'stlflix']);
+    exit;
+}
+
+// ---- Creality Cloud ---------------------------------------------------------
+if ($source === 'creality') {
+    $creality = new CrealityCloudService();
+    $limit    = 24;
+    $crealityCat = trim((string) ($_GET['crealitycat'] ?? ''));
+    // Keyword search takes priority; otherwise browse by category (or trending).
+    if ($q !== '') {
+        $models = $creality->search($q, $limit, $page);
+    } else {
+        $models = $creality->browseCategory($crealityCat, $limit, $page);
+    }
+    if ($creality->lastError !== '') { echo json_encode(['ok' => false, 'error' => $creality->lastError]); exit; }
+    $nextOffset = (count($models) >= $limit) ? $offset + $limit : null;
+    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $creality->lastTotal, 'source' => 'creality']);
     exit;
 }
 

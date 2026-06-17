@@ -10,6 +10,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/STLFlixService.php';
+require_once __DIR__ . '/CrealityCloudService.php';
 
 const CATEGORIES = [
     'all'         => 'All Categories',
@@ -92,7 +93,7 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower($_GET['src'] ?? 'printables');
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality'], true)) {
     $source = 'printables';
 }
 
@@ -114,6 +115,12 @@ if (!array_key_exists($cultsCat, CULTS3D_CATEGORIES)) { $cultsCat = ''; }
 $stlflixCategories = ['' => 'All Models'];
 $stlCat = preg_replace('/[^0-9]/', '', (string) ($_GET['stlcat'] ?? ''));
 $stlBrowse = $source === 'stlflix' && (isset($_GET['stlcat']) || isset($_GET['browse']));
+$crealityBrowse = $source === 'creality';
+$crealityCat = $source === 'creality' ? trim((string) ($_GET['crealitycat'] ?? '')) : '';
+$crealityCategories = [];
+if ($source === 'creality' && creality_ready()) {
+    $crealityCategories = (new CrealityCloudService())->categories();
+}
 if ($source === 'stlflix') {
     $stlflixCategories = (new STLFlixService())->categories();
     if (!array_key_exists($stlCat, $stlflixCategories)) { $stlCat = ''; }
@@ -155,6 +162,18 @@ if ($source === 'makerworld') {
     $banner        = $stlReady
         ? null
         : 'STLFlix - add your jwt token in Settings to pull categories and browse models.';
+} elseif ($source === 'creality') {
+    $svc           = null;
+    $initialCursor = null;
+    $crealityReady = creality_ready();
+    if ($crealityReady) {
+        $cc     = new CrealityCloudService();
+        $models = $cc->browseCategory($crealityCat, 24, 1);
+        $banner = null;
+    } else {
+        $models = [];
+        $banner = 'Creality Cloud — add your token and user ID in Settings to search and download.';
+    }
 } else {
     $svc    = new PrintablesService();
     $models = $svc->isAuthed() ? $svc->searchModels($active) : [];
@@ -220,6 +239,16 @@ $csrf = csrf_token();
            class="<?= ($stlBrowse && $cid === $stlCat) ? 'active' : '' ?>"><?= e($label) ?></a>
       <?php endforeach; ?>
     </nav>
+    <?php elseif ($source === 'creality'): ?>
+    <div class="navlabel">Creality Categories</div>
+    <nav id="crealityCatNav">
+      <a href="javascript:void(0)" data-crealitycat="" data-crealitylabel="Trending"
+         class="<?= $crealityCat === '' ? 'active' : '' ?>">Trending</a>
+      <?php foreach ($crealityCategories as $cid => $label): $cid = (string) $cid; ?>
+        <a href="javascript:void(0)" data-crealitycat="<?= e($cid) ?>" data-crealitylabel="<?= e($label) ?>"
+           class="<?= ($cid === $crealityCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+      <?php endforeach; ?>
+    </nav>
     <?php else: ?>
     <div class="navlabel">Category ID</div>
     <form method="get" style="padding:0 8px 6px;">
@@ -251,6 +280,7 @@ $csrf = csrf_token();
   </aside>
 
   <main>
+    <div class="sticky-header">
     <div class="topbar">
       <h1 id="pageTitle"><?= e($title) ?></h1>
       <div class="actions">
@@ -260,6 +290,7 @@ $csrf = csrf_token();
           <a href="?src=thingiverse&browse=all" class="srcBtn <?= $source==='thingiverse'?'active':'' ?>">Thingiverse</a>
           <a href="?src=cults3d&browse=all" class="srcBtn <?= $source==='cults3d'?'active':'' ?>">Cults3D</a>
           <a href="?src=stlflix&browse=all" class="srcBtn <?= $source==='stlflix'?'active':'' ?>">STLFlix</a>
+          <a href="?src=creality" class="srcBtn <?= $source==='creality'?'active':'' ?>">Creality</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
@@ -282,6 +313,7 @@ $csrf = csrf_token();
         'thingiverse' => 'Search all of Thingiverse — e.g. cable clip, vase, articulated dragon…',
         'cults3d'     => 'Search all of Cults3D — e.g. miniature, keychain, lamp…',
         'stlflix'     => 'Search STLFlix — e.g. vista vase, dragon egg, wall light…',
+        'creality'    => 'Search Creality Cloud — e.g. dice tower, bracket, dragon…',
         default       => 'Search all of Printables — e.g. belt sander, toothpick, sanding block…',
       } ?>" autocomplete="off">
       <button class="btn-primary" id="searchGo">Search</button>
@@ -290,6 +322,7 @@ $csrf = csrf_token();
       <label class="nsfwToggle" title="MakerWorld hosts adult content; off by default"><input type="checkbox" id="nsfwToggle"> Show NSFW</label>
       <?php endif; ?>
     </div>
+    </div><!-- /.sticky-header -->
 
     <?php if ($banner): ?><div class="banner"><?= e($banner) ?></div><?php endif; ?>
 
@@ -327,7 +360,7 @@ $csrf = csrf_token();
           </div>
           <div class="meta">
             <div class="mname"><?= e($m['name']) ?></div>
-            <div class="mcreator">by <?= e($m['creator']) ?></div>
+            <?php if (($m['creator'] ?? '') !== ''): ?><div class="mcreator">by <?= e($m['creator']) ?></div><?php endif; ?>
           </div>
         </div>
       <?php endforeach; ?>
@@ -347,7 +380,7 @@ $csrf = csrf_token();
   const ACTIVE_CAT = <?= json_encode($active) ?>;
 
   // ---- Toast notification (bottom-right) ------------------------------------
-  let _toastTimer = null;
+  let _toastTimer = null, _toastExit = null;
   function showToast(message, opts) {
     opts = opts || {};
     let t = document.getElementById('ff-toast');
@@ -356,15 +389,30 @@ $csrf = csrf_token();
       t.id = 'ff-toast';
       document.body.appendChild(t);
     }
-    // Optional "View queue" link.
     const link = opts.link
       ? '<a href="jobs.php" class="ff-toast-link">View queue →</a>'
       : '';
     t.innerHTML = '<span class="ff-toast-msg"></span>' + link;
     t.querySelector('.ff-toast-msg').textContent = message;
-    t.classList.add('show');
+
+    // Reset any in-flight animation.
     if (_toastTimer) clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => { t.classList.remove('show'); }, opts.duration || 3500);
+    if (_toastExit)  clearTimeout(_toastExit);
+    t.classList.remove('hide', 'show');
+
+    // Enter: next frame so the transition fires from the hidden state.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => t.classList.add('show'));
+    });
+
+    // Hold ~3s, then exit: slide down + fade.
+    const hold = opts.duration || 3000;
+    _toastTimer = setTimeout(() => {
+      t.classList.remove('show');
+      t.classList.add('hide');
+      // Clean up classes once the exit transition finishes.
+      _toastExit = setTimeout(() => t.classList.remove('hide'), 500);
+    }, hold);
   }
   const nsfwEl = document.getElementById('nsfwToggle');
   const showNsfw = () => (nsfwEl && nsfwEl.checked) ? '1' : '0';
@@ -445,7 +493,12 @@ $csrf = csrf_token();
       '<div class="thumb" style="position:relative;">'+thumb+'</div>' + badge +
       '<div class="meta"><div class="mname"></div><div class="mcreator"></div></div>';
     card.querySelector('.mname').textContent = m.name;
-    card.querySelector('.mcreator').textContent = 'by ' + m.creator;
+    if (m.creator && m.creator !== '') {
+      card.querySelector('.mcreator').textContent = 'by ' + m.creator;
+    } else {
+      const mc = card.querySelector('.mcreator');
+      if (mc) mc.remove();
+    }
 
     if (multi) attachSlider(card, imgs, m.id);
     else if ((SOURCE === 'printables' || SOURCE === 'thingiverse') && m.id) attachSlider(card, imgs, m.id);
@@ -539,6 +592,7 @@ $csrf = csrf_token();
   const TV_CAT    = <?= json_encode($tvCat) ?>;
   const TV_BROWSE = <?= json_encode($tvBrowse) ?>;
   const CULTS_CAT    = <?= json_encode($cultsCat) ?>;
+  const CREALITY_CAT = <?= json_encode($crealityCat ?? '') ?>;
   const CULTS_BROWSE = <?= json_encode($cultsBrowse) ?>;
   const STL_CAT    = <?= json_encode($stlCat) ?>;
   const STL_BROWSE = <?= json_encode($stlBrowse) ?>;
@@ -563,6 +617,7 @@ $csrf = csrf_token();
         (SOURCE === 'thingiverse' && searchQuery === '' ? '&browse=1' : '') +
         (SOURCE === 'cults3d' && (window._cultsCatActive ?? CULTS_CAT) !== '' ? '&cultscat=' + encodeURIComponent(window._cultsCatActive ?? CULTS_CAT) : '') +
         (SOURCE === 'cults3d' && searchQuery === '' ? '&browse=1' : '') +
+        (SOURCE === 'creality' && (window._crealityCatActive ?? CREALITY_CAT) !== '' ? '&crealitycat=' + encodeURIComponent(window._crealityCatActive ?? CREALITY_CAT) : '') +
         (SOURCE === 'stlflix' && (window._stlCatActive ?? STL_CAT) !== '' ? '&stlcat=' + encodeURIComponent(window._stlCatActive ?? STL_CAT) : '') +
         (SOURCE === 'stlflix' && searchQuery === '' ? '&browse=1' : '')
       : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
@@ -709,6 +764,13 @@ $csrf = csrf_token();
     browseCultsCategory(CULTS_CAT, lbl);
   }
 
+  if (SOURCE === 'creality') {
+    // Server already rendered the first page; just remember the active category
+    // so "Load more" and subsequent calls keep the right filter.
+    window._crealityCatActive = CREALITY_CAT || '';
+    mode = 'search';
+  }
+
   if (SOURCE === 'stlflix' && STL_BROWSE) {
     window._stlCatActive = STL_CAT;
     const lbl = (document.querySelector('#stlCatNav a.active') || {}).textContent || 'All Models';
@@ -777,6 +839,31 @@ $csrf = csrf_token();
     refresh();
     loading = false;
     window._cultsCatActive = catId;
+    await loadMore();
+  }
+
+  // Creality category nav
+  const crealityCatNav = document.getElementById('crealityCatNav');
+  if (crealityCatNav) {
+    crealityCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-crealitylabel]');
+      if (!link) return;
+      e.preventDefault();
+      crealityCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browseCrealityCategory(link.dataset.crealitycat, link.dataset.crealitylabel);
+    });
+  }
+
+  async function browseCrealityCategory(catId, label) {
+    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'Creality Cloud';
+    if (searchClear) searchClear.style.display = 'none';
+    refresh();
+    loading = false;
+    window._crealityCatActive = catId || '';
     await loadMore();
   }
 

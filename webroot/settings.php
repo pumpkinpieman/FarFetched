@@ -10,6 +10,7 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/Cults3DService.php';
 require_once __DIR__ . '/STLFlixService.php';
+require_once __DIR__ . '/CrealityCloudService.php';
 csrf_token();
 
 // ---- Helpers ----------------------------------------------------------------
@@ -259,6 +260,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notice = ['type' => 'ok', 'text' => 'STLFlix pacing saved.'];
     }
 
+    // ---- Creality Cloud -----------------------------------------------------
+    elseif ($action === 'save_creality_token') {
+        $tok = trim((string) ($_POST['creality_token'] ?? ''));
+        $uid = trim((string) ($_POST['creality_user_id'] ?? ''));
+        $cf  = trim((string) ($_POST['creality_cf_clearance'] ?? ''));
+        if ($tok === '' || $uid === '') {
+            $notice = ['type' => 'err', 'text' => 'Both token and user ID are required.'];
+        } else {
+            cfg_save([
+                'creality_token'        => $tok,
+                'creality_user_id'      => $uid,
+                'creality_cf_clearance' => $cf,
+            ]);
+            // Validate against a cheap authenticated endpoint.
+            $c = new CrealityCloudService($tok, $uid, $cf);
+            $notice = $c->validate()
+                ? ['type' => 'ok', 'text' => 'Creality Cloud connected successfully.']
+                : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $c->lastError];
+        }
+    }
+    elseif ($action === 'clear_creality_token') {
+        cfg_save(['creality_token' => '', 'creality_user_id' => '', 'creality_cf_clearance' => '']);
+        $notice = ['type' => 'ok', 'text' => 'Creality Cloud credentials cleared.'];
+    }
+    elseif ($action === 'save_creality_dir') {
+        $r = apply_source_dir((string) ($_POST['creality_dir'] ?? ''), 'creality');
+        $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
+    }
+    elseif ($action === 'save_creality_delay') {
+        cfg_save(['creality_delay' => (int) ($_POST['creality_delay'] ?? 60)]);
+        $notice = ['type' => 'ok', 'text' => 'Creality Cloud pacing saved.'];
+    }
+
     // ---- Worker -------------------------------------------------------------
     elseif ($action === 'save_config') {
         $ok = cfg_save([
@@ -297,6 +331,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'makerworld'  => (string) cfg('makerworld_token') !== '',
                 'thingiverse' => (string) cfg('thingiverse_token') !== '',
                 'cults3d'     => (string) cfg('cults3d_username') !== '' && (string) cfg('cults3d_token') !== '',
+                'creality'    => creality_ready(),
                 'stlflix'     => (string) cfg('stlflix_token') !== '',
             ],
         ]);
@@ -344,6 +379,15 @@ $stlflixDir   = get_stlflix_dir();
 $stlflixWrite = is_dir($stlflixDir) && is_writable($stlflixDir);
 $stlflixDelay = (int) cfg('stlflix_delay');
 $stlflixReady = $stlflixTok !== '';
+
+// Creality Cloud
+$crealityTok   = (string) cfg('creality_token');
+$crealityUid   = (string) cfg('creality_user_id');
+$crealityCf    = (string) cfg('creality_cf_clearance');
+$crealityDir   = get_creality_dir();
+$crealityWrite = is_dir($crealityDir) && is_writable($crealityDir);
+$crealityDelay = (int) cfg('creality_delay');
+$crealityReady = creality_ready();
 
 
 // Active tab
@@ -398,6 +442,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
       <button type="button" class="src-btn <?= ((string) cfg('thingiverse_token') !== '') ? 'connected' : '' ?>" onclick="openModal('src-thingiverse')">Thingiverse</button>
       <button type="button" class="src-btn <?= $cultsReady ? 'connected' : '' ?>" onclick="openModal('src-cults')">Cults3D</button>
       <button type="button" class="src-btn <?= $stlflixReady ? 'connected' : '' ?>" onclick="openModal('src-stlflix')">STLFlix</button>
+      <button type="button" class="src-btn <?= creality_ready() ? 'connected' : '' ?>" onclick="openModal('src-creality')">Creality</button>
     </div>
 
 
@@ -556,6 +601,7 @@ const SRC_STATUS_KEY = {
   'src-thingiverse': 'thingiverse',
   'src-cults': 'cults3d',
   'src-stlflix': 'stlflix',
+  'src-creality': 'creality',
 };
 // Map each source button (by onclick target) so we can flip its state.
 function srcButtonFor(modalId) {
@@ -639,19 +685,21 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
 </script>
 
 <script>
-  // Show/hide toggles for masked credential fields
-  document.querySelectorAll('.reveal-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var input = document.getElementById(btn.getAttribute('data-target'));
-      if (!input) return;
-      if (input.type === 'password') {
-        input.type = 'text';
-        btn.textContent = '🙈';
-      } else {
-        input.type = 'password';
-        btn.textContent = '👁';
-      }
-    });
+  // Show/hide toggles for masked credential fields.
+  // Delegated so it works even though the buttons live in modals rendered
+  // later in the document than this script.
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.reveal-btn');
+    if (!btn) return;
+    var input = document.getElementById(btn.getAttribute('data-target'));
+    if (!input) return;
+    if (input.type === 'password') {
+      input.type = 'text';
+      btn.textContent = '🙈';
+    } else {
+      input.type = 'password';
+      btn.textContent = '👁';
+    }
   });
 </script>
 <div class="modal-overlay" id="modal-src-printables" onclick="if(event.target===this)closeModal('src-printables')">
@@ -950,6 +998,59 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
           </form>
         </div>
       
+  </div>
+</div>
+<div class="modal-overlay" id="modal-src-creality" onclick="if(event.target===this)closeModal('src-creality')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-creality')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <span class="src-name">Creality Cloud</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $crealityReady?'on':'off' ?>"></span><?= $crealityReady?'Connected':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="creality_token">Token (__CXY_TOKEN_ / model_token)</label>
+            <input type="password" id="creality_token" name="creality_token" value="<?= e($crealityTok) ?>" placeholder="64-char token from the Cookie or request header"><button type="button" class="reveal-btn" data-target="creality_token" aria-label="Show/hide value">👁</button>
+            <label for="creality_user_id">User ID (model_user_id)</label>
+            <input type="password" id="creality_user_id" name="creality_user_id" value="<?= e($crealityUid) ?>" placeholder="your numeric model_user_id"><button type="button" class="reveal-btn" data-target="creality_user_id" aria-label="Show/hide value">👁</button>
+            <label for="creality_cf_clearance">cf_clearance cookie (optional, helps avoid 403)</label>
+            <input type="password" id="creality_cf_clearance" name="creality_cf_clearance" value="<?= e($crealityCf) ?>" placeholder="cf_clearance cookie value"><button type="button" class="reveal-btn" data-target="creality_cf_clearance" aria-label="Show/hide value">👁</button>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_creality_token">Save &amp; Connect</button>
+              <?php if ($crealityReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_creality_token" onclick="return confirm('Clear Creality credentials?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">crealitycloud.com → log in → DevTools → Network → click any <code>/api/cxy/</code> request → copy the <code>__CXY_TOKEN_</code> header (same as the <code>model_token</code> cookie) and <code>model_user_id</code>. Re-paste when downloads start failing.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="creality_dir">Download folder</label>
+            <input type="text" id="creality_dir" name="creality_dir" value="<?= e($crealityDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_creality_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $crealityWrite?'on':'off' ?>"></span><?= $crealityWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(CREALITY_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="creality_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="creality_delay" name="creality_delay" inputmode="numeric" value="<?= e((string)$crealityDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_creality_delay">Save</button>
+            </div>
+          </form>
+        </div>
   </div>
 </div>
 </body>
