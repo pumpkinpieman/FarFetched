@@ -2,7 +2,7 @@
 
 **A patient, self-hosted fetcher for your 3D-print library.**
 
-FarFetched browses, searches, and downloads models from **Printables, MakerWorld, Thingiverse, Cults3D, and STLFlix** at a deliberate, polite pace — then keeps them in a tidy local library with a built-in STL / 3MF viewer. One container, your server.
+FarFetched browses, searches, and downloads models from **Printables, MakerWorld, Thingiverse, Cults3D, STLFlix, and Creality Cloud** at a deliberate, polite pace — then keeps them in a tidy local library with a built-in STL / 3MF viewer. One container, your server.
 
 Built by [BTCB Design](https://www.btcbdesign.com).
 
@@ -16,16 +16,18 @@ Bulk-downloading from model sites either means clicking one file at a time forev
 
 ## Features
 
-- **Five sources, one queue** — Printables, MakerWorld, Thingiverse, Cults3D, and STLFlix. Switch sources without losing your selection.
+- **Six sources, one queue** — Printables, MakerWorld, Thingiverse, Cults3D, STLFlix, and Creality Cloud. Switch sources without losing your selection.
 - **Paced downloads** — a configurable delay between every fetch keeps the source service happy. The queue shows exactly when the next file fires.
-- **Live queue progress** — per-file and overall progress update in real time without reloading, including source badges (PT / MW / TV / C3D / SF) on every job.
-- **Search & infinite scroll** — keyword search across all five sources, results streaming in as you scroll.
+- **Live queue progress** — per-file and overall progress update in real time without reloading, including source badges (PT / MW / TV / C3D / SF / CR) on every job.
+- **Search & infinite scroll** — keyword search across all six sources, results streaming in as you scroll.
+- **Category browsing** — drill into source categories from the sidebar, including a collapsible accordion for Creality Cloud's full category tree.
+- **Favorites** — star any model to save it to a server-side Favorites page that persists across devices and browsers.
 - **STL & 3MF viewer** — spin up any downloaded model in the browser. A resilient 3MF loader handles slicer exports that trip up stock parsers.
 - **Model management** — delete models directly from the viewer with multi-select and a confirm step.
 - **Local library** — downloads land in a clean, organized folder you own, one subfolder per source.
 - **Cross-category multi-select** — build a batch across categories and sources before hitting Download.
 - **Prefer-pack option** — optionally pull whole-model ZIPs and extract, instead of fetching files one at a time.
-- **Paste-once auth** — drop in one token per source; FarFetched keeps itself signed in.
+- **Paste-once auth** — drop in one token (or session credentials) per source; FarFetched keeps itself signed in.
 
 ---
 
@@ -56,7 +58,7 @@ Then open `http://your-server:16545` and add your source tokens under **Settings
 | Mount | Purpose |
 |---|---|
 | `/downloads` | Where your models land. Map to a host folder you control. |
-| `/var/www/html/private` | Persistent state: SQLite job queue, tokens, config, logs. |
+| `/var/www/html/private` | Persistent state: SQLite job queue, favorites, tokens, config, logs. |
 
 ---
 
@@ -66,15 +68,16 @@ Each source needs a token or credentials, pulled from your browser's DevTools wh
 
 - **Printables / MakerWorld / Thingiverse / STLFlix** — DevTools → Network → find an API/GraphQL request → copy the `Authorization: Bearer …` header.
 - **Cults3D** — DevTools → Application/Storage → Cookies → copy `user_email` and `user_token`.
+- **Creality Cloud** — DevTools → Application/Storage → Cookies → copy `model_token`, `model_user_id`, and `cf_clearance`.
 
-Tokens expire on each platform's own schedule (Printables ~1h, STLFlix ~30 days); just re-paste when a source stops authing.
+Tokens expire on each platform's own schedule (Printables ~1h, STLFlix ~30 days, Creality's `cf_clearance` fastest); just re-paste when a source stops authing.
 
 ---
 
 ## Architecture
 
 - **PHP 8.3 + Apache** in a single Docker image.
-- **SQLite (WAL)** job queue in the persistent volume.
+- **SQLite (WAL)** job queue and favorites store in the persistent volume.
 - **Background worker** invoked by cron, self-locking against overlap, self-pacing between downloads.
 - **Three.js** viewer for STL/3MF preview.
 - **Vanilla JS** front end — no build step.
@@ -87,6 +90,7 @@ Tokens expire on each platform's own schedule (Printables ~1h, STLFlix ~30 days)
 - **Cron-safe path resolution** — path resolution falls back through the process env, the entrypoint env file, and the conventional mount point, so downloads land correctly regardless of how the worker is launched.
 - **Server-side image proxy** — thumbnails from CORS-restricted CDNs (Cults3D, Thingiverse) are streamed through an allowlisted server-side proxy.
 - **Auto-format detection with fallback** — handles zip vs. bare .3mf/.stl per model, with an STL → 3MF → pack fallback when a requested format is missing.
+- **Session-based source clients** — sources like Cults3D and Creality Cloud authenticate with browser session credentials; signed download URLs are resolved per-job and re-minted automatically when they expire.
 
 ---
 
@@ -98,6 +102,8 @@ webroot/                     # Apache document root
 ├── home.php                 # Source picker + token guide
 ├── jobs.php / jobs_status.php  # Download queue (live)
 ├── viewer.php               # STL / 3MF 3D viewer + delete
+├── favorites.php            # Saved (starred) models
+├── favorite.php             # Star/unstar endpoint
 ├── settings.php             # Per-source auth, worker tuning, donate
 ├── worker.php               # CLI download worker (cron)
 ├── bootstrap.php            # Config, paths, DB, shared helpers
