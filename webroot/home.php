@@ -12,6 +12,7 @@ $fetchSources = [
     'thingiverse' => ['label' => 'Thingiverse', 'desc' => 'Browse & download from the world\'s largest 3D model archive', 'href' => 'index.php?src=thingiverse&browse=all'],
     'cults3d'     => ['label' => 'Cults3D',     'desc' => 'Artistic & unique designs from the cults3d.com community',    'href' => 'index.php?src=cults3d&browse=all'],
     'stlflix'     => ['label' => 'STLFlix',     'desc' => 'Browse STLFlix platform categories and models',                'href' => 'index.php?src=stlflix&browse=all'],
+    'creality'    => ['label' => 'Creality',    'desc' => 'Search & browse free models from crealitycloud.com',          'href' => 'index.php?src=creality'],
 ];
 
 $tiles = [];
@@ -52,11 +53,11 @@ foreach ($sources as $s) {
 <div class="hero">
   <div class="hero-eyebrow">Self-hosted 3D model downloader</div>
   <h1>Fetch your library.<br><em>Patiently.</em></h1>
-  <p class="hero-lede">FarFetched browses, searches, and downloads 3D models from Printables, MakerWorld, Thingiverse, Cults3D, and STLFlix — all to your own server. One queue. One pace. Your files, forever.</p>
+  <p class="hero-lede">FarFetched browses, searches, and downloads 3D models from Printables, MakerWorld, Thingiverse, Cults3D, STLFlix, and Creality Cloud — all to your own server. One queue. One pace. Your files, forever.</p>
   <div class="hero-stats">
     <div class="hero-stat"><strong><?= array_sum(array_column($tiles, 'count')) ?></strong>models saved</div>
     <div class="hero-stat"><strong><?= count(array_filter($tiles, fn($t) => $t['count'] > 0)) ?></strong>active sources</div>
-    <div class="hero-stat"><strong>5</strong>platforms supported</div>
+    <div class="hero-stat"><strong>6</strong>platforms supported</div>
   </div>
 </div>
 
@@ -79,7 +80,7 @@ foreach ($sources as $s) {
   <div class="feat-grid">
     <div class="feat"><div class="feat-icon">⬇</div><div class="feat-title">Paced downloads</div><div class="feat-desc">Downloads one file at a time with configurable delays. Polite to APIs, safe for long queues.</div></div>
     <div class="feat"><div class="feat-icon">🗂</div><div class="feat-title">Local library</div><div class="feat-desc">Every model lands in your own folder structure — organized by source and model name.</div></div>
-    <div class="feat"><div class="feat-icon">🔍</div><div class="feat-title">Browse & search</div><div class="feat-desc">Full catalog search across all five platforms without leaving the app.</div></div>
+    <div class="feat"><div class="feat-icon">🔍</div><div class="feat-title">Browse & search</div><div class="feat-desc">Full catalog search across all six platforms without leaving the app.</div></div>
     <div class="feat"><div class="feat-icon">📐</div><div class="feat-title">3D Viewer</div><div class="feat-desc">Preview STL and 3MF files in-browser — no slicer required.</div></div>
     <div class="feat"><div class="feat-icon">🔄</div><div class="feat-title">Auto-retry</div><div class="feat-desc">Failed downloads are requeued automatically. Signed URL expired? Re-minted on the next run.</div></div>
     <div class="feat"><div class="feat-icon">🛡</div><div class="feat-title">Self-hosted</div><div class="feat-desc">Runs entirely on your hardware via Docker. No accounts, no cloud, no tracking.</div></div>
@@ -140,6 +141,15 @@ foreach ($sources as $s) {
       <div class="token-step">Click any graphql request → <strong>Request Headers</strong></div>
       <div class="token-step">Copy the <code>authorization: Bearer ey...</code> value</div>
       <div class="token-note">Long-lived JWT (~30 day expiry). Paste into Settings → STLFlix.</div>
+    </div>
+
+    <div class="token-card">
+      <div class="token-source"><span></span>Creality Cloud</div>
+      <div class="browser-tabs"><span class="btab">Chrome</span><span class="btab">Firefox</span><span class="btab">Edge</span><span class="btab">Safari</span></div>
+      <div class="token-step">Log in to crealitycloud.com</div>
+      <div class="token-step">Open DevTools → <strong>Application/Storage</strong> → <strong>Cookies</strong></div>
+      <div class="token-step">Copy <code>model_token</code>, <code>model_user_id</code>, and <code>cf_clearance</code></div>
+      <div class="token-note">Paste the three values into Settings → Creality. Re-paste if downloads start failing.</div>
     </div>
 
     <div class="token-card">

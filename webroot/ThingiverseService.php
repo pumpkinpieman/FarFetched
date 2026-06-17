@@ -246,25 +246,49 @@ final class ThingiverseService
         $fh  = @fopen($tmp, 'wb');
         if ($fh === false) { $this->lastError = 'Cannot open temp file.'; return false; }
 
-        $ch = $this->baseCurl($url);
-        curl_setopt_array($ch, [
-            CURLOPT_FILE           => $fh,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS      => 5,
-            CURLOPT_TIMEOUT        => 300,
-            CURLOPT_CONNECTTIMEOUT => 20,
-            CURLOPT_FAILONERROR    => true,
-        ]);
-        if ($onProgress !== null) {
-            curl_setopt($ch, CURLOPT_NOPROGRESS, false);
-            curl_setopt($ch, CURLOPT_XFERINFOFUNCTION, static function ($ch, $dt, $dn, $ut, $un) use ($onProgress) {
-                $onProgress((int)$dt, (int)$dn); return 0;
-            });
-        }
+        // The /zip endpoint redirects to a signed CDN URL (AWS S3) whose auth is
+        // in the query signature. Sending our Bearer header through that redirect
+        // can cause a 401 (competing auth). So download with just a User-Agent;
+        // if the *unredirected* URL actually needed auth, we retry with it below.
+        $buildCh = function (string $u, bool $withAuth) use ($fh, $onProgress) {
+            $ch = curl_init($u);
+            $headers = ['User-Agent: ' . self::UA, 'Accept: */*'];
+            if ($withAuth) { $headers[] = 'Authorization: Bearer ' . $this->token; }
+            curl_setopt_array($ch, [
+                CURLOPT_FILE           => $fh,
+                CURLOPT_FOLLOWLOCATION => true,
+                CURLOPT_MAXREDIRS      => 5,
+                CURLOPT_TIMEOUT        => 300,
+                CURLOPT_CONNECTTIMEOUT => 20,
+                CURLOPT_FAILONERROR    => true,
+                CURLOPT_HTTPHEADER     => $headers,
+            ]);
+            if ($onProgress !== null) {
+                curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+                curl_setopt($ch, CURLOPT_XFERINFOFUNCTION, static function ($ch, $dt, $dn, $ut, $un) use ($onProgress) {
+                    $onProgress((int)$dt, (int)$dn); return 0;
+                });
+            }
+            return $ch;
+        };
+
+        $ch     = $buildCh($url, false);
         $ok     = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $cerr   = curl_error($ch);
         curl_close($ch);
+
+        // If the no-auth attempt was rejected, the (pre-redirect) endpoint may
+        // need our token. Retry once with the Bearer header.
+        if (($status === 401 || $status === 403)) {
+            @ftruncate($fh, 0);
+            rewind($fh);
+            $ch2    = $buildCh($url, true);
+            $ok     = curl_exec($ch2);
+            $status = (int) curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+            $cerr   = curl_error($ch2);
+            curl_close($ch2);
+        }
         fclose($fh);
 
         if ($ok === false || $status >= 400) {

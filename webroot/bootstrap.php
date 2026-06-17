@@ -380,23 +380,50 @@ function extract_zip_safe(string $zipPath, string $targetDir): bool
     if (!is_file($zipPath)) {
         return false;
     }
-    if (!is_dir($targetDir) && !@mkdir($targetDir, 0777, true)) {
+    if (!is_dir($targetDir) && !@mkdir($targetDir, 0777, true) && !is_dir($targetDir)) {
         return false;
     }
     $za = new ZipArchive();
     if ($za->open($zipPath) !== true) {
         return false;
     }
+
+    $realTarget = realpath($targetDir);
+    if ($realTarget === false) { $za->close(); return false; }
+
+    $extracted = 0;
     for ($i = 0; $i < $za->numFiles; $i++) {
         $entry = $za->getNameIndex($i);
-        if ($entry === false || $entry === '' || $entry[0] === '/' || strpos($entry, '..') !== false) {
-            $za->close();
-            return false; // unsafe path — refuse the whole archive
+        if ($entry === false || $entry === '') {
+            continue;
         }
+        // Normalize separators and reject genuinely unsafe entries (absolute
+        // paths or directory traversal) — but allow ordinary subfolders, which
+        // many packs (e.g. Gridfinity sets) legitimately use.
+        $norm = str_replace('\\', '/', $entry);
+        if ($norm[0] === '/' || preg_match('#(^|/)\.\.(/|$)#', $norm)) {
+            continue; // skip just this unsafe entry, keep extracting the rest
+        }
+        // Directory entry — ensure it exists.
+        if (substr($norm, -1) === '/') {
+            @mkdir($realTarget . '/' . $norm, 0777, true);
+            continue;
+        }
+        // Confirm the resolved destination stays inside the target dir.
+        $destPath = $realTarget . '/' . $norm;
+        $destDir  = dirname($destPath);
+        if (!is_dir($destDir)) { @mkdir($destDir, 0777, true); }
+        $stream = $za->getStream($entry);
+        if ($stream === false) { continue; }
+        $out = @fopen($destPath, 'wb');
+        if ($out === false) { fclose($stream); continue; }
+        stream_copy_to_stream($stream, $out);
+        fclose($stream);
+        fclose($out);
+        $extracted++;
     }
-    $ok = $za->extractTo($targetDir);
     $za->close();
-    return $ok;
+    return $extracted > 0;
 }
 
 // ---- Config accessors -----------------------------------------------------

@@ -94,7 +94,10 @@ if ($lock === false) {
     exit(1);
 }
 if (!flock($lock, LOCK_EX | LOCK_NB)) {
-    logln('Another worker holds the lock — exiting.');
+    // Expected, harmless no-op: a worker is already running (likely mid-download
+    // or in a paced wait), so this duplicate instance steps aside. The active
+    // worker keeps processing the queue. Not an error.
+    logln('[info] Worker already running — this instance is standing down (queue is being handled).');
     exit(0);
 }
 
@@ -433,7 +436,8 @@ while (true) {
                             if (cfg('keep_zip') !== true) { @unlink($dest); logln('  Removed zip.'); }
                             $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
                         } else {
-                            $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
+                            logerr('warn', '  Extraction failed — keeping ZIP at: ' . $dest);
+                            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Downloaded but could not extract (kept the .zip).', ':path' => $dest, ':id' => $jobId]);
                         }
                     } else {
                         $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $tv->lastError, ':path' => '', ':id' => $jobId]);
@@ -469,9 +473,12 @@ while (true) {
                         if (extract_zip_safe($savedPath, $destDir)) {
                             logln('  Extracted into: ' . $destDir);
                             if (cfg('keep_zip') !== true) { @unlink($savedPath); logln('  Removed zip (keep_zip off).'); }
+                            $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                        } else {
+                            logerr('warn', '  Extraction failed — keeping ZIP at: ' . $savedPath);
+                            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Downloaded but could not extract (kept the .zip).', ':path' => $savedPath, ':id' => $jobId]);
                         }
                     }
-                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
                 } else {
                     // Resolve/download failed. Distinguish paid (skip) from error.
                     $msg = $cults->lastError !== '' ? $cults->lastError : 'Cults3D download failed.';
@@ -727,9 +734,16 @@ while (true) {
                     if (extract_zip_safe($dest, $destDir)) {
                         logln('  Extracted pack into: ' . $destDir);
                         if (cfg('keep_zip') !== true) { @unlink($dest); }
+                        $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                    } else {
+                        // Download succeeded but the ZIP couldn't be extracted
+                        // (corrupt, empty, or all entries unsafe). Keep the ZIP so
+                        // the user still has the file, and report it.
+                        logerr('warn', '  Pack downloaded but extraction failed — keeping ZIP at: ' . $dest);
+                        $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Pack downloaded but could not be extracted (kept the .zip).', ':path' => $dest, ':id' => $jobId]);
                     }
-                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
                 } else {
+                    logerr('warn', '  Pack download failed: ' . ($svc->lastError ?: 'unknown error'));
                     $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
                 }
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
@@ -773,8 +787,11 @@ while (true) {
                         if (extract_zip_safe($dest, $destDir)) {
                             logln('  Extracted pack into: ' . $destDir);
                             if (cfg('keep_zip') !== true) { @unlink($dest); }
+                            $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
+                        } else {
+                            logerr('warn', '  Pack downloaded but extraction failed — keeping ZIP at: ' . $dest);
+                            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Pack downloaded but could not be extracted (kept the .zip).', ':path' => $dest, ':id' => $jobId]);
                         }
-                        $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
                     } else {
                         $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $svc->lastError, ':path' => '', ':id' => $jobId]);
                     }
@@ -871,6 +888,10 @@ logln('Worker exit.');
 function pace(?int $delay = null): void
 {
     $delay = $delay ?? DOWNLOAD_DELAY_SECONDS;
+    // Randomize the wait around the configured delay (±10s) so the cadence
+    // isn't a detectable fixed interval. e.g. a 55s setting waits 45–65s.
+    // Clamped to a sane floor so we never hammer a source.
+    $delay = jitter_delay($delay);
     // Surface the deliberate delay as a countdown the queue UI can show, so the
     // paced wait reads as "intentional", not "frozen". The worker status has a
     // staleness guard (read_worker_status), so we must refresh the heartbeat
@@ -891,6 +912,21 @@ function pace(?int $delay = null): void
         }
         sleep((int) min($beat, ceil($left)));
     } while (microtime(true) < $nextAt);
+}
+
+/**
+ * Apply ±10s of random jitter around a base delay so the download cadence
+ * isn't a fixed, fingerprintable interval. The result is clamped to a safe
+ * 50–120s window so we never hammer a source (and never stall too long),
+ * regardless of the configured delay.
+ */
+function jitter_delay(int $base): int
+{
+    if ($base <= 0) {
+        return 0; // pacing explicitly disabled — respect that, no jitter
+    }
+    $jittered = $base + random_int(-10, 10);
+    return max(50, min(120, $jittered));
 }
 
 /** Make a filesystem-safe path segment (no traversal, no separators). */

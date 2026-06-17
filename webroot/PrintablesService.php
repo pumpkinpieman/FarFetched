@@ -636,6 +636,22 @@ final class PrintablesService
             return false;
         }
 
+        // Pre-signed CDN URLs (files.printables.com/media/...) carry their auth
+        // in the query-string signature. Sending an Authorization header too can
+        // make the CDN reject the request with 401 (two competing auth methods).
+        // So only attach the bearer for API-host downloads, not signed CDN links.
+        $host     = strtolower((string) parse_url($url, PHP_URL_HOST));
+        $isSigned = (strpos($url, 'X-Amz-') !== false)
+                 || (strpos($url, 'Signature=') !== false)
+                 || (strpos($url, 'Expires=') !== false)
+                 || (strpos($host, 'files.printables.com') !== false)
+                 || (strpos($host, 'media.printables.com') !== false);
+
+        $headers = ['User-Agent: ' . self::UA];
+        if (!$isSigned) {
+            $headers[] = 'Authorization: Bearer ' . $this->token;
+        }
+
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_FILE           => $fh,
@@ -644,10 +660,7 @@ final class PrintablesService
             CURLOPT_TIMEOUT        => 300,
             CURLOPT_CONNECTTIMEOUT => 20,
             CURLOPT_FAILONERROR    => true,
-            CURLOPT_HTTPHEADER     => [
-                'Authorization: Bearer ' . $this->token,
-                'User-Agent: ' . self::UA,
-            ],
+            CURLOPT_HTTPHEADER     => $headers,
         ]);
         // Live byte progress (used by the worker to drive the queue UI). curl
         // calls this frequently; the callback itself throttles its writes.
@@ -663,6 +676,36 @@ final class PrintablesService
         $cerr   = curl_error($ch);
         curl_close($ch);
         fclose($fh);
+
+        // If a CDN link 401/403s while we DID send a bearer, retry once without
+        // it — the URL signature is the real credential.
+        if (($status === 401 || $status === 403) && !$isSigned) {
+            $fh2 = @fopen($tmp, 'wb');
+            if ($fh2 !== false) {
+                $ch2 = curl_init($url);
+                curl_setopt_array($ch2, [
+                    CURLOPT_FILE           => $fh2,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS      => 5,
+                    CURLOPT_TIMEOUT        => 300,
+                    CURLOPT_CONNECTTIMEOUT => 20,
+                    CURLOPT_FAILONERROR    => true,
+                    CURLOPT_HTTPHEADER     => ['User-Agent: ' . self::UA],
+                ]);
+                if ($onProgress !== null) {
+                    curl_setopt($ch2, CURLOPT_NOPROGRESS, false);
+                    curl_setopt($ch2, CURLOPT_XFERINFOFUNCTION, static function ($ch, $dlTotal, $dlNow) use ($onProgress) {
+                        $onProgress((int) $dlTotal, (int) $dlNow);
+                        return 0;
+                    });
+                }
+                $ok     = curl_exec($ch2);
+                $status = (int) curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+                $cerr   = curl_error($ch2);
+                curl_close($ch2);
+                fclose($fh2);
+            }
+        }
 
         if ($ok === false || $status >= 400) {
             @unlink($tmp);
