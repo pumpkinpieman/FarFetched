@@ -488,9 +488,18 @@ $csrf = csrf_token();
   // ---- Cross-category persistent selection store -----------------------------
   // Keyed by model id (string). Value = {id, slug, name, creator}.
   // Survives grid resets when browsing/searching between categories.
-  const selStore = new Map();
-  function selSet(id, data) { selStore.set(String(id), data); }
-  function selDel(id)       { selStore.delete(String(id)); }
+  // Persist selection across source switches (page reloads) via sessionStorage.
+  const SEL_KEY = 'ff_selStore';
+  function _selLoad() {
+    try { const raw = sessionStorage.getItem(SEL_KEY); return raw ? new Map(JSON.parse(raw)) : new Map(); }
+    catch (_) { return new Map(); }
+  }
+  function _selSave() {
+    try { sessionStorage.setItem(SEL_KEY, JSON.stringify([...selStore.entries()])); } catch (_) {}
+  }
+  const selStore = _selLoad();
+  function selSet(id, data) { selStore.set(String(id), data); _selSave(); }
+  function selDel(id)       { selStore.delete(String(id)); _selSave(); }
   function selHas(id)       { return selStore.has(String(id)); }
 
   function refresh(){
@@ -1068,7 +1077,7 @@ $csrf = csrf_token();
       if (data.ok) {
         const n = data.queued || 0;
         const skipped = data.skipped || 0;
-        selStore.clear();
+        selStore.clear(); _selSave();
         // Clear any selected checkboxes / selection UI without leaving the page.
         document.querySelectorAll('.pick:checked').forEach(c => { c.checked = false; });
         document.querySelectorAll('.card.sel').forEach(c => c.classList.remove('sel'));
