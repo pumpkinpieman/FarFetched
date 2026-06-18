@@ -198,7 +198,7 @@ $pdo = db();
 // Auto-unstick: any 'working' row at startup is orphaned (a prior worker died
 // mid-job). The single-instance lock guarantees no live worker owns it, so
 // requeue it for a clean retry.
-$unstuck = db_exec_retry("UPDATE download_jobs SET status='queued' WHERE status='working'")->rowCount();
+$unstuck = $pdo->exec("UPDATE download_jobs SET status='queued' WHERE status='working'");
 if ($unstuck) { logln("Requeued $unstuck orphaned 'working' job(s)."); }
 
 $startedAt = time();
@@ -294,10 +294,7 @@ while (true) {
     };
 
     // Mark working.
-    db_exec_retry(
-        "UPDATE download_jobs SET status='working', updated_at=datetime('now') WHERE id = :id",
-        [':id' => $jobId]
-    );
+    db_exec_retry("UPDATE download_jobs SET status='working', updated_at=datetime('now') WHERE id = :id", [':id' => $jobId]);
 
     logln("Job #$jobId  model=$modelId  type=$fileTy  ($slug)");
 
