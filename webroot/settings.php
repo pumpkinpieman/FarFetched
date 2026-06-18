@@ -214,9 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     elseif ($action === 'save_cults_session') {
         $session = trim((string) ($_POST['cults_session'] ?? ''));
         $cf      = trim((string) ($_POST['cults_cf_clearance'] ?? ''));
-        $ua      = trim((string) ($_POST['cults_user_agent'] ?? ''));
-        $browser = strtolower(trim((string) ($_POST['cults_browser'] ?? 'chrome')));
-        cfg_save(['cults3d_session' => $session, 'cults3d_cf_clearance' => $cf, 'cults3d_user_agent' => $ua, 'cults3d_browser' => $browser]);
+        cfg_save(['cults3d_session' => $session, 'cults3d_cf_clearance' => $cf]);
         $notice = $session !== ''
             ? ['type' => 'ok', 'text' => 'Cults3D download session saved. Free models can now be downloaded.']
             : ['type' => 'ok', 'text' => 'Cults3D download session cleared.'];
@@ -371,8 +369,6 @@ $cultsUser  = (string) cfg('cults3d_username');
 $cultsTok   = (string) cfg('cults3d_token');
 $cultsSess  = (string) cfg('cults3d_session');
 $cultsCf    = (string) cfg('cults3d_cf_clearance');
-$cultsUa    = (string) cfg('cults3d_user_agent');
-$cultsBrowser = (string) cfg('cults3d_browser') ?: 'chrome';
 $cultsDir   = get_cults3d_dir();
 $cultsWrite = is_dir($cultsDir) && is_writable($cultsDir);
 $cultsDelay = (int) cfg('cults3d_delay');
@@ -919,15 +915,6 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <input type="password" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value"><button type="button" class="reveal-btn" data-target="cults_session" aria-label="Show/hide value">👁</button>
             <label for="cults_cf_clearance" style="margin-top:10px;"><code>cf_clearance</code> cookie (optional, helps avoid Cloudflare blocks)</label>
             <input type="password" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)"><button type="button" class="reveal-btn" data-target="cults_cf_clearance" aria-label="Show/hide value">👁</button>
-            <label for="cults_browser" style="margin-top:10px;">Your browser <span style="color:var(--muted);font-weight:400;">(must match where you copied the cookies)</span></label>
-            <select id="cults_browser" name="cults_browser" class="short" style="width:auto;min-width:160px;">
-              <?php foreach (['chrome'=>'Chrome','firefox'=>'Firefox','edge'=>'Edge','safari'=>'Safari'] as $bval=>$blabel): ?>
-                <option value="<?= e($bval) ?>" <?= $cultsBrowser === $bval ? 'selected' : '' ?>><?= e($blabel) ?></option>
-              <?php endforeach; ?>
-            </select>
-            <label for="cults_user_agent" style="margin-top:10px;">Browser User-Agent <?php if ($cultsUa !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="text" id="cults_user_agent" name="cults_user_agent" value="<?= e($cultsUa) ?>" placeholder="paste your browser's User-Agent (must match the cf_clearance browser)">
-            <p class="hint"><code>cf_clearance</code> is tied to the exact browser that created it. Paste the matching User-Agent (DevTools → Network → any request → Request Headers → <code>user-agent</code>), or the same browser's value from <code>navigator.userAgent</code> in the console. Leave blank to use the built-in default.</p>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_cults_session">Save Session</button>
               <?php if ($cultsSess !== ''): ?>

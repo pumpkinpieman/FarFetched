@@ -59,11 +59,14 @@ foreach ($sources as $s) {
     </nav>
   </aside>
 
-  <main>
-    <h1>3D Viewer</h1>
-    <div class="sub">Preview your downloaded STL &amp; 3MF files. Drag to orbit, scroll to zoom.</div>
+  <!-- File tree panel: sits between nav aside and the 3D canvas -->
+  <div class="file-panel">
+    <div class="file-panel-head">
+      <h1>3D Viewer</h1>
+      <div class="sub">Drag to orbit, scroll to zoom.</div>
+    </div>
 
-    <div class="controls">
+    <div class="fp-section">
       <div class="field">
         <label for="src">Source</label>
         <select id="src">
@@ -76,16 +79,21 @@ foreach ($sources as $s) {
           <?php endforeach; ?>
         </select>
       </div>
-      <div class="field">
+      <div class="field" style="margin-top:10px;">
         <label for="model">Model</label>
         <select id="model" disabled><option value="">— select a source —</option></select>
       </div>
-      <div class="field">
-        <label>&nbsp;</label>
+      <div style="margin-top:10px;">
         <button id="deleteBtn" class="btn-delete" disabled>🗑 Delete</button>
       </div>
     </div>
 
+    <div class="fp-divider"></div>
+
+    <div id="files" class="fp-files"><span class="hint">Pick a source and model.</span></div>
+  </div>
+
+  <main>
     <!-- Delete modal -->
     <div id="deleteModal" class="modal-backdrop" hidden>
       <div class="modal">
@@ -105,11 +113,9 @@ foreach ($sources as $s) {
       </div>
     </div>
 
-    <div id="files" class="files"><span class="hint">Pick a source and model to list its files.</span></div>
-
     <div class="stage">
       <div id="canvas-wrap"></div>
-      <div class="overlay" id="overlay">Select a file above to render it here.</div>
+      <div class="overlay" id="overlay">Select a file to render it here.</div>
     </div>
     <div class="meta" id="meta"></div>
   </main>
@@ -550,7 +556,7 @@ foreach ($sources as $s) {
             const btn = document.createElement('button');
             btn.className = 'filebtn';
             btn.innerHTML = '<span class="ext">' + f.ext + '</span>' +
-                            '<span>' + f.name.replace(/</g, '&lt;') + '</span>' +
+                            '<span class="fname">' + f.name.replace(/</g, '&lt;') + '</span>' +
                             '<span class="sz">' + fmtSize(f.size) + '</span>';
             btn.addEventListener('click', () => {
               if (f.size > 50 * 1024 * 1024) {
