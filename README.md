@@ -8,6 +8,18 @@ Built by [BTCB Design](https://www.btcbdesign.com).
 
 ---
 
+## ⚠️ Download Delay Warnings
+
+> **Cults3D — MINIMUM 120 seconds required.**
+> Cults3D's bot detection will flag and block your account if the delay is set below 120 seconds. Do not lower this value.
+
+> **Recommended for all sources: 120 seconds.**
+> Setting every source to 120 seconds is the safest configuration. Faster delays risk rate-limiting or IP bans across any platform.
+
+These settings are configurable per-source under **Settings → [Source Name] → Download Delay**. The Docker default (`FETCHER_DOWNLOAD_DELAY=120`) is intentionally set to the safe value — do not lower it.
+
+---
+
 ## Why
 
 Bulk-downloading from model sites either means clicking one file at a time forever, or hammering a free API until it rate-limits you. FarFetched sits in the middle: queue everything you want, and a background worker pulls it down one file at a time with a configurable delay — courteous to the source, hands-off for you. Everything lands in a clean local folder you own, browsable in-app and ready for your slicer.
