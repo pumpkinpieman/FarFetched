@@ -613,11 +613,19 @@ function lib_badge(string $slug): string
     const activeSrc = filters
       ? (filters.querySelector('.pill.active')?.dataset.src || '')
       : '';
-    const targets = [...document.querySelectorAll('.lib-card')].filter(c => {
+    const allTargets = [...document.querySelectorAll('.lib-card')].filter(c => {
       if (c.dataset.viewable !== '1' || c.dataset.hasthumb === '1' || !c.dataset.firstfile) return false;
       if (activeSrc && c.dataset.src !== activeSrc) return false;  // scope to filter
       return true;
     });
+
+    // Cap each click at 30 models. Bulk-rendering thousands in one go exhausts
+    // browser memory and crashes the tab no matter how carefully we dispose —
+    // so we do a safe slice per click. The background trickle on the Queue page
+    // clears large backlogs hands-off; this button is for a quick top-up.
+    const BATCH_CAP = 30;
+    const remaining = allTargets.length;
+    const targets = allTargets.slice(0, BATCH_CAP);
 
     if (targets.length === 0) {
       const msg = activeSrc ? '✓ All ' + activeSrc + ' thumbnails present' : '✓ All thumbnails present';
@@ -686,14 +694,23 @@ function lib_badge(string $slug): string
     }
 
     batchFill.style.width = '100%';
-    batchLabel.textContent = batchCancelled
-      ? `Stopped — ${done - failed} done, ${failed} failed`
-      : `Done — ${done - failed} generated${failed ? ', ' + failed + ' failed' : ''}`;
+    const leftover = remaining - done;
+    if (batchCancelled) {
+      batchLabel.textContent = `Stopped — ${done - failed} done, ${failed} failed`;
+    } else if (leftover > 0) {
+      batchLabel.textContent = `Done — ${done - failed} generated, ${leftover} left (click again)`;
+    } else {
+      batchLabel.textContent = `Done — ${done - failed} generated${failed ? ', ' + failed + ' failed' : ''}`;
+    }
 
     setTimeout(() => {
       batchToast.hidden = true;
       genAllBtn.disabled = false;
       batchFill.style.width = '0%';
+      // Reflect remaining count on the button so it's obvious more are pending.
+      genAllBtn.textContent = leftover > 0
+        ? `📸 Generate missing thumbnails (${leftover} left)`
+        : '📸 Generate all missing thumbnails';
     }, 2400);
 
     // Offer to clean up models that couldn't render at all.

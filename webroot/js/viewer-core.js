@@ -128,7 +128,14 @@ export function createViewer(container, options = {}) {
   function clearModel() {
     if (!current) return;
     scene.remove(current);
-    current.traverse?.(o => { o.geometry?.dispose?.(); });
+    current.traverse?.(o => {
+      o.geometry?.dispose?.();
+      // Dispose any per-mesh materials the loaders attached (before we swap in
+      // ours). Our shared materials are disposed once in dispose().
+      const mat = o.material;
+      if (Array.isArray(mat)) mat.forEach(m => m && m !== material && m !== material3mf && m.dispose?.());
+      else if (mat && mat !== material && mat !== material3mf) mat.dispose?.();
+    });
     current = null;
   }
 
@@ -299,6 +306,18 @@ export function createViewer(container, options = {}) {
     running = false;
     ro.disconnect();
     clearModel();
+
+    // Dispose our shared materials and the grid so nothing survives the context.
+    material.dispose();
+    material3mf.dispose();
+    if (grid) {
+      grid.geometry?.dispose?.();
+      if (Array.isArray(grid.material)) grid.material.forEach(m => m?.dispose?.());
+      else grid.material?.dispose?.();
+    }
+    // Drop all scene children so lights/helpers don't hold references.
+    while (scene.children.length) scene.remove(scene.children[0]);
+
     controls.dispose();
     renderer.dispose();
     renderer.forceContextLoss?.();
