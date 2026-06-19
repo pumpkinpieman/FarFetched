@@ -10,13 +10,16 @@
  *
  * The public web API is JSON over POST under /api/cxy/. Every call carries a
  * family of __CXY_* headers (platform, app id/version, brand) plus the cookie
- * jar. Downloads are clean: memberDownload returns an array of signed URLs to
+ * jar. Downloads gather from both memberDownload (loose STL/PDF/CAD source
+ * files) and 3mfList+3mfDownload (print-ready 3MF profiles), so models that
+ * publish either or both are fully captured —
  * the real .stl/.3mf files (no .cxbin, no encryption).
  *
  * Flow:
  *   search          POST /api/cxy/smart_search/v1/model   {keyword,page,pageSize}
- *   list files      POST /api/cxy/v3/model/fileListPage    {modelId,page,pageSize}
- *   get URLs        POST /api/cxy/v3/model/memberDownload  {modelId,trailType:2}
+ *   loose files     POST /api/cxy/v3/model/memberDownload  {modelId,trailType:2}
+ *   list 3mfs       POST /api/cxy/v3/model/3mfList         {modelGroupId,page,pageSize,filterType:11}
+ *   get 3mf URL     POST /api/cxy/v3/model/3mfDownload     {id}  (per-3mf id)
  *                     -> result.downloadUrls[] = {fileName,url,size,fileId,expire}
  *   fetch each url  GET  <signed url>                       (auth_key in query)
  */
@@ -203,16 +206,18 @@ final class CrealityCloudService
     }
 
     /**
-     * List the individual files (STL/3MF) inside a model group.
+     * List the individual 3MF files inside a model group.
+     * Uses the live 3mfList endpoint (same as the download path).
      * @return array<int,array<string,mixed>>
      */
     public function listFiles(string $modelId, int $page = 1, int $pageSize = 50): array
     {
         $this->lastError = '';
-        $resp = $this->apiPost('/api/cxy/v3/model/fileListPage', [
-            'modelId'  => $modelId,
-            'page'     => max(1, $page),
-            'pageSize' => max(1, min(199, $pageSize)),
+        $resp = $this->apiPost('/api/cxy/v3/model/3mfList', [
+            'modelGroupId' => $modelId,
+            'page'         => max(1, $page),
+            'pageSize'     => max(1, min(199, $pageSize)),
+            'filterType'   => 11,
         ]);
         if ($resp === null) return [];
         $list = $resp['result']['list'] ?? [];
@@ -220,38 +225,130 @@ final class CrealityCloudService
     }
 
     /**
-     * Resolve every downloadable file in a model to a signed URL.
+     * Resolve every downloadable file in a model group to a signed URL.
+     *
+     * Mirrors the website (captured 2026-06-19). A model group can expose files
+     * two ways, and not every model has both, so we gather from both and merge:
+     *
+     *   A. Loose source files (STL / PDF / STEP / images / …) — the "View
+     *      STL/CAD Files" list:
+     *        POST /api/cxy/v3/model/memberDownload {modelId, trailType:2}
+     *          -> result.downloadUrls[] each {fileName, url, size, fileId}
+     *
+     *   B. Print-ready 3MF profiles:
+     *        POST /api/cxy/v3/model/3mfList     {modelGroupId, page, pageSize, filterType:11}
+     *          -> result.list[] each {id, name, size}
+     *        POST /api/cxy/v3/model/3mfDownload {id}
+     *          -> result.downloadUrl
+     *
+     * $modelId is the model GROUP id (24-char hex the browse/search lists expose
+     * as `id`). Earlier failures were from feeding numeric ids here — the hex
+     * group id is what every endpoint keys on.
+     *
+     * Movie files are excluded. Results are de-duplicated by URL.
+     *
      * Returns a list of ['fileName'=>, 'url'=>, 'size'=>, 'fileId'=>].
      * @return array<int,array<string,mixed>>
      */
     public function resolveDownloadUrls(string $modelId): array
     {
         $this->lastError = '';
-        $resp = $this->apiPost('/api/cxy/v3/model/memberDownload', [
+
+        $out     = [];
+        $seenUrl = [];
+
+        // ---- A. Loose source files via memberDownload -----------------------
+        $mem = $this->apiPost('/api/cxy/v3/model/memberDownload', [
             'modelId'   => $modelId,
             'trailType' => 2,
         ]);
-        if ($resp === null) return [];
+        if ($mem !== null) {
+            $urls = $mem['result']['downloadUrls'] ?? [];
+            if (is_array($urls)) {
+                foreach ($urls as $u) {
+                    if (!is_array($u)) continue;
+                    $url = (string) ($u['url'] ?? '');
+                    if ($url === '' || isset($seenUrl[$url])) continue;
 
-        $urls = $resp['result']['downloadUrls'] ?? [];
-        if (!is_array($urls) || $urls === []) {
-            $this->lastError = $this->lastError !== '' ? $this->lastError
-                : 'No download URLs returned (model may be paid or region-locked).';
-            return [];
+                    $name = $this->decodeName((string) ($u['fileName'] ?? ''));
+                    if ($name === '') $name = (string) ($u['fileId'] ?? 'file');
+                    if ($this->isMovieFile($name)) continue;   // skip videos
+
+                    $seenUrl[$url] = true;
+                    $out[] = [
+                        'fileName' => $name,
+                        'url'      => $url,
+                        'size'     => (int) ($u['size'] ?? 0),
+                        'fileId'   => (string) ($u['fileId'] ?? ''),
+                    ];
+                }
+            }
         }
-        $out = [];
-        foreach ($urls as $u) {
-            if (!is_array($u)) continue;
-            $url = (string) ($u['url'] ?? '');
-            if ($url === '') continue;
-            $out[] = [
-                'fileName' => (string) ($u['fileName'] ?? ''),
-                'url'      => $url,
-                'size'     => (int) ($u['size'] ?? 0),
-                'fileId'   => (string) ($u['fileId'] ?? ''),
-            ];
+
+        // ---- B. 3MF print profiles via 3mfList + 3mfDownload ----------------
+        $list = $this->apiPost('/api/cxy/v3/model/3mfList', [
+            'modelGroupId' => $modelId,
+            'page'         => 1,
+            'pageSize'     => 199,
+            'filterType'   => 11,
+        ]);
+        if ($list !== null) {
+            $items = $list['result']['list'] ?? [];
+            if (is_array($items)) {
+                foreach ($items as $it) {
+                    if (!is_array($it)) continue;
+                    $fileId = (string) ($it['id'] ?? '');
+                    if ($fileId === '') continue;
+
+                    $dl = $this->apiPost('/api/cxy/v3/model/3mfDownload', ['id' => $fileId]);
+                    if ($dl === null) {
+                        logfn_safe('Creality 3mfDownload failed for ' . $fileId . ' — ' . $this->lastError);
+                        $this->lastError = '';   // don't let a per-file miss abort the set
+                        continue;
+                    }
+                    $url = (string) ($dl['result']['downloadUrl'] ?? '');
+                    if ($url === '' || isset($seenUrl[$url])) continue;
+
+                    $name = $this->decodeName((string) ($it['name'] ?? $fileId));
+                    if ($name === '' || !preg_match('/\.3mf$/i', $name)) {
+                        $name = ($name !== '' ? $name : $fileId) . '.3mf';
+                    }
+                    if ($this->isMovieFile($name)) continue;
+
+                    $seenUrl[$url] = true;
+                    $out[] = [
+                        'fileName' => $name,
+                        'url'      => $url,
+                        'size'     => (int) ($it['size'] ?? 0),
+                        'fileId'   => $fileId,
+                    ];
+                }
+            }
+        }
+
+        if ($out === [] && $this->lastError === '') {
+            $this->lastError = 'No downloadable files for this model (it may be paid, region-locked, or removed).';
         }
         return $out;
+    }
+
+    /** Movie file extensions to skip. */
+    private function isMovieFile(string $name): bool
+    {
+        return (bool) preg_match('/\.(mp4|mov|avi|mkv|webm|m4v|flv|wmv|mpg|mpeg|m2ts|ts|3gp|ogv)$/i', trim($name));
+    }
+
+    /** Creality returns URL-encoded file names (e.g. "K%20Cup.stl"). */
+    private function decodeName(string $name): string
+    {
+        $name = trim($name);
+        if ($name === '') return '';
+        // Only decode if it looks percent-encoded, to avoid mangling literal %.
+        if (strpos($name, '%') !== false) {
+            $dec = rawurldecode($name);
+            if ($dec !== '') $name = $dec;
+        }
+        return $name;
     }
 
     /**
