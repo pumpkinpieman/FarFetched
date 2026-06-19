@@ -51,6 +51,7 @@ foreach ($sources as $s) {
       <a href="index.php">Browse Models</a>
       <a href="jobs.php">Queue</a>
       <a href="viewer.php" class="active">3D Viewer</a>
+      <a href="library.php">My Library</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
 		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -158,27 +159,40 @@ foreach ($sources as $s) {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
     camera.position.set(80, 80, 120);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Roll off bright highlights so light-coloured models (esp. the gray 3MF
+    // material) shade smoothly instead of blowing out to flat white on top faces.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
     wrap.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.4));
-    const key = new THREE.DirectionalLight(0xffffff, 1.4);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.6));
+    const key = new THREE.DirectionalLight(0xffffff, 2.0);
     key.position.set(1, 1.4, 1);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.7);
     fill.position.set(-1, -0.5, -1);
     scene.add(fill);
+    // Rim from behind/above so silhouettes separate from the dark backdrop.
+    const rim = new THREE.DirectionalLight(0xffffff, 0.6);
+    rim.position.set(-0.5, 1, -1.5);
+    scene.add(rim);
 
     const grid = new THREE.GridHelper(400, 40, 0x555049, 0x33302c);
     scene.add(grid);
 
-    const material    = new THREE.MeshStandardMaterial({ color: 0xff6b1a, metalness: 0.05, roughness: 0.65, flatShading: false });
-    const material3mf = new THREE.MeshStandardMaterial({ color: 0xb0b8c0, metalness: 0.15, roughness: 0.55, flatShading: false });
+    // STL: flat shading keeps hard mechanical edges crisp (most functional
+    // prints). 3MF: smooth, since those are often organic / multi-part. Both
+    // double-sided so triangles with reversed winding still render (no black
+    // gaps / holes from inconsistent face orientation).
+    const material    = new THREE.MeshStandardMaterial({ color: 0xff6b1a, metalness: 0.05, roughness: 0.65, flatShading: true,  side: THREE.DoubleSide });
+    const material3mf = new THREE.MeshStandardMaterial({ color: 0xff6b1a, metalness: 0.05, roughness: 0.65, flatShading: false, side: THREE.DoubleSide });
 
     let current = null; // currently displayed mesh/group
 
@@ -244,7 +258,11 @@ foreach ($sources as $s) {
       if (ext === 'stl') {
         new STLLoader().load(url, (geometry) => {
           clearModel();
-          geometry.computeVertexNormals();
+          // Binary STLs ship per-face normals; ASCII STLs may not. Only compute
+          // when missing — flatShading on the material does the faceting, so we
+          // avoid smearing hard edges into smooth ones.
+          if (!geometry.attributes.normal) geometry.computeVertexNormals();
+          geometry.computeBoundingBox();
           const mesh = new THREE.Mesh(geometry, material);
           scene.add(mesh);
           current = mesh;
@@ -260,12 +278,11 @@ foreach ($sources as $s) {
               if (o.geometry?.attributes?.color) {
                 o.geometry.deleteAttribute('color');
               }
-              // Replace all embedded materials with our neutral material
-              if (Array.isArray(o.material)) {
-                o.material = o.material.map(() => material3mf);
-              } else {
-                o.material = material3mf;
+              // Recompute missing normals so slicer 3MFs don't shade black.
+              if (o.geometry && !o.geometry.attributes.normal) {
+                o.geometry.computeVertexNormals();
               }
+              o.material = material3mf;
               o.material.needsUpdate = true;
             }
           });
@@ -584,6 +601,34 @@ foreach ($sources as $s) {
       while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
       return n.toFixed(n < 10 && i > 0 ? 1 : 0) + ' ' + u[i];
     }
+
+    // ---- Deep link: viewer.php?src=<slug>&model=<folder> --------------------
+    // Auto-selects the source + model and renders the first file. Chains through
+    // the async file-list fetch by waiting for the first .filebtn to appear.
+    (function deepLink() {
+      const qs = new URLSearchParams(location.search);
+      const dlSrc = qs.get('src');
+      const dlModel = qs.get('model');
+      if (!dlSrc || !dlModel) return;
+      if (!SOURCES[dlSrc] || !SOURCES[dlSrc].includes(dlModel)) return;
+
+      // Stage 1: select source, fire change to populate the model dropdown.
+      srcSel.value = dlSrc;
+      srcSel.dispatchEvent(new Event('change'));
+
+      // Stage 2: select model, fire change to fetch + render the file list.
+      modelSel.value = dlModel;
+      modelSel.dispatchEvent(new Event('change'));
+
+      // Stage 3: the file list loads async — wait for the first file button,
+      // then click it so the model renders without another user action.
+      let tries = 0;
+      const timer = setInterval(() => {
+        const first = filesEl.querySelector('.filebtn');
+        if (first) { clearInterval(timer); first.click(); return; }
+        if (++tries > 100) clearInterval(timer); // ~10s safety cap
+      }, 100);
+    })();
 
     resize();
   </script>

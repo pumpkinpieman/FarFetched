@@ -288,6 +288,7 @@ $csrf = csrf_token();
       <a href="index.php">Browse Models</a>
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
+      <a href="library.php">My Library</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
 		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">

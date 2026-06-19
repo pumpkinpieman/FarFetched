@@ -31,6 +31,25 @@ if ($modelReal === false || !is_dir($modelReal)) {
     exit;
 }
 
+// ---- Thumbnail mode --------------------------------------------------------
+// Serves the cached library thumbnail at <model>/.farfetched/thumb.png, if one
+// has been generated. Returns 404 otherwise (the library page falls back to a
+// gradient placeholder). Same containment guard as stream mode.
+if (isset($_GET['thumb'])) {
+    $thumb = realpath($modelReal . '/.farfetched/thumb.png');
+    if ($thumb === false
+        || !is_file($thumb)
+        || strncmp($thumb, $modelReal . DIRECTORY_SEPARATOR, strlen($modelReal) + 1) !== 0) {
+        http_response_code(404);
+        exit;
+    }
+    header('Content-Type: image/png');
+    header('Cache-Control: private, max-age=86400');
+    header('X-Content-Type-Options: nosniff');
+    readfile($thumb);
+    exit;
+}
+
 // ---- List mode -------------------------------------------------------------
 if (isset($_GET['list'])) {
     header('Content-Type: application/json');

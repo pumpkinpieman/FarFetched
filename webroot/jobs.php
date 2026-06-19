@@ -53,6 +53,14 @@ $badge = static function (string $s): string {
 <title>Queue · FarFetched</title>
 <link rel="stylesheet" href="css/styles.css">
 <link rel="stylesheet" href="css/styles_jobs.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 
 </head>
 <body>
@@ -62,6 +70,7 @@ $badge = static function (string $s): string {
       <a href="index.php">Browse Models</a>
       <a href="jobs.php" class="active">Queue</a>
       <a href="viewer.php">3D Viewer</a>
+      <a href="library.php">My Library</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
 		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -293,15 +302,20 @@ $badge = static function (string $s): string {
     }
 
     let pollTimer = null;
-    let lastQueueEmpty = false;
+    let pollRate = 0;          // current interval in ms (0 = none)
+    const RATE_ACTIVE = 1500;  // queue has working/queued/failed jobs
+    const RATE_IDLE   = 8000;  // queue drained — still poll slowly so jobs
 
-    function startPolling() {
-      if (pollTimer) return;
-      pollTimer = setInterval(poll, 1500);
-    }
-    function stopPolling() {
+                               // enqueued from another tab/device are picked up
+
+    function setPolling(rate) {
+      if (rate === pollRate && pollTimer) return;  // already at this rate
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      pollRate = rate;
+      if (rate > 0) pollTimer = setInterval(poll, rate);
     }
+    function startPolling() { setPolling(RATE_ACTIVE); }
+    function stopPolling()  { setPolling(0); }
 
     async function poll() {
       try {
@@ -309,13 +323,9 @@ $badge = static function (string $s): string {
         const data = await r.json();
         const hasJobs = (data.counts.by && (data.counts.by.queued || data.counts.by.working || data.counts.by.failed));
         render(data);
-        if (!hasJobs) {
-          stopPolling();
-          lastQueueEmpty = true;
-        } else {
-          lastQueueEmpty = false;
-          startPolling();
-        }
+        // Stay subscribed either way; just throttle when idle so a job added
+        // elsewhere is still reflected here within a few seconds.
+        setPolling(hasJobs ? RATE_ACTIVE : RATE_IDLE);
       } catch (e) { /* transient; next tick retries */ }
     }
 
@@ -355,6 +365,15 @@ $badge = static function (string $s): string {
 
     poll();
     startPolling();
+
+    // Pause polling while the tab is in the background; resume + refresh on return.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        poll();
+      }
+    });
   })();
   </script>
 <script>
@@ -381,6 +400,87 @@ $badge = static function (string $s): string {
     }
     localStorage.setItem('theme', theme);
   });
+</script>
+
+<script type="module">
+  // Background thumbnail trickle. While the queue page is open, this quietly
+  // generates thumbnails for any downloaded model that doesn't have one yet —
+  // a few at a time, with the WebGL context torn down between passes. This is
+  // what makes thumbnails appear shortly after a download finalizes, and it
+  // backfills anything missed by headless downloads. Deliberately gentle: it
+  // never processes a large burst, so it can't crash the tab the way a full
+  // manual batch can.
+  import { createViewer } from './js/viewer-core.js';
+
+  const CSRF = <?= json_encode($csrf) ?>;
+  const PASS_SIZE = 8;        // models generated per pass
+  const PASS_INTERVAL = 30000; // ms between passes
+  let passRunning = false;
+
+  const fileUrl = (src, model, rel) =>
+    'model_file.php?src=' + encodeURIComponent(src) +
+    '&model=' + encodeURIComponent(model) +
+    '&file=' + encodeURIComponent(rel);
+
+  async function saveThumb(src, model, png) {
+    const res = await fetch('save_thumb.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csrf: CSRF, src, model, png }),
+    });
+    const j = await res.json().catch(() => ({}));
+    return res.ok && j.ok;
+  }
+
+  function loadWithTimeout(v, url, ext, ms = 20000) {
+    return Promise.race([
+      v.loadFile(url, ext),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Timed out')), ms)),
+    ]);
+  }
+
+  async function runPass() {
+    if (passRunning || document.hidden) return;
+    passRunning = true;
+    try {
+      const res = await fetch('thumb_pending.php?limit=' + PASS_SIZE, { cache: 'no-store' });
+      const pending = await res.json();
+      if (!Array.isArray(pending) || pending.length === 0) return;
+
+      // One context for the whole pass; torn down at the end.
+      const host = document.createElement('div');
+      host.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:512px;height:512px;';
+      document.body.appendChild(host);
+      const v = createViewer(host, { background: 0x16140f, showGrid: false });
+
+      try {
+        for (const m of pending) {
+          if (document.hidden) break; // pause when tab not visible
+          const ext = m.firstfile.split('.').pop().toLowerCase();
+          try {
+            await loadWithTimeout(v, fileUrl(m.src, m.folder, m.firstfile), ext);
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            const png = v.capturePNG(512);
+            await saveThumb(m.src, m.folder, png);
+          } catch (_) { /* skip corrupt/empty; manual batch surfaces these */ }
+          await new Promise(r => setTimeout(r, 0));
+        }
+      } finally {
+        v.dispose();
+        host.remove();
+      }
+    } catch (_) {
+      /* network/parse hiccup — try again next interval */
+    } finally {
+      passRunning = false;
+    }
+  }
+
+  // Kick off shortly after load, then on a gentle interval. Also run when the
+  // tab regains focus (a download may have finished while it was hidden).
+  setTimeout(runPass, 4000);
+  setInterval(runPass, PASS_INTERVAL);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) runPass(); });
 </script>
 
 </body>

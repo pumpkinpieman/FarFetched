@@ -937,6 +937,11 @@ function safe_segment(string $s): string
     // 2. Strip quotes and dangerous OS characters
     $s = preg_replace("/['\"`]/", '', $s) ?? $s;
     $s = preg_replace('/[\/\\\:*?<>|]+/', '_', $s) ?? $s;
+    // 2b. Strip shell/filesystem-problematic chars: $ breaks shell ops,
+    //     CSS selector matching, and some path handling; drop ; { } too,
+    //     and turn & into 'and' so it still reads naturally.
+    $s = str_replace(['$', ';', '{', '}'], '', $s);
+    $s = str_replace('&', 'and', $s);
 
     // 3. Compress multiple spaces and underscores
     $s = preg_replace('/\s+/', ' ', $s) ?? $s;
