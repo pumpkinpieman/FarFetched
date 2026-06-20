@@ -116,7 +116,7 @@ $srcColors = [
 
       <div class="ins-panel">
         <div class="ins-panel-h">File types</div>
-        <?php foreach (array_slice($byType, 0, 8, true) as $ext => $cnt):
+        <?php foreach (array_slice($byType, 0, 100, true) as $ext => $cnt):
           $pct = (int) round($cnt / $maxType * 100);
         ?>
           <div class="ins-bar-row">
@@ -139,7 +139,7 @@ $srcColors = [
       </div>
     </div>
     <?php else: ?>
-      <div class="lib-empty">Nothing downloaded yet — <a href="index.php">browse some models</a> to see your stats.</div>
+      <i><div class="lib-empty">Nothing downloaded yet — <a href="index.php">browse some models</a> to see your stats.</div></i>
     <?php endif; ?>
   </main>
 
