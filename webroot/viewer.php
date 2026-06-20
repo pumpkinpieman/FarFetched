@@ -53,6 +53,8 @@ foreach ($sources as $s) {
       <a href="viewer.php" class="active">3D Viewer</a>
       <a href="library.php">My Library</a>
       <a href="insights.php">Insights</a>
+      <a href="printers.php">My Printers</a>
+      <a href="collections_view.php">Collections</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
 		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -117,6 +119,7 @@ foreach ($sources as $s) {
 
     <div class="stage">
       <div id="canvas-wrap"></div>
+      <div id="fitBanner" class="fit-banner" hidden></div>
       <div class="overlay" id="overlay">Select a file to render it here.</div>
     </div>
     <div class="meta" id="meta"></div>
@@ -243,6 +246,7 @@ foreach ($sources as $s) {
       camera.updateProjectionMatrix();
       controls.target.set(0, size.y / 2, 0);
       controls.update();
+      checkFit(size.x, size.y, size.z);
     }
 
     function showOverlay(text, isErr) {
@@ -252,8 +256,48 @@ foreach ($sources as $s) {
     }
     function hideOverlay() { overlay.style.display = 'none'; }
 
-    function loadFile(url, ext, label) {
-      showOverlay('<div><div class="spinner"></div>Loading ' + label + '…</div>', false);
+    // ===== Print-bed fit checker =====
+    let enabledPrinters = null;
+    const fitBanner = document.getElementById('fitBanner');
+    async function ensurePrinters() {
+      if (enabledPrinters !== null) return enabledPrinters;
+      try {
+        const r = await fetch('printers_enabled.php');
+        const d = await r.json();
+        enabledPrinters = d.ok ? d.printers : [];
+      } catch (_) { enabledPrinters = []; }
+      return enabledPrinters;
+    }
+    async function checkFit(x, y, z) {
+      if (!fitBanner) return;
+      const printers = await ensurePrinters();
+      if (!printers.length) { fitBanner.hidden = true; return; }
+      // A model fits a printer if its footprint fits in any orientation on X/Y
+      // and height <= Z. Try both footprint rotations.
+      const dims = [x, y, z].map(v => Math.round(v));
+      const fitsOn = (p) => {
+        const fitXY = (x <= p.x && y <= p.y) || (y <= p.x && x <= p.y);
+        return fitXY && z <= p.z;
+      };
+      const okPrinters = printers.filter(fitsOn);
+      const label = (p) => p.nickname ? (p.nickname + ' (' + p.name + ')') : p.name;
+      if (okPrinters.length === printers.length) {
+        fitBanner.className = 'fit-banner ok';
+        fitBanner.innerHTML = '✓ Fits all your printers &nbsp;·&nbsp; model is ' + dims[0] + ' × ' + dims[1] + ' × ' + dims[2] + ' mm';
+      } else if (okPrinters.length > 0) {
+        fitBanner.className = 'fit-banner warn';
+        fitBanner.innerHTML = '⚠ Fits: ' + okPrinters.map(label).join(', ') +
+          ' &nbsp;·&nbsp; too big for ' + printers.filter(p => !fitsOn(p)).map(label).join(', ') +
+          ' &nbsp;·&nbsp; ' + dims[0] + ' × ' + dims[1] + ' × ' + dims[2] + ' mm';
+      } else {
+        fitBanner.className = 'fit-banner bad';
+        fitBanner.innerHTML = '✕ Too big for all your printers &nbsp;·&nbsp; model is ' +
+          dims[0] + ' × ' + dims[1] + ' × ' + dims[2] + ' mm';
+      }
+      fitBanner.hidden = false;
+    }
+
+    function loadFile(url, ext, label) {      showOverlay('<div><div class="spinner"></div>Loading ' + label + '…</div>', false);
       const onErr = (e) => { showOverlay('Could not load this file.<br>' + (e?.message || ''), true); };
 
       if (ext === 'stl') {

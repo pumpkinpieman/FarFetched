@@ -841,6 +841,9 @@ function init_schema(PDO $pdo): void
     SQL);
 
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status ON download_jobs(status);');
+    // Composite index for the live-queue snapshot query (jobs_status.php),
+    // which filters/sorts by status then updated_at on every poll.
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status_updated ON download_jobs(status, updated_at);');
 
     // Favorites: starred models, server-side so they persist across devices.
     $pdo->exec(<<<'SQL'
@@ -859,6 +862,67 @@ function init_schema(PDO $pdo): void
     SQL);
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_fav_source ON favorites(source);');
 
+    // Print tracker — a manual print journal (count + notes per model).
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS prints (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT    NOT NULL,
+            folder      TEXT    NOT NULL,
+            print_count INTEGER NOT NULL DEFAULT 0,
+            notes       TEXT    NOT NULL DEFAULT '',
+            last_printed TEXT   NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(source, folder)
+        );
+    SQL);
+
+    // Collections — user-defined buckets, with a join table to models.
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS collections (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL,
+            created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(name)
+        );
+    SQL);
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS collection_items (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            collection_id INTEGER NOT NULL,
+            source        TEXT    NOT NULL,
+            folder        TEXT    NOT NULL,
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(collection_id, source, folder),
+            FOREIGN KEY(collection_id) REFERENCES collections(id) ON DELETE CASCADE
+        );
+    SQL);
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_colitems_col ON collection_items(collection_id);');
+
+    // My Printers — which printers the user owns + bed size for the fit checker.
+    // No UNIQUE(name): people own multiples of the same model, each with its own
+    // nickname ("A1 mini — garage").
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS printers (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL,
+            nickname   TEXT    NOT NULL DEFAULT '',
+            brand      TEXT    NOT NULL DEFAULT '',
+            bed_x      INTEGER NOT NULL DEFAULT 0,
+            bed_y      INTEGER NOT NULL DEFAULT 0,
+            bed_z      INTEGER NOT NULL DEFAULT 0,
+            image      TEXT    NOT NULL DEFAULT '',
+            enabled    INTEGER NOT NULL DEFAULT 1,
+            is_custom  INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+    SQL);
+
+    // Migration: add `nickname` to pre-existing printers installs.
+    $pcols = $pdo->query("PRAGMA table_info(printers)")->fetchAll(PDO::FETCH_COLUMN, 1);
+    if ($pcols && !in_array('nickname', $pcols, true)) {
+        $pdo->exec("ALTER TABLE printers ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
+    }
+
     // Migration: add `source` to pre-existing installs (CREATE TABLE won't alter).
     $cols = $pdo->query("PRAGMA table_info(download_jobs)")->fetchAll(PDO::FETCH_COLUMN, 1);
     if (!in_array('source', $cols, true)) {
@@ -869,9 +933,9 @@ function init_schema(PDO $pdo): void
 }
 
 // ---- View helpers ---------------------------------------------------------
-function e(string $s): string
+function e(?string $s): string
 {
-    return htmlspecialchars($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    return htmlspecialchars($s ?? '', ENT_QUOTES | ENT_HTML5, 'UTF-8');
 }
 
 // ---- Favorites ------------------------------------------------------------

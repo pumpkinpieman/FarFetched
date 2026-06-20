@@ -17,6 +17,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/MakerWorldService.php';
+require_once __DIR__ . '/CrealityCloudService.php';
 
 header('Content-Type: application/json');
 header('Cache-Control: private, max-age=300');
@@ -34,6 +36,20 @@ function mm_parse_hms(string $s): int
     return $sec;
 }
 
+/** Leading numeric id from a folder like "2837333 - Strong Respooler". */
+function mm_model_id(string $folder): string
+{
+    return preg_match('/^(\d+)\s*-/', $folder, $m) ? $m[1] : '';
+}
+
+/** Leading id (numeric OR 24-char hex) — Creality uses hex modelGroupIds. */
+function mm_model_id_any(string $folder): string
+{
+    if (preg_match('/^([A-Za-z0-9]+)\s*-/', $folder, $m)) return $m[1];
+    if (preg_match('/^[A-Za-z0-9]+$/', $folder)) return $folder; // id-only folder
+    return '';
+}
+
 $src   = (string) ($_GET['src'] ?? '');
 $model = (string) ($_GET['model'] ?? '');
 
@@ -49,6 +65,60 @@ $srcReal   = realpath($srcPath);
 if ($modelReal === false || $srcReal === false || !is_dir($modelReal)
     || strncmp($modelReal, $srcReal . DIRECTORY_SEPARATOR, strlen($srcReal) + 1) !== 0) {
     mm_out(['ok' => false]);
+}
+
+// ---- MakerWorld: pull authoritative stats from the design API -------------
+// MakerWorld embeds print time + filament weight per print profile in its
+// design endpoint (far more reliable than parsing a downloaded 3MF). Use it
+// when this is a MakerWorld model and we can recover the numeric design id.
+if ($src === 'makerworld') {
+    $designId = mm_model_id($model);
+    if ($designId !== '' && (string) cfg('makerworld_token') !== '') {
+        try {
+            $mw = new MakerWorldService();
+            $st = $mw->getPrintStats($designId);
+            if (!empty($st['ok'])) {
+                mm_out([
+                    'ok'             => true,
+                    'printSeconds'   => (int) $st['printSeconds'],
+                    'filamentGrams'  => (float) $st['weightG'],
+                    'filamentMeters' => 0,
+                    'colors'         => (int) ($st['colors'] ?? 0),
+                    'plates'         => (int) ($st['plates'] ?? 0),
+                    'origin'         => 'makerworld',
+                ]);
+            }
+        } catch (\Throwable $e) {
+            // fall through to 3MF parsing
+        }
+    }
+}
+
+// ---- Creality: pull authoritative stats from the 3mfList profiles ---------
+// Creality's 3mfList (which we already call for downloads) carries printTime,
+// filamentWeight, filamentLen, plateCount and printerName per print profile.
+if ($src === 'creality') {
+    $groupId = mm_model_id_any($model);
+    if ($groupId !== '' && creality_ready()) {
+        try {
+            $cc = new CrealityCloudService();
+            $st = $cc->getPrintStats($groupId);
+            if (!empty($st['ok'])) {
+                mm_out([
+                    'ok'             => true,
+                    'printSeconds'   => (int) $st['printSeconds'],
+                    'filamentGrams'  => (float) $st['weightG'],
+                    'filamentMeters' => (float) ($st['lenM'] ?? 0),
+                    'colors'         => (int) ($st['colors'] ?? 0),
+                    'plates'         => (int) ($st['plates'] ?? 0),
+                    'printer'        => (string) ($st['printer'] ?? ''),
+                    'origin'         => 'creality',
+                ]);
+            }
+        } catch (\Throwable $e) {
+            // fall through to 3MF parsing
+        }
+    }
 }
 
 // Find the smallest .3mf in the folder (cheapest to open).

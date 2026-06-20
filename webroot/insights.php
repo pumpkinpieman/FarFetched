@@ -79,6 +79,8 @@ $srcColors = [
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php">My Library</a>
       <a href="insights.php" class="active">Insights</a>
+      <a href="printers.php">My Printers</a>
+      <a href="collections_view.php">Collections</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
       <button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -139,7 +141,7 @@ $srcColors = [
       </div>
     </div>
     <?php else: ?>
-      <i><div class="lib-empty">Nothing downloaded yet — <a href="index.php">browse some models</a> to see your stats.</div></i>
+      <div class="lib-empty">Nothing downloaded yet — <a href="index.php">browse some models</a> to see your stats.</div>
     <?php endif; ?>
   </main>
 

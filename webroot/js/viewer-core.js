@@ -63,6 +63,7 @@ function meshToGeometry(meshEl) {
  */
 export function createViewer(container, options = {}) {
   const opts = Object.assign({ background: 0x1c1b1a, showGrid: true }, options);
+  let lastSize = null;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(opts.background);
@@ -147,6 +148,7 @@ export function createViewer(container, options = {}) {
     if (box.isEmpty()) return;
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
+    lastSize = { x: size.x, y: size.y, z: size.z };
 
     obj.position.set(-center.x, -box.min.y, -center.z);
 
@@ -334,5 +336,6 @@ export function createViewer(container, options = {}) {
     resize,
     dispose,
     hasModel: () => current !== null,
+    getSize: () => lastSize,
   };
 }

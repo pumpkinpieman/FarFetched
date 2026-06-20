@@ -163,6 +163,12 @@ foreach ($sources as $s) {
 // Newest first by default.
 usort($models, static fn($a, $b) => $b['mtime'] <=> $a['mtime']);
 
+// Print counts for the printed-badge on tiles.
+$printCounts = [];
+foreach (db()->query('SELECT source, folder, print_count FROM prints WHERE print_count > 0')->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+    $printCounts[$pr['source'] . '/' . $pr['folder']] = (int) $pr['print_count'];
+}
+
 $csrf  = csrf_token();
 $title = $onlySrc !== '' ? ucfirst($onlySrc) . ' Library' : 'My Library';
 // Favorites are a nice-to-have here; never let a DB hiccup blank the library.
@@ -232,6 +238,8 @@ function lib_badge(string $slug): string
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php" class="active">My Library</a>
       <a href="insights.php">Insights</a>
+      <a href="printers.php">My Printers</a>
+      <a href="collections_view.php">Collections</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
       <button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -309,6 +317,8 @@ function lib_badge(string $slug): string
                   data-hasthumb="<?= $m['thumb'] ? '1' : '0' ?>"
                   data-badge="<?= e(lib_badge($m['slug'])) ?>">
             <div class="lib-thumb" style="<?= $m['thumb'] ? '' : e(lib_tile_style($m['title'])) ?>">
+              <?php $pc = $printCounts[$m['slug'] . '/' . $m['folder']] ?? 0; ?>
+              <?php if ($pc > 0): ?><div class="lib-printed-badge">✓ <?= $pc ?></div><?php endif; ?>
               <?php
                 $mid   = lib_model_id($m['folder']);
                 $isFav = isset($favSet[$m['slug'] . ':' . $mid]);
@@ -353,6 +363,19 @@ function lib_badge(string $slug): string
           <span class="lib-modal-badge" id="mBadge">—</span>
         </div>
         <div class="lib-printinfo" id="mPrintInfo" hidden></div>
+
+        <div class="lib-tracker" id="mTracker">
+          <div class="lib-tracker-row">
+            <span class="lib-tracker-label">Printed</span>
+            <button class="lib-cnt-btn" id="mPrintDec">−</button>
+            <span class="lib-cnt" id="mPrintCount">0</span>
+            <button class="lib-cnt-btn" id="mPrintInc">+</button>
+            <span class="lib-cnt-times">times</span>
+            <span class="lib-tracker-last" id="mPrintLast"></span>
+          </div>
+          <textarea class="lib-tracker-notes" id="mPrintNotes" placeholder="Print notes (filament, settings, results…)" rows="2"></textarea>
+          <button class="lib-btn lib-btn-ghost lib-btn-sm" id="mPrintSave" type="button">Save notes</button>
+        </div>
         <div class="lib-modal-grid">
           <div class="lib-stat"><div class="lib-stat-k">Downloaded</div><div class="lib-stat-v" id="mDate">—</div></div>
           <div class="lib-stat"><div class="lib-stat-k">Size</div><div class="lib-stat-v" id="mSize">—</div></div>
@@ -367,13 +390,31 @@ function lib_badge(string $slug): string
           <a class="lib-btn lib-btn-primary" id="mView" href="#">📐 View in 3D</a>
           <button class="lib-btn lib-btn-accent" id="mGenThumb" type="button" hidden>📸 Generate thumbnail</button>
           <button class="lib-btn lib-btn-ghost" id="mReveal" type="button" title="Copy folder path">⧉ Copy path</button>
+          <button class="lib-btn lib-btn-ghost" id="mCollection" type="button" title="Add to collection">📁 Collection</button>
+          <a class="lib-btn lib-btn-ghost" id="mExport" href="#" title="Export bundle">⬇ Export</a>
           <button class="lib-btn lib-btn-danger" id="mDelete" type="button" title="Delete this model">🗑 Delete</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Batch (C) progress toast -->
+  <!-- Collection picker sub-modal -->
+  <div id="colModal" class="lib-modal-backdrop" hidden>
+    <div class="lib-modal lib-modal-sm">
+      <div class="lib-modal-head">
+        <span class="lib-modal-title">Add to collection</span>
+        <button class="lib-modal-close" id="colClose">&times;</button>
+      </div>
+      <div class="lib-modal-body">
+        <div id="colList" class="col-list"></div>
+        <div class="col-create">
+          <input id="colNewName" class="lib-search" placeholder="New collection name…">
+          <button class="lib-btn lib-btn-accent lib-btn-sm" id="colCreate" type="button" style="flex:0 0 auto">Create</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="batchToast" class="lib-batch-toast" hidden>
     <div class="lib-batch-row">
       <span id="batchLabel">Generating thumbnails…</span>
@@ -388,6 +429,7 @@ function lib_badge(string $slug): string
 <script>
   // ---- Shared refs ---------------------------------------------------------
   const grid = document.getElementById('grid');
+  let colCurrent = { src: '', folder: '' };
   const filters = document.getElementById('filters');
 
   // ---- Live search filter --------------------------------------------------
@@ -455,6 +497,14 @@ function lib_badge(string $slug): string
     mTypes.textContent  = d.types || '—';
     mFolder.textContent = d.src + '/' + d.folder;
     currentFolderPath   = d.src + '/' + d.folder;
+    colCurrent = { src: d.src, folder: d.folder };
+
+    // Export bundle deep link.
+    const mExport = document.getElementById('mExport');
+    if (mExport) mExport.href = 'export_bundle.php?src=' + encodeURIComponent(d.src) + '&model=' + encodeURIComponent(d.folder);
+
+    // Load print-tracker state (defined in the module script).
+    if (window.__ffOpenModelMeta) window.__ffOpenModelMeta(d.src, d.folder);
 
     // Stable hero gradient matching the tile.
     const thumb = card.querySelector('.lib-thumb');
@@ -493,6 +543,15 @@ function lib_badge(string $slug): string
           }
           if (meta.filamentMeters > 0) {
             chips.push('<span class="lib-chip"><span class="lib-chip-ico">📏</span>' + meta.filamentMeters + ' m</span>');
+          }
+          if (meta.colors > 1) {
+            chips.push('<span class="lib-chip"><span class="lib-chip-ico">🎨</span>' + meta.colors + ' colors</span>');
+          }
+          if (meta.plates > 0) {
+            chips.push('<span class="lib-chip"><span class="lib-chip-ico">🍽</span>' + meta.plates + (meta.plates === 1 ? ' plate' : ' plates') + '</span>');
+          }
+          if (meta.printer) {
+            chips.push('<span class="lib-chip"><span class="lib-chip-ico">🖨</span>' + meta.printer + '</span>');
           }
           if (chips.length) { pInfo.innerHTML = chips.join(''); pInfo.hidden = false; }
         })
@@ -570,6 +629,96 @@ function lib_badge(string $slug): string
   import { createViewer } from './js/viewer-core.js';
 
   const CSRF = JSON.parse(document.getElementById('lib-csrf').textContent || '""');
+
+  // ===== Print tracker =====
+  let trackCurrent = { src: '', folder: '' };
+  window.__ffOpenModelMeta = (src, folder) => {
+    trackCurrent = { src, folder };
+    const mExport = document.getElementById('mExport');
+    if (mExport) mExport.href = 'export_bundle.php?src=' + encodeURIComponent(src) + '&model=' + encodeURIComponent(folder);
+    loadTracker(src, folder);
+  };
+  const mPrintCount = document.getElementById('mPrintCount');
+  const mPrintNotes = document.getElementById('mPrintNotes');
+  const mPrintLast  = document.getElementById('mPrintLast');
+
+  async function loadTracker(src, folder) {    try {
+      const r = await fetch('print_track.php?src=' + encodeURIComponent(src) + '&folder=' + encodeURIComponent(folder));
+      const d = await r.json();
+      if (d.ok) renderTracker(d);
+    } catch (_) {}
+  }
+  function renderTracker(d) {
+    if (mPrintCount) mPrintCount.textContent = d.count;
+    if (mPrintNotes) mPrintNotes.value = d.notes || '';
+    if (mPrintLast) mPrintLast.textContent = d.last_printed ? ('last: ' + d.last_printed.split(' ')[0]) : '';
+  }
+  async function trackAction(action, extra) {
+    const body = Object.assign({ csrf: CSRF, action, src: trackCurrent.src, folder: trackCurrent.folder }, extra || {});
+    const r = await fetch('print_track.php', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (d.ok) { renderTracker(d); markTilePrinted(trackCurrent.src, trackCurrent.folder, d.count); }
+  }
+  document.getElementById('mPrintInc')?.addEventListener('click', () => trackAction('inc'));
+  document.getElementById('mPrintDec')?.addEventListener('click', () => trackAction('dec'));
+  document.getElementById('mPrintSave')?.addEventListener('click', () =>
+    trackAction('set', { count: +mPrintCount.textContent, notes: mPrintNotes.value }));
+
+  function markTilePrinted(src, folder, count) {
+    const card = document.querySelector('.lib-card[data-src="' + CSS.escape(src) + '"][data-folder="' + CSS.escape(folder) + '"]');
+    if (!card) return;
+    let b = card.querySelector('.lib-printed-badge');
+    if (count > 0) {
+      if (!b) { b = document.createElement('div'); b.className = 'lib-printed-badge'; card.appendChild(b); }
+      b.textContent = '✓ ' + count;
+    } else if (b) { b.remove(); }
+  }
+
+  // ===== Collections =====
+  const colModal = document.getElementById('colModal');
+  const colList = document.getElementById('colList');
+  document.getElementById('mCollection')?.addEventListener('click', openColModal);
+  document.getElementById('colClose')?.addEventListener('click', () => colModal.hidden = true);
+  colModal?.addEventListener('click', (e) => { if (e.target === colModal) colModal.hidden = true; });
+
+  async function openColModal() {
+    colModal.hidden = false;
+    colList.innerHTML = '<div class="col-loading">Loading…</div>';
+    const [listR, forR] = await Promise.all([
+      fetch('collections.php?list=1').then(r => r.json()),
+      fetch('collections.php?for=1&src=' + encodeURIComponent(trackCurrent.src) + '&folder=' + encodeURIComponent(trackCurrent.folder)).then(r => r.json()),
+    ]);
+    const inSet = new Set((forR.ids || []));
+    if (!listR.collections || !listR.collections.length) {
+      colList.innerHTML = '<div class="col-empty">No collections yet — create one below.</div>';
+      return;
+    }
+    colList.innerHTML = '';
+    for (const c of listR.collections) {
+      const row = document.createElement('label');
+      row.className = 'col-row';
+      const checked = inSet.has(c.id) ? 'checked' : '';
+      row.innerHTML = '<input type="checkbox" ' + checked + ' data-id="' + c.id + '"> <span>' + c.name + '</span><span class="col-cnt">' + c.count + '</span>';
+      row.querySelector('input').addEventListener('change', async (e) => {
+        await fetch('collections.php', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csrf: CSRF, action: e.target.checked ? 'add' : 'remove', collection_id: c.id, src: trackCurrent.src, folder: trackCurrent.folder }) });
+      });
+      colList.appendChild(row);
+    }
+  }
+  document.getElementById('colCreate')?.addEventListener('click', async () => {
+    const name = document.getElementById('colNewName').value.trim();
+    if (!name) return;
+    const r = await fetch('collections.php', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csrf: CSRF, action: 'create', name }) });
+    const d = await r.json();
+    if (d.ok) {
+      await fetch('collections.php', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csrf: CSRF, action: 'add', collection_id: d.id, src: trackCurrent.src, folder: trackCurrent.folder }) });
+      document.getElementById('colNewName').value = '';
+      openColModal();
+    }
+  });
   const fileUrl = (src, model, rel) =>
     'model_file.php?src=' + encodeURIComponent(src) +
     '&model=' + encodeURIComponent(model) +

@@ -175,10 +175,83 @@ final class MakerWorldService
      *   3. instance/{id}/f3mf?type=download               → per-instance fallback
      * Returns the first signed makerworld.bblmw.com URL found, or '' on failure.
      */
+    /**
+     * Print stats for a design's default (or best) profile, from the same
+     * design endpoint we already hit. MakerWorld stores, per instance:
+     *   prediction = total print seconds, weight = total grams.
+     * We pick the default instance (defaultInstanceId) when present, else the
+     * first, and also surface the colour count and a couple of alternates.
+     *
+     * @return array{ok:bool,printSeconds?:int,weightG?:int,colors?:int,plates?:int,profiles?:array}
+     */
+    public function getPrintStats(string $designId): array
+    {
+        $json = $this->apiGet(self::API . '/design-service/design/' . $designId);
+        if (!is_array($json)) {
+            return ['ok' => false];
+        }
+        $root = $json;
+        if (isset($json['data']) && is_array($json['data'])) {
+            $root = $json['data'];
+        }
+        $instances = $root['instances'] ?? [];
+        if (!is_array($instances) || $instances === []) {
+            return ['ok' => false];
+        }
+
+        $defaultId = (string) ($root['defaultInstanceId'] ?? '');
+
+        // Choose the default instance, else the first with a prediction.
+        $chosen = null;
+        foreach ($instances as $inst) {
+            if ($defaultId !== '' && (string) ($inst['id'] ?? '') === $defaultId) {
+                $chosen = $inst;
+                break;
+            }
+        }
+        if ($chosen === null) {
+            foreach ($instances as $inst) {
+                if ((int) ($inst['prediction'] ?? 0) > 0) { $chosen = $inst; break; }
+            }
+        }
+        if ($chosen === null) {
+            return ['ok' => false];
+        }
+
+        $printSeconds = (int) ($chosen['prediction'] ?? 0);
+        $weightG      = (int) round((float) ($chosen['weight'] ?? 0));
+        $colors       = (int) ($chosen['materialColorCnt'] ?? ($chosen['materialCnt'] ?? 0));
+        $plates       = is_array($chosen['plates'] ?? null) ? count($chosen['plates']) : 0;
+
+        if ($printSeconds === 0 && $weightG === 0) {
+            return ['ok' => false];
+        }
+
+        // A few alternate profiles for context (title + time + weight).
+        $profiles = [];
+        foreach (array_slice($instances, 0, 4) as $inst) {
+            $ps = (int) ($inst['prediction'] ?? 0);
+            if ($ps <= 0) continue;
+            $profiles[] = [
+                'title'        => (string) ($inst['title'] ?? ''),
+                'printSeconds' => $ps,
+                'weightG'      => (int) round((float) ($inst['weight'] ?? 0)),
+            ];
+        }
+
+        return [
+            'ok'           => true,
+            'printSeconds' => $printSeconds,
+            'weightG'      => $weightG,
+            'colors'       => $colors,
+            'plates'       => $plates,
+            'profiles'     => $profiles,
+        ];
+    }
+
     public function getModelZipLink(string $designId, string $fileType = 'PACK'): string
     {
-        $this->lastError = '';
-        $designId = preg_replace('/[^0-9]/', '', $designId);
+        $this->lastError = '';        $designId = preg_replace('/[^0-9]/', '', $designId);
         if ($designId === '') {
             $this->lastError = 'Invalid MakerWorld design id.';
             return '';

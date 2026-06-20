@@ -225,6 +225,45 @@ final class CrealityCloudService
     }
 
     /**
+     * Print stats for a model, from the 3mfList profiles we already fetch.
+     * Each profile carries printTime (seconds), filamentWeight (grams),
+     * filamentLen (metres), plateCount, printerName, and colorFilament[].
+     * Picks the most-downloaded profile (the de-facto "default"), else the
+     * first with a print time.
+     *
+     * @return array{ok:bool,printSeconds?:int,weightG?:float,lenM?:float,plates?:int,colors?:int,printer?:string}
+     */
+    public function getPrintStats(string $modelId): array
+    {
+        $list = $this->listFiles($modelId, 1, 50);
+        if ($list === []) return ['ok' => false];
+
+        // Prefer the profile with the highest downloadCount; fall back to first
+        // with a usable printTime.
+        $chosen = null;
+        $bestDl = -1;
+        foreach ($list as $it) {
+            if (!is_array($it)) continue;
+            if ((int) ($it['printTime'] ?? 0) <= 0) continue;
+            $dl = (int) ($it['downloadCount'] ?? 0);
+            if ($dl > $bestDl) { $bestDl = $dl; $chosen = $it; }
+        }
+        if ($chosen === null) return ['ok' => false];
+
+        $colors = is_array($chosen['colorFilament'] ?? null) ? count($chosen['colorFilament']) : 0;
+
+        return [
+            'ok'           => true,
+            'printSeconds' => (int) ($chosen['printTime'] ?? 0),
+            'weightG'      => round((float) ($chosen['filamentWeight'] ?? 0), 1),
+            'lenM'         => round((float) ($chosen['filamentLen'] ?? 0), 2),
+            'plates'       => (int) ($chosen['plateCount'] ?? 0),
+            'colors'       => $colors,
+            'printer'      => (string) ($chosen['printerName'] ?? ''),
+        ];
+    }
+
+    /**
      * Resolve every downloadable file in a model group to a signed URL.
      *
      * Mirrors the website (captured 2026-06-19). A model group can expose files
