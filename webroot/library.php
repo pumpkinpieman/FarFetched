@@ -231,6 +231,7 @@ function lib_badge(string $slug): string
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php" class="active">My Library</a>
+      <a href="insights.php">Insights</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
       <button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -252,6 +253,30 @@ function lib_badge(string $slug): string
       <button id="genAllBtn" class="lib-btn lib-btn-accent lib-btn-sm" type="button">
         📸 Generate all missing thumbnails
       </button>
+      <input type="search" id="libSearch" class="lib-search" placeholder="🔍 Search your library…" autocomplete="off">
+    </div>
+    <?php endif; ?>
+
+    <?php
+      // Recently-added shelf: the newest few models (already sorted newest-first).
+      $recent = array_slice($models, 0, 8);
+      if (count($models) > 8 && $recent !== []):
+    ?>
+    <div class="lib-shelf" id="recentShelf">
+      <div class="lib-shelf-label">Recently added</div>
+      <div class="lib-shelf-row">
+        <?php foreach ($recent as $m):
+          $rThumb = $m['thumb'];
+        ?>
+          <button type="button" class="lib-shelf-card"
+                  data-src="<?= e($m['slug']) ?>" data-folder="<?= e($m['folder']) ?>">
+            <div class="lib-shelf-thumb" style="<?= $rThumb ? '' : e(lib_tile_style($m['title'])) ?>">
+              <?php if ($rThumb): ?><img src="<?= e($rThumb) ?>" alt="" loading="lazy"><?php else: ?><span><?= e(mb_substr($m['title'], 0, 18)) ?></span><?php endif; ?>
+            </div>
+            <div class="lib-shelf-name"><?= e($m['title']) ?></div>
+          </button>
+        <?php endforeach; ?>
+      </div>
     </div>
     <?php endif; ?>
 
@@ -327,6 +352,7 @@ function lib_badge(string $slug): string
           <div class="lib-modal-title" id="mTitle">—</div>
           <span class="lib-modal-badge" id="mBadge">—</span>
         </div>
+        <div class="lib-printinfo" id="mPrintInfo" hidden></div>
         <div class="lib-modal-grid">
           <div class="lib-stat"><div class="lib-stat-k">Downloaded</div><div class="lib-stat-v" id="mDate">—</div></div>
           <div class="lib-stat"><div class="lib-stat-k">Size</div><div class="lib-stat-v" id="mSize">—</div></div>
@@ -360,19 +386,47 @@ function lib_badge(string $slug): string
   <div id="batchCanvasHost" style="position:absolute;width:1px;height:1px;overflow:hidden;left:-9999px;top:-9999px;"></div>
 
 <script>
-  // ---- Filter pills --------------------------------------------------------
+  // ---- Shared refs ---------------------------------------------------------
   const grid = document.getElementById('grid');
   const filters = document.getElementById('filters');
+
+  // ---- Live search filter --------------------------------------------------
+  const libSearch = document.getElementById('libSearch');
+  function applyFilters() {
+    const q = (libSearch && libSearch.value || '').trim().toLowerCase();
+    const activePill = filters ? filters.querySelector('.pill.active') : null;
+    const wantSrc = activePill ? activePill.dataset.src : '';
+    grid.querySelectorAll('.lib-card').forEach(card => {
+      const matchSrc = !wantSrc || card.dataset.src === wantSrc;
+      const matchQ = !q || (card.dataset.title || '').toLowerCase().includes(q)
+                        || (card.dataset.folder || '').toLowerCase().includes(q);
+      card.style.display = (matchSrc && matchQ) ? '' : 'none';
+    });
+    const shelf = document.getElementById('recentShelf');
+    if (shelf) shelf.style.display = q ? 'none' : '';
+  }
+  if (libSearch) libSearch.addEventListener('input', applyFilters);
+
+  // ---- Recently-added shelf: open modal for the clicked card ---------------
+  const recentShelf = document.getElementById('recentShelf');
+  if (recentShelf) {
+    recentShelf.addEventListener('click', (e) => {
+      const sc = e.target.closest('.lib-shelf-card');
+      if (!sc) return;
+      const card = grid.querySelector(
+        `.lib-card[data-src="${CSS.escape(sc.dataset.src)}"][data-folder="${CSS.escape(sc.dataset.folder)}"]`);
+      if (card) openModal(card);
+    });
+  }
+
+  // ---- Filter pills --------------------------------------------------------
   if (filters) {
     filters.addEventListener('click', (e) => {
       const btn = e.target.closest('.pill');
       if (!btn) return;
       filters.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
-      const want = btn.dataset.src;
-      grid.querySelectorAll('.lib-card').forEach(card => {
-        card.style.display = (!want || card.dataset.src === want) ? '' : 'none';
-      });
+      applyFilters(); // respect any active search query too
     });
   }
 
@@ -417,6 +471,33 @@ function lib_badge(string $slug): string
     modal.hidden = false;
     // Notify the thumbnail-engine module so it can offer preview/generate.
     window.__libModalOpened && window.__libModalOpened(d);
+
+    // Print-time / filament badge — fetched from the model's 3MF metadata.
+    const pInfo = document.getElementById('mPrintInfo');
+    if (pInfo) {
+      pInfo.hidden = true;
+      pInfo.innerHTML = '';
+      fetch('model_meta.php?src=' + encodeURIComponent(d.src) + '&model=' + encodeURIComponent(d.folder))
+        .then(r => r.json())
+        .then(meta => {
+          if (!meta.ok) return;
+          const chips = [];
+          if (meta.printSeconds > 0) {
+            const h = Math.floor(meta.printSeconds / 3600);
+            const m = Math.round((meta.printSeconds % 3600) / 60);
+            const t = h > 0 ? (h + 'h ' + m + 'm') : (m + 'm');
+            chips.push('<span class="lib-chip"><span class="lib-chip-ico">⏱</span>' + t + '</span>');
+          }
+          if (meta.filamentGrams > 0) {
+            chips.push('<span class="lib-chip"><span class="lib-chip-ico">🧵</span>' + meta.filamentGrams + ' g</span>');
+          }
+          if (meta.filamentMeters > 0) {
+            chips.push('<span class="lib-chip"><span class="lib-chip-ico">📏</span>' + meta.filamentMeters + ' m</span>');
+          }
+          if (chips.length) { pInfo.innerHTML = chips.join(''); pInfo.hidden = false; }
+        })
+        .catch(() => {});
+    }
   }
   function closeModal() {
     modal.hidden = true;

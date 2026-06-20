@@ -289,6 +289,7 @@ $csrf = csrf_token();
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php">My Library</a>
+      <a href="insights.php">Insights</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
 		<button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -320,6 +321,7 @@ $csrf = csrf_token();
         
         <?php endif; ?>
         <span class="selcount" id="selcount">0 selected</span>
+        <button class="btn-ghost" id="rouletteBtn" title="Surprise me — 5 random models from this source">🎲 Random</button>
         <button class="btn-ghost" id="selectAll">Select all on page</button>
         <button class="btn-primary" id="download" disabled>Download Selected</button>
       </div>
@@ -483,6 +485,48 @@ $csrf = csrf_token();
   const countEl = document.getElementById('selcount');
   const dlBtn = document.getElementById('download');
   const selAllBtn = document.getElementById('selectAll');
+
+  // ---- 🎲 Roulette: 5 random models from the current source ----------------
+  const rouletteBtn = document.getElementById('rouletteBtn');
+  if (rouletteBtn) {
+    rouletteBtn.addEventListener('click', async () => {
+      const orig = rouletteBtn.textContent;
+      rouletteBtn.disabled = true;
+      rouletteBtn.textContent = '🎲 Rolling…';
+      try {
+        const res = await fetch('roulette.php?src=' + encodeURIComponent(SOURCE), { cache: 'no-store' });
+        const data = await res.json();
+        if (!data.ok) {
+          rouletteBtn.textContent = '🎲 ' + (data.error || 'No luck — try again');
+          setTimeout(() => { rouletteBtn.textContent = orig; rouletteBtn.disabled = false; }, 2600);
+          return;
+        }
+        grid.innerHTML = '';
+        for (const m of data.models) grid.appendChild(makeCard(m));
+        const pt = document.getElementById('pageTitle');
+        if (pt) pt.textContent = '🎲 Random picks';
+
+        // Stop infinite scroll from appending the normal feed under the picks:
+        // clear pagination cursors, disconnect the observer, hide the sentinel
+        // and the manual "Load more" button.
+        nextCursor = null;
+        searchNext = null;
+        if (typeof observer !== 'undefined' && observer) observer.disconnect();
+        const sent = document.getElementById('scrollSentinel');
+        if (sent) sent.style.display = 'none';
+        const lm = document.getElementById('loadMore');
+        if (lm) lm.style.display = 'none';
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        rouletteBtn.textContent = '🎲 Roll again';
+      } catch (_) {
+        rouletteBtn.textContent = '🎲 Error — try again';
+        setTimeout(() => { rouletteBtn.textContent = orig; }, 2600);
+      } finally {
+        rouletteBtn.disabled = false;
+      }
+    });
+  }
   const loadMoreBtn = document.getElementById('loadMore');
   const loadStatus = document.getElementById('loadStatus');
 
