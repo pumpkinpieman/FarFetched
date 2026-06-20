@@ -455,7 +455,6 @@ final class STLFlixService
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING       => '',          // gzip/deflate — smaller JSON transfer
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 5,
             CURLOPT_TIMEOUT        => 30,
@@ -504,7 +503,6 @@ final class STLFlixService
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING       => '',          // gzip/deflate — smaller JSON transfer
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 5,
             CURLOPT_TIMEOUT        => 30,

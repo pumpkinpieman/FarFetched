@@ -841,9 +841,6 @@ function init_schema(PDO $pdo): void
     SQL);
 
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status ON download_jobs(status);');
-    // Composite index for the live-queue snapshot query (jobs_status.php),
-    // which filters/sorts by status then updated_at on every poll.
-    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status_updated ON download_jobs(status, updated_at);');
 
     // Favorites: starred models, server-side so they persist across devices.
     $pdo->exec(<<<'SQL'

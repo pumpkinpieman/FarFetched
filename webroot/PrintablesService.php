@@ -127,7 +127,6 @@ final class PrintablesService
         $ch = curl_init(self::REFRESH_URL);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING       => '',          // gzip/deflate — smaller JSON transfer
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => '',          // empty body, like the browser
             CURLOPT_HEADER         => true,        // need Set-Cookie from response
@@ -740,7 +739,6 @@ final class PrintablesService
         $ch = curl_init(self::API);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING       => '',          // gzip/deflate — smaller JSON transfer
             CURLOPT_POST           => true,
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CONNECTTIMEOUT => 10,

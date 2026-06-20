@@ -12,6 +12,36 @@ require_once __DIR__ . '/bootstrap.php';
 $favs = favorites_all();
 $csrf = csrf_token();
 
+/**
+ * Resolve a locally-generated thumbnail for a favorite, if one exists.
+ * Favorites are keyed by model_id, but folders are named "<model_id> - <name>"
+ * (or just "<model_id>"). We match a folder whose name starts with the id, then
+ * look for its cached .farfetched/thumb.png. Returns a model_file.php URL or ''.
+ */
+function fav_local_thumb(string $src, string $modelId): string
+{
+    $base = source_path($src);
+    if ($base === null || $modelId === '') return '';
+
+    // Candidate folder names: exact id, or "<id> - ...".
+    $folder = null;
+    $exact = $base . '/' . $modelId;
+    if (is_dir($exact) && is_file($exact . '/.farfetched/thumb.png')) {
+        $folder = $modelId;
+    } else {
+        foreach (glob($base . '/' . $modelId . ' - *', GLOB_ONLYDIR) ?: [] as $dir) {
+            if (is_file($dir . '/.farfetched/thumb.png')) {
+                $folder = basename($dir);
+                break;
+            }
+        }
+    }
+    if ($folder === null) return '';
+
+    return 'model_file.php?src=' . rawurlencode($src)
+        . '&model=' . rawurlencode($folder) . '&thumb=1';
+}
+
 $srcLabels = [
     'printables' => 'Printables', 'makerworld' => 'MakerWorld',
     'thingiverse' => 'Thingiverse', 'cults3d' => 'Cults3D',
@@ -34,6 +64,7 @@ $srcLabels = [
       <a href="index.php">Browse Models</a>
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
+      <a href="library.php">My Library</a>
       <a href="favorites.php" class="active">Favorites</a>
       <a href="settings.php">Settings</a>
       <button id="theme-toggle" aria-label="Toggle theme" class="btn-ghost">
@@ -66,6 +97,11 @@ $srcLabels = [
           $thumbUrl = $thumb;
           if ($thumb !== '' && in_array($src, ['cults3d', 'thingiverse'], true)) {
               $thumbUrl = 'proxy.php?url=' . urlencode($thumb);
+          }
+          // No external thumbnail? Fall back to the locally-generated one from
+          // the library, if the model is downloaded and has a cached thumb.
+          if ($thumbUrl === '') {
+              $thumbUrl = fav_local_thumb($src, (string) $f['model_id']);
           }
         ?>
           <div class="card fav-card" data-source="<?= e($src) ?>" data-id="<?= e($f['model_id']) ?>">

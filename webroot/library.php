@@ -45,26 +45,44 @@ function lib_is_viewable(string $dir): bool
     return lib_first_viewable($dir) !== null;
 }
 
-/** Relative path (within the model folder) of the first renderable file, or null. */
-function lib_first_viewable(string $dir): ?string
+// Files above this are skipped by AUTO/batch generation (huge meshes crash the
+// tab / blow the timeout). They can still be rendered manually in the modal.
+const LIB_MAX_AUTO_BYTES = 18 * 1024 * 1024; // 18 MB
+
+/**
+ * Smallest renderable file (rel path) in a model folder, smallest-first so the
+ * lightest mesh is used for the thumbnail. Returns the absolute-smallest even
+ * if it's above the auto ceiling (so the modal can still render it); the batch
+ * decides separately whether it's small enough to auto-generate.
+ * @return array{rel:string,size:int}|null
+ */
+function lib_first_viewable_info(string $dir): ?array
 {
     try {
-        $files = [];
-        $it = new RecursiveIteratorIterator(
+        $cands = [];
+        foreach (new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
-        );
-        foreach ($it as $f) {
-            if ($f->isFile() && in_array(strtolower($f->getExtension()), LIB_VIEW_EXT, true)) {
-                $rel = ltrim(substr($f->getPathname(), strlen($dir)), '/\\');
-                $files[] = str_replace('\\', '/', $rel);
-            }
+        ) as $f) {
+            if (!$f->isFile()) continue;
+            $sz = $f->getSize();
+            if ($sz <= 0) continue;
+            if (!in_array(strtolower($f->getExtension()), LIB_VIEW_EXT, true)) continue;
+            $rel = str_replace('\\', '/', ltrim(substr($f->getPathname(), strlen($dir)), '/\\'));
+            $cands[] = ['rel' => $rel, 'size' => $sz];
         }
-        if ($files === []) return null;
-        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
-        return $files[0];
+        if ($cands === []) return null;
+        usort($cands, static fn($a, $b) => $a['size'] <=> $b['size']);
+        return $cands[0];
     } catch (\Throwable $e) {
         return null;
     }
+}
+
+/** Relative path of the smallest renderable file, or null. */
+function lib_first_viewable(string $dir): ?string
+{
+    $info = lib_first_viewable_info($dir);
+    return $info['rel'] ?? null;
 }
 
 /** Newest mtime among the folder's files — used for "downloaded" + sorting. */
@@ -119,7 +137,9 @@ foreach ($sources as $s) {
         $abs = $s['path'] . '/' . $m['name'];
         if (!lib_has_printable($abs)) continue;           // skip empty / non-printable
 
-        $firstView = lib_first_viewable($abs);
+        $firstInfo = lib_first_viewable_info($abs);
+        $firstView = $firstInfo['rel'] ?? null;
+        $firstSize = $firstInfo['size'] ?? 0;
         $thumbRel  = lib_thumb_rel($slug, $m['name']);
         $models[] = [
             'slug'      => $slug,
@@ -131,6 +151,7 @@ foreach ($sources as $s) {
             'mtime'     => lib_folder_mtime($abs),
             'viewable'  => $firstView !== null,
             'firstfile' => $firstView,
+            'firstsize' => $firstSize,
             'thumb'     => $thumbRel,
         ];
         $srcCounts[$slug] = ($srcCounts[$slug] ?? 0) + 1;
@@ -258,6 +279,8 @@ function lib_badge(string $slug): string
                   data-date="<?= e($m['mtime'] ? date('M j, Y', $m['mtime']) : '—') ?>"
                   data-viewable="<?= $m['viewable'] ? '1' : '0' ?>"
                   data-firstfile="<?= e((string) $m['firstfile']) ?>"
+                  data-firstsize="<?= (int) $m['firstsize'] ?>"
+                  data-autoable="<?= ($m['firstsize'] > 0 && $m['firstsize'] <= LIB_MAX_AUTO_BYTES) ? '1' : '0' ?>"
                   data-hasthumb="<?= $m['thumb'] ? '1' : '0' ?>"
                   data-badge="<?= e(lib_badge($m['slug'])) ?>">
             <div class="lib-thumb" style="<?= $m['thumb'] ? '' : e(lib_tile_style($m['title'])) ?>">
@@ -268,8 +291,7 @@ function lib_badge(string $slug): string
               <button type="button" class="fav-star lib-star <?= $isFav ? 'on' : '' ?>"
                       data-fav-source="<?= e($m['slug']) ?>" data-fav-id="<?= e($mid) ?>"
                       data-fav-name="<?= e($m['title']) ?>"
-                      aria-label="Favorite" title="Save to Favorites"
-                      onclick="event.stopPropagation()"><?= $isFav ? '★' : '☆' ?></button>
+                      aria-label="Favorite" title="Save to Favorites"><?= $isFav ? '★' : '☆' ?></button>
               <?php if ($m['thumb']): ?>
                 <img src="<?= e($m['thumb']) ?>" alt="" loading="lazy">
               <?php else: ?>
@@ -400,7 +422,32 @@ function lib_badge(string $slug): string
     window.__libModalClosed && window.__libModalClosed();
   }
 
-  grid && grid.addEventListener('click', (e) => {
+  grid && grid.addEventListener('click', async (e) => {
+    // Star click toggles favorite and must NOT open the modal.
+    const star = e.target.closest('.fav-star');
+    if (star) {
+      e.stopPropagation();
+      star.disabled = true;
+      try {
+        const res = await fetch('favorite.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action:   'toggle',
+            source:   star.dataset.favSource,
+            model_id: star.dataset.favId,
+            name:     star.dataset.favName || '',
+          }),
+        });
+        const j = await res.json();
+        if (j.ok) {
+          star.classList.toggle('on', j.favorited);
+          star.textContent = j.favorited ? '★' : '☆';
+        }
+      } catch (_) { /* leave as-is on error */ }
+      star.disabled = false;
+      return;
+    }
     const card = e.target.closest('.lib-card');
     if (card) openModal(card);
   });
@@ -413,32 +460,6 @@ function lib_badge(string $slug): string
       mReveal.textContent = '✓ Copied';
       setTimeout(() => { mReveal.textContent = '⧉ Copy path'; }, 1500);
     });
-  });
-
-  // ---- Favorite star toggle ------------------------------------------------
-  document.addEventListener('click', async (e) => {
-    const star = e.target.closest('.fav-star');
-    if (!star) return;
-    e.stopPropagation();
-    star.disabled = true;
-    try {
-      const res = await fetch('favorite.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action:   'toggle',
-          source:   star.dataset.favSource,
-          model_id: star.dataset.favId,
-          name:     star.dataset.favName || '',
-        }),
-      });
-      const j = await res.json();
-      if (j.ok) {
-        star.classList.toggle('on', j.favorited);
-        star.textContent = j.favorited ? '★' : '☆';
-      }
-    } catch (_) { /* leave as-is on error */ }
-    star.disabled = false;
   });
 
   // ---- Theme toggle (matches other pages) ----------------------------------
@@ -615,17 +636,15 @@ function lib_badge(string $slug): string
       : '';
     const allTargets = [...document.querySelectorAll('.lib-card')].filter(c => {
       if (c.dataset.viewable !== '1' || c.dataset.hasthumb === '1' || !c.dataset.firstfile) return false;
+      if (c.dataset.autoable !== '1') return false;   // skip huge meshes (manual only)
       if (activeSrc && c.dataset.src !== activeSrc) return false;  // scope to filter
       return true;
     });
 
     // Cap each click at 30 models. Bulk-rendering thousands in one go exhausts
     // browser memory and crashes the tab no matter how carefully we dispose —
-    // so we do a safe slice per click. The background trickle on the Queue page
-    // clears large backlogs hands-off; this button is for a quick top-up.
-    const BATCH_CAP = 30;
-    const remaining = allTargets.length;
-    const targets = allTargets.slice(0, BATCH_CAP);
+    // so we slice into small chunks with hard memory recovery between them.
+    const targets = allTargets;
 
     if (targets.length === 0) {
       const msg = activeSrc ? '✓ All ' + activeSrc + ' thumbnails present' : '✓ All thumbnails present';
@@ -642,11 +661,14 @@ function lib_badge(string $slug): string
     const failures = []; // {src, folder} that couldn't render
     const total = targets.length;
 
-    // Process in CHUNKS, tearing the WebGL context fully down between each
-    // chunk. A single long-lived context avoids context exhaustion but lets
-    // JS/GPU memory creep across thousands of models until the tab is killed.
-    // Rebuilding every CHUNK_SIZE models forces that memory to be reclaimed.
+    // Tear the WebGL context fully down between every CHUNK_SIZE models so GPU/JS
+    // memory is reclaimed (a single long-lived context lets it creep until the
+    // tab dies). After every COOL_AFTER models, pause COOL_MS so the browser can
+    // actually run GC before continuing — this is what lets large backlogs run
+    // unattended without crashing.
     const CHUNK_SIZE = 15;
+    const COOL_AFTER = 30;
+    const COOL_MS    = 10000;
 
     async function renderOne(v, card) {
       const { src, folder, firstfile } = card.dataset;
@@ -664,10 +686,10 @@ function lib_badge(string $slug): string
       done++;
     }
 
+    let sinceCool = 0;
     for (let i = 0; i < total && !batchCancelled; i += CHUNK_SIZE) {
       const chunk = targets.slice(i, i + CHUNK_SIZE);
 
-      // Fresh context for this chunk.
       const host = document.createElement('div');
       host.style.cssText = 'width:512px;height:512px;';
       batchHost.appendChild(host);
@@ -686,31 +708,30 @@ function lib_badge(string $slug): string
         host.remove();
       }
 
-      // Pause between chunks so the browser can actually reclaim memory before
-      // the next context spins up.
-      if (!batchCancelled && i + CHUNK_SIZE < total) {
-        await new Promise(r => setTimeout(r, 400));
+      sinceCool += chunk.length;
+      const moreLeft = (i + CHUNK_SIZE < total) && !batchCancelled;
+      if (moreLeft && sinceCool >= COOL_AFTER) {
+        // Longer cooldown so memory is fully reclaimed before the next run.
+        sinceCool = 0;
+        for (let s = COOL_MS / 1000; s > 0 && !batchCancelled; s--) {
+          batchLabel.textContent = `Cooling down (${s}s)…  ${done} of ${total} done`;
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      } else if (moreLeft) {
+        await new Promise(r => setTimeout(r, 400)); // short breather between chunks
       }
     }
 
     batchFill.style.width = '100%';
-    const leftover = remaining - done;
-    if (batchCancelled) {
-      batchLabel.textContent = `Stopped — ${done - failed} done, ${failed} failed`;
-    } else if (leftover > 0) {
-      batchLabel.textContent = `Done — ${done - failed} generated, ${leftover} left (click again)`;
-    } else {
-      batchLabel.textContent = `Done — ${done - failed} generated${failed ? ', ' + failed + ' failed' : ''}`;
-    }
+    batchLabel.textContent = batchCancelled
+      ? `Stopped — ${done - failed} done, ${failed} failed`
+      : `Done — ${done - failed} generated${failed ? ', ' + failed + ' failed' : ''}`;
 
     setTimeout(() => {
       batchToast.hidden = true;
       genAllBtn.disabled = false;
       batchFill.style.width = '0%';
-      // Reflect remaining count on the button so it's obvious more are pending.
-      genAllBtn.textContent = leftover > 0
-        ? `📸 Generate missing thumbnails (${leftover} left)`
-        : '📸 Generate all missing thumbnails';
+      genAllBtn.textContent = '📸 Generate all missing thumbnails';
     }, 2400);
 
     // Offer to clean up models that couldn't render at all.

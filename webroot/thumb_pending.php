@@ -22,27 +22,37 @@ header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
 const TP_VIEW_EXT = ['stl', '3mf'];
+// Files larger than this are skipped for AUTO/batch generation — parsing a
+// 40MB+ mesh in a throwaway context is what exhausts browser memory and crashes
+// the tab (and can blow the load timeout, getting a perfectly good model flagged
+// "corrupt"). Such models can still be done manually from the modal.
+const TP_MAX_AUTO_BYTES = 18 * 1024 * 1024; // 18 MB
 
 $limit = max(1, min(200, (int) ($_GET['limit'] ?? 30)));
 $onlySrc = (string) ($_GET['src'] ?? '');
 
-/** First renderable file (rel path) in a model dir, or null. */
-function tp_first_viewable(string $dir): ?string
+/**
+ * Smallest renderable file (rel path) in a model dir that is also under the
+ * auto-size ceiling, or null if none qualify. Smallest-first keeps memory low;
+ * the ceiling guarantees we never hand the batch a monster mesh.
+ */
+function tp_smallest_viewable(string $dir): ?string
 {
     try {
-        $files = [];
+        $cands = [];
         foreach (new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
         ) as $f) {
-            if ($f->isFile() && $f->getSize() > 0
-                && in_array(strtolower($f->getExtension()), TP_VIEW_EXT, true)) {
-                $rel = ltrim(substr($f->getPathname(), strlen($dir)), '/\\');
-                $files[] = str_replace('\\', '/', $rel);
-            }
+            if (!$f->isFile()) continue;
+            $sz = $f->getSize();
+            if ($sz <= 0 || $sz > TP_MAX_AUTO_BYTES) continue;
+            if (!in_array(strtolower($f->getExtension()), TP_VIEW_EXT, true)) continue;
+            $rel = str_replace('\\', '/', ltrim(substr($f->getPathname(), strlen($dir)), '/\\'));
+            $cands[] = ['rel' => $rel, 'sz' => $sz];
         }
-        if ($files === []) return null;
-        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
-        return $files[0];
+        if ($cands === []) return null;
+        usort($cands, static fn($a, $b) => $a['sz'] <=> $b['sz']);
+        return $cands[0]['rel'];
     } catch (\Throwable $e) {
         return null;
     }
@@ -70,8 +80,8 @@ foreach ($sources as $s) {
         // Already has a thumbnail? skip.
         if (is_file($abs . '/.farfetched/thumb.png')) continue;
 
-        $first = tp_first_viewable($abs);
-        if ($first === null) continue; // nothing renderable
+        $first = tp_smallest_viewable($abs);
+        if ($first === null) continue; // nothing renderable under the size ceiling
 
         $pending[] = [
             'src'       => $s['slug'],
