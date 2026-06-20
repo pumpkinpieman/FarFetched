@@ -76,6 +76,8 @@
   .lib-btn-primary:hover{background:var(--clay-deep);}
   .lib-btn-ghost{background:var(--card);color:var(--muted);}
   .lib-btn-ghost:hover{border-color:var(--clay);color:var(--clay);}
+  .lib-btn-danger{background:#3a1a14;color:#e8896c;border-color:#5a2818;}
+  .lib-btn-danger:hover{background:#e05c5c;color:#fff;border-color:#e05c5c;}
 
   /* Toolbar (batch generate button) */
   .lib-toolbar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}

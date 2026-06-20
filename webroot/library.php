@@ -341,6 +341,7 @@ function lib_badge(string $slug): string
           <a class="lib-btn lib-btn-primary" id="mView" href="#">📐 View in 3D</a>
           <button class="lib-btn lib-btn-accent" id="mGenThumb" type="button" hidden>📸 Generate thumbnail</button>
           <button class="lib-btn lib-btn-ghost" id="mReveal" type="button" title="Copy folder path">⧉ Copy path</button>
+          <button class="lib-btn lib-btn-danger" id="mDelete" type="button" title="Delete this model">🗑 Delete</button>
         </div>
       </div>
     </div>
@@ -572,6 +573,24 @@ function lib_badge(string $slug): string
     mLoadPreview.style.display = (d.viewable === '1' && d.firstfile) ? '' : 'none';
   };
   window.__libModalClosed = teardownModalViewer;
+
+  // Delete the currently-open model from disk.
+  const mDelete = document.getElementById('mDelete');
+  mDelete && mDelete.addEventListener('click', async () => {
+    if (!modalCtx) return;
+    if (!confirm('Delete "' + modalCtx.folder + '"?\n\nThis permanently removes the folder and all its files from disk.')) return;
+    mDelete.disabled = true;
+    const orig = mDelete.textContent;
+    mDelete.textContent = 'Deleting…';
+    const ok = await deleteModel(modalCtx.src, modalCtx.folder);
+    if (ok) {
+      removeCard(modalCtx.src, modalCtx.folder);
+      closeModal();
+    } else {
+      mDelete.textContent = '✗ Failed';
+      setTimeout(() => { mDelete.textContent = orig; mDelete.disabled = false; }, 2000);
+    }
+  });
 
   mLoadPreview.addEventListener('click', async () => {
     if (!modalCtx || !modalCtx.firstfile) return;
