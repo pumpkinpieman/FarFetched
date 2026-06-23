@@ -17,6 +17,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+if (!auth_check()) { http_response_code(401); exit; }
 require_once __DIR__ . '/MakerWorldService.php';
 require_once __DIR__ . '/CrealityCloudService.php';
 

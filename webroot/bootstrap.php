@@ -106,6 +106,8 @@ define('THINGIVERSE_DOWNLOAD_DIR',   rtrim(MODELS_ROOT, '/') . '/thingiverse');
 define('CULTS3D_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/cults3d');
 define('STLFLIX_DOWNLOAD_DIR',       rtrim(MODELS_ROOT, '/') . '/stlflix');
 define('CREALITY_DOWNLOAD_DIR',      rtrim(MODELS_ROOT, '/') . '/creality');
+define('NIKKO_DOWNLOAD_DIR',         rtrim(MODELS_ROOT, '/') . '/nikko');
+define('HEX3DFORUM_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/hex3dforum');
 
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
@@ -275,6 +277,534 @@ function model_file_types(string $dir): array
     ksort($types);
     return array_keys($types);
 }
+
+/**
+ * Classify a model folder's "customize / pose" potential. Returns:
+ *   [
+ *     'mode'      => 'parametric' | 'variants' | 'none',
+ *     'script'    => relative path to the .scad/.py script (parametric only),
+ *     'engine'    => 'openscad' | 'cadquery' | null,
+ *     'variants'  => [ ['file'=>rel, 'label'=>..., 'group'=>...], ... ],  (variants only)
+ *     'reason'    => short human note,
+ *   ]
+ *
+ * - parametric: a single .scad (OpenSCAD) or parametric .py (CadQuery/build123d)
+ *   that can be re-rendered with different variable values.
+ * - variants: no script, but the folder ships SEVERAL mesh files that look like
+ *   pose/option variants of one design (e.g. skeleton_standing.stl,
+ *   skeleton_sitting.stl) — the user picks one rather than re-rendering.
+ * - none: a single static mesh, nothing to customize.
+ */
+function model_customization(string $dir): array
+{
+    $none = ['mode' => 'none', 'script' => null, 'engine' => null, 'variants' => [], 'reason' => 'Static model — no parameters or variants.'];
+    if (!is_dir($dir)) {
+        return $none;
+    }
+
+    $scad = null;
+    $pyParametric = null;
+    $meshes = []; // [relpath => filename]
+
+    $meshExt = ['stl' => 1, '3mf' => 1, 'obj' => 1];
+
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)) as $f) {
+        if (!$f->isFile()) {
+            continue;
+        }
+        $path = $f->getPathname();
+        if (strpos($path, '.farfetched') !== false) {
+            continue;
+        }
+        $ext = strtolower($f->getExtension());
+        $rel = ltrim(substr($path, strlen($dir)), '/\\');
+
+        if ($ext === 'scad' && $scad === null) {
+            $scad = $rel;
+        } elseif ($ext === 'py' && $pyParametric === null) {
+            // Only treat as parametric if it imports a known CAD kernel.
+            $head = @file_get_contents($path, false, null, 0, 4096) ?: '';
+            if (preg_match('/\b(cadquery|build123d)\b/i', $head)) {
+                $pyParametric = $rel;
+            }
+        } elseif (isset($meshExt[$ext])) {
+            $meshes[$rel] = $f->getBasename();
+        }
+    }
+
+    // 1) Parametric script wins (it can regenerate any geometry).
+    if ($scad !== null) {
+        return ['mode' => 'parametric', 'script' => $scad, 'engine' => 'openscad',
+                'variants' => [], 'reason' => 'OpenSCAD script — adjustable parameters.'];
+    }
+    if ($pyParametric !== null) {
+        return ['mode' => 'parametric', 'script' => $pyParametric, 'engine' => 'cadquery',
+                'variants' => [], 'reason' => 'CadQuery script — adjustable parameters.'];
+    }
+
+    // 2) Variant set: 2+ meshes that share a common stem and differ by suffix.
+    if (count($meshes) >= 2) {
+        $variants = ff_detect_variants($meshes);
+        if (count($variants) >= 2) {
+            return ['mode' => 'variants', 'script' => null, 'engine' => null,
+                    'variants' => $variants, 'reason' => 'Multiple variants/poses included.'];
+        }
+    }
+
+    return $none;
+}
+
+/**
+ * Given [relpath => basename] mesh files, decide whether they form a variant
+ * set and return labelled variants. Heuristic: strip extension, treat the part
+ * after the last separator (-, _, space) as the variant label when the stems
+ * share a common prefix; otherwise each file is its own variant.
+ *
+ * @param array<string,string> $meshes
+ * @return array<int,array{file:string,label:string}>
+ */
+function ff_detect_variants(array $meshes): array
+{
+    $out = [];
+    foreach ($meshes as $rel => $base) {
+        $stem = preg_replace('/\.(stl|3mf|obj)$/i', '', $base);
+        // Human-friendly label: replace separators with spaces, trim.
+        $label = trim(preg_replace('/[_\-]+/', ' ', (string) $stem));
+        if ($label === '') {
+            $label = $base;
+        }
+        $out[] = ['file' => $rel, 'label' => $label];
+    }
+    // Sort by label for stable display.
+    usort($out, static fn($a, $b) => strcasecmp($a['label'], $b['label']));
+    return $out;
+}
+
+/** Quick boolean: is this model customizable/poseable in any way? */
+function model_is_customizable(string $dir): bool
+{
+    return model_customization($dir)['mode'] !== 'none';
+}
+
+/* ===========================================================================
+ * OPENSCAD — headless parametric rendering for #2 (parametric posing).
+ * =========================================================================== */
+
+/** Locate the openscad binary (config override first, then PATH). Cached. */
+function openscad_bin(): ?string
+{
+    static $cached = false;
+    static $val = null;
+    if ($cached) {
+        return $val;
+    }
+    $cached = true;
+    $cfg = function_exists('cfg') ? (string) cfg('openscad_path') : '';
+    if ($cfg !== '' && @is_executable($cfg)) {
+        return $val = $cfg;
+    }
+    $found = trim((string) @shell_exec('command -v openscad 2>/dev/null'));
+    if ($found !== '' && @is_executable($found)) {
+        return $val = $found;
+    }
+    foreach (['/usr/bin/openscad', '/usr/local/bin/openscad'] as $c) {
+        if (@is_executable($c)) {
+            return $val = $c;
+        }
+    }
+    return $val = null;
+}
+
+/** Is xvfb-run available (needed for headless GL on OpenSCAD 2021)? */
+function openscad_has_xvfb(): bool
+{
+    static $v = null;
+    if ($v === null) {
+        $v = trim((string) @shell_exec('command -v xvfb-run 2>/dev/null')) !== '';
+    }
+    return $v;
+}
+
+/** True if parametric rendering is available on this host. */
+function openscad_available(): bool
+{
+    return openscad_bin() !== null;
+}
+
+/**
+ * Parse OpenSCAD Customizer parameters from a .scad file. Reads top-level
+ * variable assignments and their preceding `// [..]` annotation, returning
+ * control descriptors for the UI.
+ *
+ * Supports: sliders `// [min:max]` / `// [min:step:max]`, dropdowns
+ * `// [a, b, c]` / `// [1:Low, 2:High]`, plus bare number/bool/string vars.
+ * Stops at the first `module`/`function` (those are body, not parameters).
+ *
+ * @return array<int,array{name:string,type:string,default:mixed,min?:float,max?:float,step?:float,options?:array}>
+ */
+function scad_parse_params(string $scadPath): array
+{
+    $src = @file_get_contents($scadPath);
+    if ($src === false) {
+        return [];
+    }
+    $lines = preg_split('/\r\n|\r|\n/', $src) ?: [];
+    $params = [];
+    $pendingHint = null;
+
+    foreach ($lines as $line) {
+        $trim = trim($line);
+
+        // Stop scanning once the geometry body begins.
+        if (preg_match('/^\s*(module|function)\s+/', $trim)) {
+            break;
+        }
+
+        // Capture an annotation comment for the next assignment.
+        if (preg_match('/^\/\/\s*(\[.*\])\s*$/', $trim, $am)) {
+            $pendingHint = $am[1];
+            continue;
+        }
+
+        // Variable assignment:  name = value;   (optionally with trailing // [..])
+        if (preg_match('/^([A-Za-z_]\w*)\s*=\s*([^;]+);(?:\s*\/\/\s*(\[.*\]))?/', $trim, $vm)) {
+            $name = $vm[1];
+            $rawVal = trim($vm[2]);
+            $hint = $vm[3] ?? $pendingHint;
+            $pendingHint = null;
+
+            $param = ['name' => $name];
+
+            // Default value typing.
+            if ($rawVal === 'true' || $rawVal === 'false') {
+                $param['type'] = 'bool';
+                $param['default'] = $rawVal === 'true';
+            } elseif (preg_match('/^"(.*)"$/s', $rawVal, $sm)) {
+                $param['type'] = 'string';
+                $param['default'] = $sm[1];
+            } elseif (is_numeric($rawVal)) {
+                $param['type'] = 'number';
+                $param['default'] = $rawVal + 0;
+            } else {
+                // Unsupported (vectors, expressions) — skip from UI.
+                continue;
+            }
+
+            // Apply annotation hints.
+            if ($hint !== null) {
+                $inner = trim($hint, '[] ');
+                if (strpos($inner, ',') !== false) {
+                    // Dropdown list.
+                    $opts = [];
+                    foreach (explode(',', $inner) as $opt) {
+                        $opt = trim($opt);
+                        if ($opt === '') { continue; }
+                        if (strpos($opt, ':') !== false) {
+                            [$val, $label] = array_map('trim', explode(':', $opt, 2));
+                            $opts[] = ['value' => $val, 'label' => $label];
+                        } else {
+                            $opts[] = ['value' => $opt, 'label' => $opt];
+                        }
+                    }
+                    if ($opts) {
+                        $param['type'] = 'select';
+                        $param['options'] = $opts;
+                    }
+                } elseif (preg_match('/^([\-0-9.]+):([\-0-9.]+)(?::([\-0-9.]+))?$/', $inner, $rm)) {
+                    // Slider range  min:max  or  min:step:max
+                    $param['type'] = 'number';
+                    if (isset($rm[3]) && $rm[3] !== '') {
+                        $param['min'] = (float) $rm[1];
+                        $param['step'] = (float) $rm[2];
+                        $param['max'] = (float) $rm[3];
+                    } else {
+                        $param['min'] = (float) $rm[1];
+                        $param['max'] = (float) $rm[2];
+                        $param['step'] = 1;
+                    }
+                }
+            }
+
+            $params[$name] = $param;
+        }
+    }
+
+    return array_values($params);
+}
+
+/**
+ * Render a .scad to an output mesh with parameter overrides.
+ * Returns [ok, path|error].
+ *
+ * @param array<string,mixed> $values  name => value overrides
+ */
+function scad_render(string $scadPath, array $values, string $outPath): array
+{
+    $bin = openscad_bin();
+    if ($bin === null) {
+        return ['ok' => false, 'error' => 'OpenSCAD is not installed on the server.'];
+    }
+    if (!is_file($scadPath)) {
+        return ['ok' => false, 'error' => 'Script not found.'];
+    }
+
+    $args = [];
+    foreach ($values as $k => $v) {
+        if (!preg_match('/^[A-Za-z_]\w*$/', (string) $k)) {
+            continue; // reject unsafe variable names
+        }
+        if (is_bool($v)) {
+            $val = $v ? 'true' : 'false';
+        } elseif (is_numeric($v)) {
+            $val = (string) ($v + 0);
+        } else {
+            // string value — quote and escape
+            $val = '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], (string) $v) . '"';
+        }
+        $args[] = '-D ' . escapeshellarg($k . '=' . $val);
+    }
+
+    $cmd = escapeshellarg($bin)
+        . ' -o ' . escapeshellarg($outPath) . ' '
+        . implode(' ', $args) . ' '
+        . escapeshellarg($scadPath) . ' 2>&1';
+
+    if (openscad_has_xvfb()) {
+        $cmd = 'xvfb-run -a ' . $cmd;
+    }
+
+    $out = [];
+    $code = 0;
+    @exec($cmd, $out, $code);
+
+    if ($code !== 0 || !is_file($outPath) || filesize($outPath) === 0) {
+        return ['ok' => false, 'error' => 'Render failed: ' . trim(implode("\n", array_slice($out, -4)))];
+    }
+    return ['ok' => true, 'path' => $outPath];
+}
+
+
+/* ===========================================================================
+ * PROJECTS — user workspaces for posing/customizing, kept separate from the
+ * pristine source models. A project copies a source model into its own working
+ * directory under PRIVATE_DIR/projects/<id>/, records pose/param state in the
+ * db, and exports finished results to the 'poses' source so they appear in the
+ * library. Source models are never modified.
+ * =========================================================================== */
+
+/** Absolute path to the projects working root (inside the private dir). */
+function projects_root(): string
+{
+    $p = PRIVATE_DIR . '/projects';
+    if (!is_dir($p)) {
+        @mkdir($p, 0775, true);
+    }
+    return $p;
+}
+
+/** The 'poses' export source folder under MODELS_ROOT (library destination). */
+function poses_dir(): string
+{
+    return rtrim(MODELS_ROOT, '/') . '/poses';
+}
+
+/** True if the poses export folder is writable (or can be created). */
+function poses_writable(): bool
+{
+    $d = poses_dir();
+    if (is_dir($d)) {
+        return is_writable($d);
+    }
+    // Not yet created — can we create it (i.e. is the parent writable)?
+    return is_writable(MODELS_ROOT) || @mkdir($d, 0775, true);
+}
+
+/** Ensure the projects table exists (idempotent). */
+function projects_init(): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    db()->exec(
+        'CREATE TABLE IF NOT EXISTS projects (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            src_slug    TEXT,
+            src_folder  TEXT,
+            mode        TEXT NOT NULL DEFAULT \'variants\',
+            work_dir    TEXT NOT NULL,
+            state       TEXT NOT NULL DEFAULT \'{}\',
+            created_at  TEXT NOT NULL DEFAULT (datetime(\'now\')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime(\'now\'))
+        )'
+    );
+    $done = true;
+}
+
+/** List all projects (newest first). */
+function projects_list(): array
+{
+    projects_init();
+    return db()->query('SELECT * FROM projects ORDER BY updated_at DESC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+}
+
+/** Fetch one project by id, or null. */
+function project_get(int $id): ?array
+{
+    projects_init();
+    $st = db()->prepare('SELECT * FROM projects WHERE id = :id');
+    $st->execute([':id' => $id]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+/**
+ * Create a project by copying a source model's working files into the project's
+ * own directory. Returns [ok, id|error].
+ */
+function project_create(string $name, string $srcSlug, string $srcFolder): array
+{
+    projects_init();
+    $name = trim($name);
+    if ($name === '') {
+        return ['ok' => false, 'error' => 'Project name required.'];
+    }
+    $base = source_path($srcSlug);
+    if ($base === null) {
+        return ['ok' => false, 'error' => 'Invalid source.'];
+    }
+    $srcDir = realpath($base . '/' . $srcFolder);
+    $baseReal = realpath($base);
+    if ($srcDir === false || $baseReal === false || !is_dir($srcDir)
+        || strncmp($srcDir, $baseReal . DIRECTORY_SEPARATOR, strlen($baseReal) + 1) !== 0) {
+        return ['ok' => false, 'error' => 'Source model not found.'];
+    }
+
+    $cust = model_customization($srcDir);
+    $mode = $cust['mode'] === 'none' ? 'variants' : $cust['mode'];
+
+    // Create the project row first to get an id for the work dir.
+    $db = db();
+    $db->prepare('INSERT INTO projects (name, src_slug, src_folder, mode, work_dir) VALUES (:n,:s,:f,:m,:w)')
+       ->execute([':n' => $name, ':s' => $srcSlug, ':f' => $srcFolder, ':m' => $mode, ':w' => '']);
+    $id = (int) $db->lastInsertId();
+
+    $work = projects_root() . '/' . $id;
+    if (!is_dir($work) && !@mkdir($work, 0775, true) && !is_dir($work)) {
+        $db->prepare('DELETE FROM projects WHERE id = :id')->execute([':id' => $id]);
+        return ['ok' => false, 'error' => 'Could not create project workspace (private dir not writable).'];
+    }
+
+    // Copy working files (meshes + scripts) into the project — sources stay pristine.
+    $copied = 0;
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($srcDir, FilesystemIterator::SKIP_DOTS)) as $f) {
+        if (!$f->isFile()) {
+            continue;
+        }
+        $path = $f->getPathname();
+        if (strpos($path, '.farfetched') !== false) {
+            continue;
+        }
+        $ext = strtolower($f->getExtension());
+        if (!in_array($ext, ['stl', '3mf', 'obj', 'scad', 'py'], true)) {
+            continue;
+        }
+        $rel = ltrim(substr($path, strlen($srcDir)), '/\\');
+        $dest = $work . '/' . $rel;
+        @mkdir(dirname($dest), 0775, true);
+        if (@copy($path, $dest)) {
+            $copied++;
+        }
+    }
+
+    $db->prepare('UPDATE projects SET work_dir = :w WHERE id = :id')->execute([':w' => $work, ':id' => $id]);
+    return ['ok' => true, 'id' => $id, 'copied' => $copied, 'mode' => $mode];
+}
+
+/** Update a project's saved pose/param state (JSON). */
+function project_set_state(int $id, array $state): void
+{
+    projects_init();
+    db()->prepare('UPDATE projects SET state = :s, updated_at = datetime(\'now\') WHERE id = :id')
+        ->execute([':s' => json_encode($state), ':id' => $id]);
+}
+
+/** Delete a project and its working directory. */
+function project_delete(int $id): void
+{
+    projects_init();
+    $p = project_get($id);
+    if ($p && !empty($p['work_dir']) && is_dir($p['work_dir'])
+        && strncmp($p['work_dir'], projects_root() . '/', strlen(projects_root()) + 1) === 0) {
+        ff_rrmdir($p['work_dir']);
+    }
+    db()->prepare('DELETE FROM projects WHERE id = :id')->execute([':id' => $id]);
+}
+
+/** Recursively remove a directory (used for project cleanup). */
+function ff_rrmdir(string $dir): void
+{
+    if (!is_dir($dir)) {
+        return;
+    }
+    foreach (new RecursiveIteratorIterator(
+                 new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+                 RecursiveIteratorIterator::CHILD_FIRST) as $f) {
+        $f->isDir() ? @rmdir($f->getPathname()) : @unlink($f->getPathname());
+    }
+    @rmdir($dir);
+}
+
+/**
+ * Export a project file into the 'poses' library source. $srcRel is a file
+ * relative to the project work dir. Returns [ok, folder|error].
+ */
+function project_export(int $id, string $srcRel, string $exportName): array
+{
+    $p = project_get($id);
+    if (!$p) {
+        return ['ok' => false, 'error' => 'Project not found.'];
+    }
+    if (!poses_writable()) {
+        return ['ok' => false, 'error' => 'The /models/poses folder is not writable. Fix folder permissions (give the web user write access), then try again.'];
+    }
+    $work = (string) $p['work_dir'];
+    $srcFile = realpath($work . '/' . $srcRel);
+    if ($srcFile === false || !is_file($srcFile)
+        || strncmp($srcFile, $work . DIRECTORY_SEPARATOR, strlen($work) + 1) !== 0) {
+        return ['ok' => false, 'error' => 'Export source file not found.'];
+    }
+
+    $poses = poses_dir();
+    if (!is_dir($poses)) {
+        @mkdir($poses, 0775, true);
+    }
+
+    // Sanitise the export folder name.
+    $exportName = trim($exportName);
+    $exportName = preg_replace('/[^A-Za-z0-9 _.\-]+/', '', $exportName) ?: 'pose';
+    $folder = $poses . '/' . $exportName;
+    // Avoid clobbering: append a counter if needed.
+    $final = $folder;
+    $n = 2;
+    while (is_dir($final)) {
+        $final = $folder . ' (' . $n . ')';
+        $n++;
+    }
+    if (!@mkdir($final, 0775, true)) {
+        return ['ok' => false, 'error' => 'Could not create the export folder in /models/poses.'];
+    }
+
+    $ext = strtolower(pathinfo($srcFile, PATHINFO_EXTENSION));
+    $destName = $exportName . '.' . $ext;
+    if (!@copy($srcFile, $final . '/' . $destName)) {
+        return ['ok' => false, 'error' => 'Could not write the exported file.'];
+    }
+
+    return ['ok' => true, 'folder' => basename($final), 'file' => $destName];
+}
+
 
 /** First PDF found in a model folder, or null. */
 function find_pdf(string $dir): ?string
@@ -541,6 +1071,13 @@ function cfg_defaults(): array
         'creality_duid'              => '',
         'creality_download_dir'      => '',
         'creality_delay'             => 60,
+        'nikko_cookie'               => (string) (getenv('FETCHER_NIKKO_COOKIE') ?: ''),
+        'nikko_download_dir'         => '',
+        'nikko_delay'                => 60,
+        'hex3dforum_cookie'          => (string) (getenv('FETCHER_HEX3DFORUM_COOKIE') ?: ''),
+        'hex3dforum_forum_ids'       => '',
+        'hex3dforum_download_dir'    => '',
+        'hex3dforum_delay'           => 60,
     ];
 }
 
@@ -672,6 +1209,31 @@ function cfg_save(array $patch): bool
     if (isset($patch['creality_delay'])) {
         $current['creality_delay'] = max(30, min(3600, (int) $patch['creality_delay']));
     }
+    if (array_key_exists('nikko_cookie', $patch)) {
+        $current['nikko_cookie'] = trim((string) $patch['nikko_cookie']);
+    }
+    if (array_key_exists('nikko_download_dir', $patch)) {
+        $current['nikko_download_dir'] = trim((string) $patch['nikko_download_dir']);
+    }
+    if (isset($patch['nikko_delay'])) {
+        $current['nikko_delay'] = max(30, min(3600, (int) $patch['nikko_delay']));
+    }
+    if (array_key_exists('hex3dforum_cookie', $patch)) {
+        $current['hex3dforum_cookie'] = trim((string) $patch['hex3dforum_cookie']);
+    }
+    if (array_key_exists('hex3dforum_forum_ids', $patch)) {
+        // Stored as a comma-separated string of forum IDs; normalize input
+        // that may arrive as newline/space separated from a textarea.
+        $ids = preg_split('/[\s,]+/', trim((string) $patch['hex3dforum_forum_ids']), -1, PREG_SPLIT_NO_EMPTY);
+        $ids = array_values(array_unique(array_filter($ids, static fn($v) => ctype_digit($v))));
+        $current['hex3dforum_forum_ids'] = implode(',', $ids);
+    }
+    if (array_key_exists('hex3dforum_download_dir', $patch)) {
+        $current['hex3dforum_download_dir'] = trim((string) $patch['hex3dforum_download_dir']);
+    }
+    if (isset($patch['hex3dforum_delay'])) {
+        $current['hex3dforum_delay'] = max(30, min(3600, (int) $patch['hex3dforum_delay']));
+    }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
     if (file_put_contents(CONFIG_STORE, $payload, LOCK_EX) === false) {
@@ -689,6 +1251,8 @@ define('THINGIVERSE_DELAY_SECONDS',    (int) cfg('thingiverse_delay'));
 define('CULTS3D_DELAY_SECONDS',        (int) cfg('cults3d_delay'));
 define('STLFLIX_DELAY_SECONDS',        (int) cfg('stlflix_delay'));
 define('CREALITY_DELAY_SECONDS',       (int) cfg('creality_delay'));
+define('NIKKO_DELAY_SECONDS',          (int) cfg('nikko_delay'));
+define('HEX3DFORUM_DELAY_SECONDS',     (int) cfg('hex3dforum_delay'));
 
 function get_makerworld_dir(): string
 {
@@ -718,6 +1282,26 @@ function get_creality_dir(): string
 {
     $v = trim((string) cfg('creality_download_dir'));
     return $v !== '' ? $v : CREALITY_DOWNLOAD_DIR;
+}
+
+function get_nikko_dir(): string
+{
+    $v = trim((string) cfg('nikko_download_dir'));
+    return $v !== '' ? $v : NIKKO_DOWNLOAD_DIR;
+}
+
+function get_hex3dforum_dir(): string
+{
+    $v = trim((string) cfg('hex3dforum_download_dir'));
+    return $v !== '' ? $v : HEX3DFORUM_DOWNLOAD_DIR;
+}
+
+/** @return string[] configured forum IDs, in the order pasted. */
+function hex3dforum_ids(): array
+{
+    $raw = trim((string) cfg('hex3dforum_forum_ids'));
+    if ($raw === '') return [];
+    return array_values(array_filter(explode(',', $raw), static fn($v) => $v !== ''));
 }
 
 /** True when Creality Cloud credentials (token + user id) are configured. */
@@ -1020,6 +1604,15 @@ function favorite_source_url(string $source, string $modelId, string $slug = '')
         case 'creality':
             // Creality detail pages key off the group id via profileId.
             return 'https://www.crealitycloud.com/model-detail/' . rawurlencode($slug !== '' ? $slug : $modelId);
+        case 'nikko':
+            return 'https://nikkoindustriesmembership.com/product/' . rawurlencode($slug !== '' ? $slug : $modelId) . '/';
+        case 'hex3dforum':
+            // slug carries "{forumId}-{topicId}"; rebuild the topic URL from it.
+            if ($slug !== '' && str_contains($slug, '-')) {
+                [$fid, $tid] = explode('-', $slug, 2);
+                return 'https://www.hex3dpatreon.com/viewtopic.php?f=' . rawurlencode($fid) . '&t=' . rawurlencode($tid);
+            }
+            return 'https://www.hex3dpatreon.com/viewtopic.php?t=' . rawurlencode($modelId);
         default:
             return '';
     }

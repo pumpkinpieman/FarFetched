@@ -7,10 +7,14 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/Cults3DService.php';
 require_once __DIR__ . '/STLFlixService.php';
 require_once __DIR__ . '/CrealityCloudService.php';
+require_once __DIR__ . '/NikkoService.php';
+require_once __DIR__ . '/Hex3DForumService.php';
 csrf_token();
 
 // ---- Helpers ----------------------------------------------------------------
@@ -295,6 +299,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notice = ['type' => 'ok', 'text' => 'Creality Cloud pacing saved.'];
     }
 
+    // ---- Nikko Industries -----------------------------------------------------
+    elseif ($action === 'save_nikko_cookie') {
+        $cookie = trim((string) ($_POST['nikko_cookie'] ?? ''));
+        if ($cookie === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your Nikko session cookie first.'];
+        } else {
+            cfg_save(['nikko_cookie' => $cookie]);
+            $n = new NikkoService($cookie);
+            $notice = $n->validate()
+                ? ['type' => 'ok', 'text' => 'Nikko Industries connected successfully.']
+                : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $n->lastError];
+        }
+    }
+    elseif ($action === 'clear_nikko_cookie') {
+        cfg_save(['nikko_cookie' => '']);
+        $notice = ['type' => 'ok', 'text' => 'Nikko Industries session cookie cleared.'];
+    }
+    elseif ($action === 'save_nikko_dir') {
+        $r = apply_source_dir((string) ($_POST['nikko_dir'] ?? ''), 'nikko');
+        $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
+    }
+    elseif ($action === 'save_nikko_delay') {
+        cfg_save(['nikko_delay' => (int) ($_POST['nikko_delay'] ?? 60)]);
+        $notice = ['type' => 'ok', 'text' => 'Nikko Industries pacing saved.'];
+    }
+
+    // ---- Hex3D Forum -----------------------------------------------------
+    elseif ($action === 'save_hex3dforum_cookie') {
+        $cookie = trim((string) ($_POST['hex3dforum_cookie'] ?? ''));
+        if ($cookie === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your Hex3D Forum session cookie first.'];
+        } else {
+            cfg_save(['hex3dforum_cookie' => $cookie]);
+            $h = new Hex3DForumService($cookie);
+            $notice = $h->validate()
+                ? ['type' => 'ok', 'text' => 'Hex3D Forum connected successfully.']
+                : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $h->lastError];
+        }
+    }
+    elseif ($action === 'clear_hex3dforum_cookie') {
+        cfg_save(['hex3dforum_cookie' => '']);
+        $notice = ['type' => 'ok', 'text' => 'Hex3D Forum session cookie cleared.'];
+    }
+    elseif ($action === 'save_hex3dforum_ids') {
+        cfg_save(['hex3dforum_forum_ids' => (string) ($_POST['hex3dforum_forum_ids'] ?? '')]);
+        $notice = ['type' => 'ok', 'text' => 'Hex3D Forum IDs saved.'];
+    }
+    elseif ($action === 'save_hex3dforum_dir') {
+        $r = apply_source_dir((string) ($_POST['hex3dforum_dir'] ?? ''), 'hex3dforum');
+        $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
+    }
+    elseif ($action === 'save_hex3dforum_delay') {
+        cfg_save(['hex3dforum_delay' => (int) ($_POST['hex3dforum_delay'] ?? 60)]);
+        $notice = ['type' => 'ok', 'text' => 'Hex3D Forum pacing saved.'];
+    }
+
     // ---- Worker -------------------------------------------------------------
     elseif ($action === 'save_config') {
         $ok = cfg_save([
@@ -335,6 +395,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'cults3d'     => (string) cfg('cults3d_username') !== '' && (string) cfg('cults3d_token') !== '',
                 'creality'    => creality_ready(),
                 'stlflix'     => (string) cfg('stlflix_token') !== '',
+                'nikko'       => (string) cfg('nikko_cookie') !== '',
+                'hex3dforum'  => (string) cfg('hex3dforum_cookie') !== '',
             ],
         ]);
         exit;
@@ -352,6 +414,7 @@ $conf       = cfg_all();
 $isPaused   = $conf['paused'] === true;
 $logRows    = ff_log_tail(40);
 $csrf       = csrf_token();
+$authEnabled = auth_is_enabled();
 
 // Per-source state
 $pbDir   = store_read(PATH_STORE) ?: DEFAULT_DOWNLOAD_DIR;
@@ -393,6 +456,21 @@ $crealityWrite = is_dir($crealityDir) && is_writable($crealityDir);
 $crealityDelay = (int) cfg('creality_delay');
 $crealityReady = creality_ready();
 
+// Nikko Industries
+$nikkoCookie = (string) cfg('nikko_cookie');
+$nikkoDir    = get_nikko_dir();
+$nikkoWrite  = is_dir($nikkoDir) && is_writable($nikkoDir);
+$nikkoDelay  = (int) cfg('nikko_delay');
+$nikkoReady  = $nikkoCookie !== '';
+
+// Hex3D Forum
+$hex3dforumCookie  = (string) cfg('hex3dforum_cookie');
+$hex3dforumIdsRaw  = (string) cfg('hex3dforum_forum_ids');
+$hex3dforumDir     = get_hex3dforum_dir();
+$hex3dforumWrite   = is_dir($hex3dforumDir) && is_writable($hex3dforumDir);
+$hex3dforumDelay   = (int) cfg('hex3dforum_delay');
+$hex3dforumReady   = $hex3dforumCookie !== '';
+
 
 // Active tab
 $tab = (string) ($_GET['tab'] ?? $_POST['_tab'] ?? 'sources');
@@ -417,6 +495,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
     <a href="jobs.php">Queue</a>
     <a href="viewer.php">3D Viewer</a>
     <a href="library.php">My Library</a>
+      <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
     <a href="collections_view.php">Collections</a>
@@ -441,6 +520,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
     <button class="tab-btn <?= $tab==='sources'?'active':'' ?>" onclick="switchTab('sources')">Sources</button>
     <button class="tab-btn <?= $tab==='worker'?'active':'' ?>" onclick="switchTab('worker')">Worker</button>
     <button class="tab-btn <?= $tab==='activity'?'active':'' ?>" onclick="switchTab('activity')">Activity</button>
+    <button class="tab-btn <?= $tab==='security'?'active':'' ?>" onclick="switchTab('security')">Security</button>
     <button class="tab-btn <?= $tab==='donate'?'active':'' ?>" onclick="switchTab('donate')">Donate</button>
   </div>
 
@@ -453,6 +533,8 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
       <button type="button" class="src-btn <?= $cultsReady ? 'connected' : '' ?>" onclick="openModal('src-cults')">Cults3D</button>
       <button type="button" class="src-btn <?= $stlflixReady ? 'connected' : '' ?>" onclick="openModal('src-stlflix')">STLFlix</button>
       <button type="button" class="src-btn <?= creality_ready() ? 'connected' : '' ?>" onclick="openModal('src-creality')">Creality</button>
+      <button type="button" class="src-btn <?= $nikkoReady ? 'connected' : '' ?>" onclick="openModal('src-nikko')">Nikko Industries</button>
+      <button type="button" class="src-btn <?= $hex3dforumReady ? 'connected' : '' ?>" onclick="openModal('src-hex3dforum')">Hex3D Forum</button>
     </div>
 
 
@@ -541,6 +623,62 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
     <?php endif; ?>
   </div>
 
+  <!-- ===================== SECURITY TAB ===================== -->
+  <div class="tab-content <?= $tab==='security'?'active':'' ?>" id="tab-security">
+    <div class="panel" style="max-width:560px;">
+      <h2>Security</h2>
+
+      <?php if (!$authEnabled): ?>
+        <p class="hint" style="margin-bottom:16px;">
+          This instance is currently <strong>open</strong> — anyone who can reach it has full access.
+          Set a password to lock it behind a sign-in screen.
+        </p>
+        <div id="secSetup">
+          <label for="secNew">Create a password</label>
+          <input type="password" class="short" id="secNew" autocomplete="new-password" placeholder="At least 6 characters" style="max-width:280px;">
+          <label for="secNew2" style="margin-top:10px;">Confirm password</label>
+          <input type="password" class="short" id="secNew2" autocomplete="new-password" style="max-width:280px;">
+          <div class="row" style="margin-top:16px;">
+            <button class="btn-primary btn-sm" id="secSetBtn" type="button">Enable lock</button>
+          </div>
+          <p class="sec-msg hint" id="secSetupMsg"></p>
+        </div>
+      <?php else: ?>
+        <p class="hint" style="margin-bottom:16px;">
+          This instance is <strong>locked</strong> 🔒 — a password is required to sign in.
+        </p>
+
+        <div id="secChange" style="margin-bottom:26px;">
+          <h3 style="font-size:14px;margin:0 0 10px;">Change password</h3>
+          <label for="secCur">Current password</label>
+          <input type="password" class="short" id="secCur" autocomplete="current-password" style="max-width:280px;">
+          <label for="secChNew" style="margin-top:10px;">New password</label>
+          <input type="password" class="short" id="secChNew" autocomplete="new-password" placeholder="At least 6 characters" style="max-width:280px;">
+          <div class="row" style="margin-top:16px;">
+            <button class="btn-primary btn-sm" id="secChangeBtn" type="button">Update password</button>
+          </div>
+          <p class="sec-msg hint" id="secChangeMsg"></p>
+        </div>
+
+        <div style="border-top:1px solid var(--line);padding-top:20px;">
+          <h3 style="font-size:14px;margin:0 0 6px;">Session</h3>
+          <div class="row" style="gap:10px;">
+            <button class="btn-sm" id="secLogoutBtn" type="button">Sign out</button>
+            <button class="btn-sm" id="secDisableBtn" type="button" style="color:var(--err);border-color:var(--err);">Remove lock…</button>
+          </div>
+          <div id="secDisableWrap" hidden style="margin-top:14px;">
+            <label for="secDisCur">Confirm current password to remove the lock</label>
+            <input type="password" class="short" id="secDisCur" autocomplete="current-password" style="max-width:280px;">
+            <div class="row" style="margin-top:12px;">
+              <button class="btn-sm" id="secDisableConfirm" type="button" style="color:var(--err);border-color:var(--err);">Disable lock</button>
+            </div>
+          </div>
+          <p class="sec-msg hint" id="secSessionMsg"></p>
+        </div>
+      <?php endif; ?>
+    </div>
+  </div>
+
   <div class="tab-content <?= $tab==='donate'?'active':'' ?>" id="tab-donate">
     <div class="donate-wrap">
       <div class="donate-card">
@@ -586,6 +724,75 @@ function switchTab(t) {
   });
   history.replaceState(null, '', '?tab=' + t);
 }
+
+// ===== Security panel =====
+(function () {
+  var CSRF = <?= json_encode($csrf) ?>;
+  function post(payload) {
+    return fetch('auth_action.php', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ csrf: CSRF }, payload)),
+    }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'Request failed' }; }); });
+  }
+  function msg(el, text, ok) {
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? 'var(--ok)' : 'var(--err)';
+  }
+  function byId(id) { return document.getElementById(id); }
+
+  // First-time setup
+  var setBtn = byId('secSetBtn');
+  if (setBtn) setBtn.addEventListener('click', function () {
+    var a = byId('secNew').value, b = byId('secNew2').value;
+    var m = byId('secSetupMsg');
+    if (a.length < 6) return msg(m, 'Password must be at least 6 characters.', false);
+    if (a !== b) return msg(m, 'Passwords do not match.', false);
+    setBtn.disabled = true;
+    post({ action: 'set', password: a }).then(function (d) {
+      if (d.ok) { msg(m, 'Lock enabled. Reloading…', true); setTimeout(function () { location.href = 'settings.php?tab=security'; }, 700); }
+      else { msg(m, d.error || 'Failed.', false); setBtn.disabled = false; }
+    });
+  });
+
+  // Change password
+  var chBtn = byId('secChangeBtn');
+  if (chBtn) chBtn.addEventListener('click', function () {
+    var cur = byId('secCur').value, nw = byId('secChNew').value;
+    var m = byId('secChangeMsg');
+    if (nw.length < 6) return msg(m, 'New password must be at least 6 characters.', false);
+    chBtn.disabled = true;
+    post({ action: 'change', current: cur, password: nw }).then(function (d) {
+      if (d.ok) { msg(m, 'Password updated.', true); byId('secCur').value = ''; byId('secChNew').value = ''; }
+      else msg(m, d.error || 'Failed.', false);
+      chBtn.disabled = false;
+    });
+  });
+
+  // Sign out
+  var outBtn = byId('secLogoutBtn');
+  if (outBtn) outBtn.addEventListener('click', function () {
+    post({ action: 'logout' }).then(function (d) {
+      if (d.ok) location.href = 'login.php';
+    });
+  });
+
+  // Remove lock (reveal confirm)
+  var disBtn = byId('secDisableBtn');
+  if (disBtn) disBtn.addEventListener('click', function () {
+    var w = byId('secDisableWrap'); w.hidden = !w.hidden;
+  });
+  var disConfirm = byId('secDisableConfirm');
+  if (disConfirm) disConfirm.addEventListener('click', function () {
+    var cur = byId('secDisCur').value;
+    var m = byId('secSessionMsg');
+    disConfirm.disabled = true;
+    post({ action: 'disable', current: cur }).then(function (d) {
+      if (d.ok) { msg(m, 'Lock removed. Reloading…', true); setTimeout(function () { location.href = 'settings.php?tab=security'; }, 700); }
+      else { msg(m, d.error || 'Failed.', false); disConfirm.disabled = false; }
+    });
+  });
+})();
 function openModal(id) {
   document.getElementById('modal-' + id).classList.add('open');
   document.body.style.overflow = 'hidden';
@@ -612,6 +819,8 @@ const SRC_STATUS_KEY = {
   'src-cults': 'cults3d',
   'src-stlflix': 'stlflix',
   'src-creality': 'creality',
+  'src-nikko': 'nikko',
+  'src-hex3dforum': 'hex3dforum',
 };
 // Map each source button (by onclick target) so we can flip its state.
 function srcButtonFor(modalId) {
@@ -1087,5 +1296,120 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
         </div>
   </div>
 </div>
+
+<div class="modal-overlay" id="modal-src-nikko" onclick="if(event.target===this)closeModal('src-nikko')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-nikko')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <span class="src-name">Nikko Industries</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $nikkoReady?'on':'off' ?>"></span><?= $nikkoReady?'Connected':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="nikko_cookie">Session cookie <?php if ($nikkoCookie !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="password" id="nikko_cookie" name="nikko_cookie" value="<?= e($nikkoCookie) ?>" placeholder="paste your full Cookie header (PHPSESSID=...; wordpress_logged_in_...=...)"><button type="button" class="reveal-btn" data-target="nikko_cookie" aria-label="Show/hide value">👁</button>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_nikko_cookie">Save &amp; Connect</button>
+              <?php if ($nikkoReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_nikko_cookie" onclick="return confirm('Clear Nikko Industries session cookie?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">nikkoindustriesmembership.com has no API — this site is accessed entirely via browser session. Log in with an active membership, open DevTools → Application/Storage → Cookies, and copy the full cookie header (at minimum <code>PHPSESSID</code>; include any <code>wordpress_logged_in_*</code> cookie too). Membership is flat-fee unlimited downloads across the whole library, not per-model — any active member can fetch any product. Re-paste when downloads start failing; there's no fixed expiry, it depends on server session settings.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="nikko_dir">Download folder</label>
+            <input type="text" id="nikko_dir" name="nikko_dir" value="<?= e($nikkoDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_nikko_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $nikkoWrite?'on':'off' ?>"></span><?= $nikkoWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(NIKKO_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="nikko_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="nikko_delay" name="nikko_delay" inputmode="numeric" value="<?= e((string)$nikkoDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_nikko_delay">Save</button>
+            </div>
+          </form>
+          <p class="hint">Catalog pages are scraped HTML, not an API — keep a reasonable delay so the site isn't hammered.</p>
+        </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-src-hex3dforum" onclick="if(event.target===this)closeModal('src-hex3dforum')">
+  <div class="modal modal-src">
+    <button class="modal-close" onclick="closeModal('src-hex3dforum')" aria-label="Close">&times;</button>
+
+        <div class="src-head">
+          <span class="src-name">Hex3D Forum</span>
+          <span class="status" style="margin:0;"><span class="dot <?= $hex3dforumReady?'on':'off' ?>"></span><?= $hex3dforumReady?'Connected':'Not connected' ?></span>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="hex3dforum_cookie">Session cookie <?php if ($hex3dforumCookie !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="password" id="hex3dforum_cookie" name="hex3dforum_cookie" value="<?= e($hex3dforumCookie) ?>" placeholder="paste your full Cookie header from a logged-in hex3dpatreon.com tab"><button type="button" class="reveal-btn" data-target="hex3dforum_cookie" aria-label="Show/hide value">👁</button>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_hex3dforum_cookie">Save &amp; Connect</button>
+              <?php if ($hex3dforumReady): ?>
+              <button class="btn-ghost btn-sm" name="action" value="clear_hex3dforum_cookie" onclick="return confirm('Clear Hex3D Forum session cookie?')">Clear</button>
+              <?php endif; ?>
+            </div>
+          </form>
+          <p class="hint">hex3dpatreon.com is a phpBB forum with no API — log in with an active Patreon-linked account, then DevTools → Application/Storage → Cookies → copy the full cookie header (phpBB session cookie, plus the persistent login cookie if "Remember me" was checked). Re-paste when downloads start failing.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="hex3dforum_forum_ids">Forum IDs to browse <span style="color:var(--muted);font-weight:400;">(comma or newline separated)</span></label>
+            <textarea id="hex3dforum_forum_ids" name="hex3dforum_forum_ids" placeholder="370,371,372,373,374,375,376,377,378,379,410,348,350,354,..." style="min-height:80px;"><?= e($hex3dforumIdsRaw) ?></textarea>
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_hex3dforum_ids">Save Forum IDs</button>
+            </div>
+          </form>
+          <p class="hint">The number after <code>f=</code> in each forum's URL (e.g. <code>viewforum.php?f=370</code> → <code>370</code>). This board has ~80 forums nested under several top-level categories — there's no single "all models" view, so list every forum ID you want FarFetched to browse. The Browse page lets you pick one forum at a time from this list.</p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="hex3dforum_dir">Download folder</label>
+            <input type="text" id="hex3dforum_dir" name="hex3dforum_dir" value="<?= e($hex3dforumDir) ?>">
+            <div class="row">
+              <button class="btn-primary btn-sm" name="action" value="save_hex3dforum_dir">Save &amp; Create</button>
+              <span class="status" style="margin:0;"><span class="dot <?= $hex3dforumWrite?'on':'off' ?>"></span><?= $hex3dforumWrite?'Writable':'Not found / not writable' ?></span>
+            </div>
+          </form>
+          <p class="hint">Default: <code><?= e(HEX3DFORUM_DOWNLOAD_DIR) ?></code></p>
+        </div>
+        <div class="src-body">
+          <form method="post">
+            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+            <input type="hidden" name="_tab" value="sources">
+            <label for="hex3dforum_delay">Delay between downloads (seconds)</label>
+            <div class="row">
+              <input type="text" class="short" id="hex3dforum_delay" name="hex3dforum_delay" inputmode="numeric" value="<?= e((string)$hex3dforumDelay) ?>">
+              <button class="btn-primary btn-sm" name="action" value="save_hex3dforum_delay">Save</button>
+            </div>
+          </form>
+          <p class="hint">Forum and topic pages are scraped HTML — keep a reasonable delay so the board isn't hammered.</p>
+        </div>
+  </div>
+</div>
+  <script src="js/theme.js"></script>
 </body>
 </html>

@@ -8,6 +8,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/STLFlixService.php';
 require_once __DIR__ . '/CrealityCloudService.php';
@@ -198,7 +200,7 @@ $csrf = csrf_token();
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browse · FarFetched</title>
-<link rel="stylesheet" href="css/styles.css?v=20260617d">
+<link rel="stylesheet" href="css/styles.css?v=20260622a">
 </head>
 
 
@@ -289,6 +291,7 @@ $csrf = csrf_token();
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php">My Library</a>
+      <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
       <a href="collections_view.php">Collections</a>
@@ -1224,5 +1227,6 @@ $csrf = csrf_token();
 
 
 
+  <script src="js/theme.js"></script>
 </body>
 </html>

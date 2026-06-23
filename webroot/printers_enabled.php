@@ -9,6 +9,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+if (!auth_check()) { http_response_code(401); exit; }
 header('Content-Type: application/json');
 
 $rows = db()->query('SELECT name, nickname, bed_x, bed_y, bed_z FROM printers WHERE enabled = 1')

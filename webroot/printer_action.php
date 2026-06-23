@@ -14,6 +14,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+if (!auth_check()) { http_response_code(401); header('Content-Type: application/json'); echo json_encode(['ok'=>false,'error'=>'auth required']); exit; }
 require_once __DIR__ . '/printer_catalog.php';
 
 header('Content-Type: application/json');

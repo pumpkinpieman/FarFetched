@@ -33,6 +33,8 @@ require_once __DIR__ . '/ThingiverseService.php';
 require_once __DIR__ . '/Cults3DService.php';
 require_once __DIR__ . '/STLFlixService.php';
 require_once __DIR__ . '/CrealityCloudService.php';
+require_once __DIR__ . '/NikkoService.php';
+require_once __DIR__ . '/Hex3DForumService.php';
 
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
@@ -107,6 +109,8 @@ $tv     = new ThingiverseService();
 $cults  = new Cults3DService();
 $stlfix = new STLFlixService();
 $creality = new CrealityCloudService();
+$nikko  = new NikkoService();
+$hex3dforum = new Hex3DForumService();
 
 // Per-source readiness. A source that isn't configured simply has its jobs wait
 // in the queue (they're filtered out of the claim query below) rather than
@@ -137,9 +141,17 @@ logln($cultsReady
 
 $stlflixReady = $stlfix->isAuthed();
 $crealityReady = $creality->isAuthed();
+$nikkoReady = $nikko->isAuthed();
+$hex3dforumReady = $hex3dforum->isAuthed();
 logln($stlflixReady
     ? 'STLFlix token present.'
     : 'STLFlix token absent — STLFlix jobs will wait.');
+logln($nikkoReady
+    ? 'Nikko Industries session cookie present.'
+    : 'Nikko Industries session cookie absent — Nikko jobs will wait.');
+logln($hex3dforumReady
+    ? 'Hex3D Forum session cookie present.'
+    : 'Hex3D Forum session cookie absent — Hex3D Forum jobs will wait.');
 
 $readySources = [];
 if ($printablesReady)  { $readySources[] = 'printables'; }
@@ -148,6 +160,8 @@ if ($thingiverseReady) { $readySources[] = 'thingiverse'; }
 if ($cultsReady)       { $readySources[] = 'cults3d'; }
 if ($stlflixReady)     { $readySources[] = 'stlflix'; }
 if ($crealityReady)    { $readySources[] = 'creality'; }
+if ($nikkoReady)       { $readySources[] = 'nikko'; }
+if ($hex3dforumReady)  { $readySources[] = 'hex3dforum'; }
 
 if ($readySources === []) {
     logerr('error', 'No source configured — paste at least one token in Settings. Exiting.');
@@ -178,6 +192,8 @@ $sourceDirs = [
     'cults3d'     => get_cults3d_dir(),
     'stlflix'     => get_stlflix_dir(),
     'creality'    => get_creality_dir(),
+    'nikko'       => get_nikko_dir(),
+    'hex3dforum'  => get_hex3dforum_dir(),
 ];
 foreach ($sourceDirs as $srcName => $srcDir) {
     if ($srcDir === '') continue;
@@ -638,6 +654,171 @@ while (true) {
         }
         $GLOBALS['ACTIVE_JOB_ID'] = null;
         pace(STLFLIX_DELAY_SECONDS);
+        continue;
+    }
+
+    // ---- Nikko Industries: whole-model ZIP download via Shopify Digital
+    // Downloads landing page, scraped off the product page ----------------
+    if (($job['source'] ?? '') === 'nikko') {
+        try {
+            $links = $nikko->getDownloadUrls($modelId, $slug);
+
+            // Dead/expired session — halt the run rather than burning the queue.
+            if (empty($links) && str_contains(strtolower($nikko->lastError), 'session')) {
+                $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $nikko->lastError, ':path' => '', ':id' => $jobId]);
+                logerr('error', '  Nikko session expired — halting run. Re-paste session cookie in Settings.');
+                break;
+            }
+            if (empty($links)) {
+                $msg = $nikko->lastError !== '' ? $nikko->lastError : 'Could not resolve Nikko download URL.';
+                // A product page with no attached download is not retryable.
+                $isNoFiles = str_contains(strtolower($msg), 'no download link found');
+                $upd->execute([':st' => $isNoFiles ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Nikko ' . ($isNoFiles ? 'skipped' : 'error') . ': ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(NIKKO_DELAY_SECONDS);
+                continue;
+            }
+
+            $destDir = rtrim(get_nikko_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+            if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
+
+            $anyOk     = false;
+            $fileTotal = count($links);
+            foreach ($links as $i => $link) {
+                $fileNum = $i + 1;
+                $urlBasename = basename(parse_url($link, PHP_URL_PATH) ?? '');
+                $zipName     = $urlBasename !== '' ? $urlBasename
+                    : model_folder($modelId, $name, $slug) . '_' . ($i + 1) . '.zip';
+                $dest = $destDir . '/' . $zipName;
+
+                if (!cfg('overwrite') && is_file($dest)) {
+                    logln('  Exists, skip: ' . $zipName);
+                    $anyOk = true;
+                    continue;
+                }
+
+                logln('  Downloading: ' . $zipName . ' (' . $fileNum . '/' . $fileTotal . ') from [signed storage URL]');
+                $pwFn = progress_writer($jobId, $zipName);
+                $progressCb = static function (int $bytes) use ($pwFn, $fileNum, $fileTotal): void {
+                    $pwFn(0, $bytes, $fileNum, $fileTotal);
+                };
+
+                if ($nikko->downloadToFile($link, $dest, $progressCb)) {
+                    logln('  Saved: ' . $dest);
+                    if (extract_zip_safe($dest, $destDir)) {
+                        logln('  Extracted into: ' . $destDir);
+                        if (cfg('keep_zip') !== true) {
+                            @unlink($dest);
+                            logln('  Removed zip (keep_zip off).');
+                        }
+                    } else {
+                        logln('  Extract failed; zip kept at ' . $dest);
+                    }
+                    $anyOk = true;
+                } else {
+                    logln('  Failed: ' . $zipName . ' — ' . $nikko->lastError);
+                }
+                if ($i < count($links) - 1) pace(NIKKO_DELAY_SECONDS);
+            }
+
+            $upd->execute([
+                ':st'   => $anyOk ? 'done' : 'error',
+                ':inc'  => 1,
+                ':err'  => $anyOk ? '' : (string) $nikko->lastError,
+                ':path' => $anyOk ? (string) $destDir : '',
+                ':id'   => (int) $jobId,
+            ]);
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  Nikko error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(NIKKO_DELAY_SECONDS);
+        continue;
+    }
+
+    // ---- Hex3D Forum: topic attachment download(s) ---------------------
+    if (($job['source'] ?? '') === 'hex3dforum') {
+        try {
+            $links = $hex3dforum->getDownloadUrls($modelId, $slug);
+
+            if (empty($links) && str_contains(strtolower($hex3dforum->lastError), 'session')) {
+                $upd->execute([':st' => 'queued', ':inc' => 0, ':err' => $hex3dforum->lastError, ':path' => '', ':id' => $jobId]);
+                logerr('error', '  Hex3D Forum session expired — halting run. Re-paste session cookie in Settings.');
+                break;
+            }
+            if (empty($links)) {
+                $msg = $hex3dforum->lastError !== '' ? $hex3dforum->lastError : 'Could not resolve Hex3D Forum attachment URLs.';
+                $isNoFiles = str_contains(strtolower($msg), 'no attachments found');
+                $upd->execute([':st' => $isNoFiles ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Hex3D Forum ' . ($isNoFiles ? 'skipped' : 'error') . ': ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(HEX3DFORUM_DELAY_SECONDS);
+                continue;
+            }
+
+            $destDir = rtrim(get_hex3dforum_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+            if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
+
+            $anyOk     = false;
+            $fileTotal = count($links);
+            foreach ($links as $i => $link) {
+                $fileNum = $i + 1;
+                $urlBasename = basename(parse_url($link, PHP_URL_PATH) ?? '');
+                // download/file.php?id=N has no filename in the path — fall
+                // back to an indexed name; the actual filename arrives via
+                // Content-Disposition, which downloadToFile() doesn't parse,
+                // so attachments are saved generically and identified by
+                // their extracted contents after unzip.
+                $zipName = ($urlBasename !== '' && $urlBasename !== 'file.php')
+                    ? $urlBasename
+                    : model_folder($modelId, $name, $slug) . '_' . $fileNum . '.zip';
+                $dest = $destDir . '/' . $zipName;
+
+                if (!cfg('overwrite') && is_file($dest)) {
+                    logln('  Exists, skip: ' . $zipName);
+                    $anyOk = true;
+                    continue;
+                }
+
+                logln('  Downloading: ' . $zipName . ' (' . $fileNum . '/' . $fileTotal . ') from [forum attachment]');
+                $pwFn = progress_writer($jobId, $zipName);
+                $progressCb = static function (int $bytes) use ($pwFn, $fileNum, $fileTotal): void {
+                    $pwFn(0, $bytes, $fileNum, $fileTotal);
+                };
+
+                if ($hex3dforum->downloadToFile($link, $dest, $progressCb)) {
+                    logln('  Saved: ' . $dest);
+                    if (extract_zip_safe($dest, $destDir)) {
+                        logln('  Extracted into: ' . $destDir);
+                        if (cfg('keep_zip') !== true) {
+                            @unlink($dest);
+                            logln('  Removed zip (keep_zip off).');
+                        }
+                    } else {
+                        logln('  Extract failed; zip kept at ' . $dest);
+                    }
+                    $anyOk = true;
+                } else {
+                    logln('  Failed: ' . $zipName . ' — ' . $hex3dforum->lastError);
+                }
+                if ($i < count($links) - 1) pace(HEX3DFORUM_DELAY_SECONDS);
+            }
+
+            $upd->execute([
+                ':st'   => $anyOk ? 'done' : 'error',
+                ':inc'  => 1,
+                ':err'  => $anyOk ? '' : (string) $hex3dforum->lastError,
+                ':path' => $anyOk ? (string) $destDir : '',
+                ':id'   => (int) $jobId,
+            ]);
+        } catch (Throwable $e) {
+            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
+            logln('  Hex3D Forum error: ' . $e->getMessage());
+        }
+        $GLOBALS['ACTIVE_JOB_ID'] = null;
+        pace(HEX3DFORUM_DELAY_SECONDS);
         continue;
     }
 

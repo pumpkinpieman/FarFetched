@@ -8,6 +8,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 
 $favs = favorites_all();
 $csrf = csrf_token();
@@ -54,7 +56,7 @@ $srcLabels = [
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Favorites · FarFetched</title>
-<link rel="stylesheet" href="css/styles.css?v=20260617d">
+<link rel="stylesheet" href="css/styles.css?v=20260622a">
 <link rel="stylesheet" href="css/styles_favorites.css">
 </head>
 <body>
@@ -66,6 +68,7 @@ $srcLabels = [
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php">My Library</a>
+      <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
       <a href="collections_view.php">Collections</a>
@@ -192,5 +195,6 @@ $srcLabels = [
     } catch (_) { star.disabled = false; }
   });
 </script>
+  <script src="js/theme.js"></script>
 </body>
 </html>

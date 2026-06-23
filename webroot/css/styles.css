@@ -156,6 +156,66 @@
   --clay-deep: #a33b07; 
 }
 
+/* Midnight — moody teal & coral */
+[data-theme="midnight"] {
+  --bg: #0a1a2a;
+  --panel: #0f2438;
+  --card: #152c44;
+  --ink: #e8eef4;
+  --muted: #6f8aa3;
+  --line: #1e3a52;
+  --clay: #fd7767;
+  --clay-deep: #db5365;
+  --ok: #26e5d3;
+  --err: #db5365;
+  --warn: #d5a29d;
+}
+
+/* Forest — deep green & amber */
+[data-theme="forest"] {
+  --bg: #0c1410;
+  --panel: #121e17;
+  --card: #1a2c20;
+  --ink: #e6f0e8;
+  --muted: #6f8a78;
+  --line: #243a2c;
+  --clay: #e8a13c;
+  --clay-deep: #c47f1d;
+  --ok: #5fc88a;
+  --err: #e07a5c;
+  --warn: #f5d442;
+}
+
+/* Nord — cool arctic blue */
+[data-theme="nord"] {
+  --bg: #2e3440;
+  --panel: #323a48;
+  --card: #3b4252;
+  --ink: #eceff4;
+  --muted: #9aa4b8;
+  --line: #4c566a;
+  --clay: #88c0d0;
+  --clay-deep: #5e81ac;
+  --ok: #a3be8c;
+  --err: #bf616a;
+  --warn: #ebcb8b;
+}
+
+/* Mono — neutral grayscale */
+[data-theme="mono"] {
+  --bg: #131313;
+  --panel: #1b1b1b;
+  --card: #262626;
+  --ink: #ededed;
+  --muted: #8a8a8a;
+  --line: #333333;
+  --clay: #c8c8c8;
+  --clay-deep: #9a9a9a;
+  --ok: #8fb98f;
+  --err: #c88a8a;
+  --warn: #c8b88a;
+}
+
 
 
 /* FORCE TEXT CONTRAST IN LIGHT MODE */
@@ -307,3 +367,18 @@
 .fit-banner.ok{background:rgba(30,80,55,.82);color:#7ee0a8;border:0.5px solid rgba(110,200,140,.5);}
 .fit-banner.warn{background:rgba(90,70,20,.82);color:#f5d77a;border:0.5px solid rgba(245,200,66,.5);}
 .fit-banner.bad{background:rgba(90,30,30,.82);color:#f5a0a0;border:0.5px solid rgba(224,92,92,.55);}
+
+/* ===== Theme picker popover ===== */
+.theme-pop{position:fixed;z-index:9999;background:var(--card);border:1px solid var(--line);
+           border-radius:12px;padding:6px;box-shadow:0 12px 40px -8px rgba(0,0,0,.55);}
+.theme-pop-row{display:flex;align-items:center;gap:11px;width:100%;padding:9px 12px;border:none;
+               background:transparent;border-radius:8px;cursor:pointer;color:var(--ink);
+               font-size:13.5px;font-family:inherit;text-align:left;transition:background .12s;}
+.theme-pop-row:hover{background:var(--panel);}
+.theme-pop-row.active{background:var(--panel);}
+.theme-swatch{display:inline-flex;gap:2px;flex:0 0 auto;padding:3px;border-radius:6px;
+              background:rgba(128,128,128,.12);}
+.theme-dot{width:11px;height:16px;border-radius:3px;display:block;}
+.theme-name{flex:1;}
+.theme-check{opacity:0;color:var(--clay);font-weight:700;flex:0 0 auto;}
+.theme-pop-row.active .theme-check{opacity:1;}

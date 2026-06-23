@@ -19,6 +19,8 @@ require_once __DIR__ . '/ThingiverseService.php';
 require_once __DIR__ . '/Cults3DService.php';
 require_once __DIR__ . '/STLFlixService.php';
 require_once __DIR__ . '/CrealityCloudService.php';
+require_once __DIR__ . '/NikkoService.php';
+require_once __DIR__ . '/Hex3DForumService.php';
 
 header('Content-Type: application/json');
 
@@ -28,7 +30,7 @@ $page   = max(1, (int) ($offset / 20) + 1);
 $paid   = (string) ($_GET['paid'] ?? 'all');
 if (!in_array($paid, ['all', 'free', 'paid'], true)) { $paid = 'all'; }
 $source = strtolower((string) ($_GET['src'] ?? 'printables'));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality', 'nikko', 'hex3dforum'], true)) {
     $source = 'printables';
 }
 $showNsfw = ($_GET['nsfw'] ?? '') === '1';
@@ -39,7 +41,9 @@ $allowEmptyQ = ($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))
     || $source === 'thingiverse'
     || $source === 'cults3d'
     || $source === 'stlflix'
-    || $source === 'creality';
+    || $source === 'creality'
+    || $source === 'nikko'
+    || $source === 'hex3dforum';
 
 if ($q === '' && !$allowEmptyQ) {
     echo json_encode(['ok' => false, 'error' => 'Empty search.']);
@@ -114,6 +118,40 @@ if ($source === 'creality') {
     if ($creality->lastError !== '') { echo json_encode(['ok' => false, 'error' => $creality->lastError]); exit; }
     $nextOffset = (count($models) >= $limit) ? $offset + $limit : null;
     echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $creality->lastTotal, 'source' => 'creality']);
+    exit;
+}
+
+// ---- Nikko Industries (membership library) ----------------------------------
+if ($source === 'nikko') {
+    $nikko    = new NikkoService();
+    $nikkoCat = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['nikkocat'] ?? '')));
+    $limit    = 20;
+    $models   = $nikko->search($q, $limit, $offset, $nikkoCat);
+    if ($nikko->lastError !== '') { echo json_encode(['ok' => false, 'error' => $nikko->lastError]); exit; }
+    $nextOffset = (($offset + $limit) < $nikko->lastTotal) ? $offset + $limit : null;
+    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $nikko->lastTotal, 'source' => 'nikko']);
+    exit;
+}
+
+// ---- Hex3D Forum (phpBB, browse by forum ID) ---------------------------------
+if ($source === 'hex3dforum') {
+    $hex3d = new Hex3DForumService();
+    $forumId = preg_replace('/[^0-9]/', '', (string) ($_GET['hex3dforum_id'] ?? ''));
+    $configuredIds = hex3dforum_ids();
+
+    if ($forumId === '' && $configuredIds !== []) {
+        $forumId = $configuredIds[0];
+    }
+    if ($forumId === '') {
+        echo json_encode(['ok' => false, 'error' => 'No forum ID selected — paste forum IDs in Settings → Hex3D Forum.']);
+        exit;
+    }
+
+    $limit  = 20;
+    $models = $hex3d->browse($forumId, $limit, $offset);
+    if ($hex3d->lastError !== '') { echo json_encode(['ok' => false, 'error' => $hex3d->lastError]); exit; }
+    $nextOffset = (($offset + $limit) < $hex3d->lastTotal) ? $offset + $limit : null;
+    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $hex3d->lastTotal, 'source' => 'hex3dforum']);
     exit;
 }
 

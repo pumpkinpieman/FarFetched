@@ -337,5 +337,8 @@ export function createViewer(container, options = {}) {
     dispose,
     hasModel: () => current !== null,
     getSize: () => lastSize,
+    getCamera: () => camera,
+    getControls: () => controls,
+    frameAll: () => { if (current) frameObject(current); },
   };
 }

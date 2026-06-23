@@ -17,6 +17,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+if (!auth_check()) { http_response_code(401); header('Content-Type: application/json'); echo json_encode(['ok'=>false,'error'=>'auth required']); exit; }
 
 header('Content-Type: application/json');
 
@@ -53,11 +55,11 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower(trim((string) ($in['source'] ?? 'printables')));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality', 'nikko', 'hex3dforum'], true)) {
     $source = 'printables';
 }
 if ($source === 'makerworld') { $fileType = 'PACK'; }
-if ($source === 'thingiverse' || $source === 'cults3d' || $source === 'stlflix' || $source === 'creality') { $fileType = 'PACK'; }
+if ($source === 'thingiverse' || $source === 'cults3d' || $source === 'stlflix' || $source === 'creality' || $source === 'nikko' || $source === 'hex3dforum') { $fileType = 'PACK'; }
 
 $models = $in['models'] ?? null;
 if (!is_array($models) || $models === []) {

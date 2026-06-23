@@ -14,6 +14,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 
 // Printable extensions that make a folder worth showing / viewable.
 const LIB_PRINT_EXT = ['stl', '3mf', 'obj', 'step', 'stp'];
@@ -141,18 +143,31 @@ foreach ($sources as $s) {
         $firstView = $firstInfo['rel'] ?? null;
         $firstSize = $firstInfo['size'] ?? 0;
         $thumbRel  = lib_thumb_rel($slug, $m['name']);
+        $typeList  = model_file_types($abs);
+        // Cheap customizable hint: has a .scad/.py script, or ships multiple meshes.
+        $hasScript = in_array('SCAD', $typeList, true) || in_array('PY', $typeList, true);
+        $meshCount = 0;
+        if (!$hasScript) {
+            // Only count when no script (variant detection). Cheap glob, no deep walk.
+            foreach (['stl', '3mf', 'obj'] as $ext) {
+                $meshCount += count(glob($abs . '/*.' . $ext) ?: []);
+                $meshCount += count(glob($abs . '/*.' . strtoupper($ext)) ?: []);
+            }
+        }
+        $isCustomizable = $hasScript || $meshCount >= 2;
         $models[] = [
             'slug'      => $slug,
             'folder'    => $m['name'],
             'title'     => clean_model_name($m['name']),
             'files'     => (int) $m['files'],
             'size'      => (int) $m['size'],
-            'types'     => model_file_types($abs),
+            'types'     => $typeList,
             'mtime'     => lib_folder_mtime($abs),
             'viewable'  => $firstView !== null,
             'firstfile' => $firstView,
             'firstsize' => $firstSize,
             'thumb'     => $thumbRel,
+            'customizable' => $isCustomizable,
         ];
         $srcCounts[$slug] = ($srcCounts[$slug] ?? 0) + 1;
         $totalFiles += (int) $m['files'];
@@ -237,6 +252,7 @@ function lib_badge(string $slug): string
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php" class="active">My Library</a>
+      <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
       <a href="collections_view.php">Collections</a>
@@ -319,6 +335,7 @@ function lib_badge(string $slug): string
             <div class="lib-thumb" style="<?= $m['thumb'] ? '' : e(lib_tile_style($m['title'])) ?>">
               <?php $pc = $printCounts[$m['slug'] . '/' . $m['folder']] ?? 0; ?>
               <?php if ($pc > 0): ?><div class="lib-printed-badge">✓ <?= $pc ?></div><?php endif; ?>
+              <?php if (!empty($m['customizable'])): ?><div class="lib-custom-badge" title="Customizable / poseable">⚙</div><?php endif; ?>
               <?php
                 $mid   = lib_model_id($m['folder']);
                 $isFav = isset($favSet[$m['slug'] . ':' . $mid]);
@@ -700,8 +717,10 @@ function lib_badge(string $slug): string
       const checked = inSet.has(c.id) ? 'checked' : '';
       row.innerHTML = '<input type="checkbox" ' + checked + ' data-id="' + c.id + '"> <span>' + c.name + '</span><span class="col-cnt">' + c.count + '</span>';
       row.querySelector('input').addEventListener('change', async (e) => {
+        const adding = e.target.checked;
         await fetch('collections.php', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ csrf: CSRF, action: e.target.checked ? 'add' : 'remove', collection_id: c.id, src: trackCurrent.src, folder: trackCurrent.folder }) });
+          body: JSON.stringify({ csrf: CSRF, action: adding ? 'add' : 'remove', collection_id: c.id, src: trackCurrent.src, folder: trackCurrent.folder }) });
+        ffToast(adding ? ('Added to "' + c.name + '"') : ('Removed from "' + c.name + '"'));
       });
       colList.appendChild(row);
     }
@@ -716,9 +735,23 @@ function lib_badge(string $slug): string
       await fetch('collections.php', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ csrf: CSRF, action: 'add', collection_id: d.id, src: trackCurrent.src, folder: trackCurrent.folder }) });
       document.getElementById('colNewName').value = '';
+      ffToast('Created & added to "' + name + '"');
       openColModal();
     }
   });
+
+  // Lightweight toast (mirrors the Browse page pattern; CSS lives in styles.css).
+  let _tT = null, _tE = null;
+  function ffToast(message) {
+    let t = document.getElementById('ff-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'ff-toast'; document.body.appendChild(t); }
+    t.innerHTML = '<span class="ff-toast-msg"></span>';
+    t.querySelector('.ff-toast-msg').textContent = message;
+    if (_tT) clearTimeout(_tT); if (_tE) clearTimeout(_tE);
+    t.classList.remove('hide', 'show');
+    requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add('show')));
+    _tT = setTimeout(() => { t.classList.remove('show'); t.classList.add('hide'); _tE = setTimeout(() => t.classList.remove('hide'), 500); }, 2600);
+  }
   const fileUrl = (src, model, rel) =>
     'model_file.php?src=' + encodeURIComponent(src) +
     '&model=' + encodeURIComponent(model) +
@@ -731,6 +764,10 @@ function lib_badge(string $slug): string
       body: JSON.stringify({ csrf: CSRF, src, model, png: pngDataUrl }),
     });
     const j = await res.json().catch(() => ({}));
+    // Soft failures (e.g. model folder not writable because it was added via the
+    // network share) are not real errors — thumbnails are a nice-to-have. Return
+    // null so callers skip the thumbnail without surfacing an error.
+    if (j && j.soft) return null;
     if (!res.ok || !j.ok) throw new Error(j.error || 'Save failed');
     return j.url;
   }
@@ -762,6 +799,7 @@ function lib_badge(string $slug): string
 
   // Swap a card's gradient placeholder for the freshly-saved thumbnail.
   function applyThumbToCard(src, folder, url) {
+    if (!url) return; // soft fail (folder not writable) — leave the placeholder
     const card = document.querySelector(
       `.lib-card[data-src="${CSS.escape(src)}"][data-folder="${CSS.escape(folder)}"]`);
     if (!card) return;
@@ -857,6 +895,12 @@ function lib_badge(string $slug): string
     try {
       const png = modalViewer.capturePNG(512);
       const url = await saveThumb(modalCtx.src, modalCtx.folder, png);
+      if (!url) {
+        // Soft fail — folder not writable (model added via network share).
+        mGenThumb.textContent = '✗ Folder read-only';
+        setTimeout(() => { mGenThumb.textContent = orig; mGenThumb.disabled = false; }, 2600);
+        return;
+      }
       applyThumbToCard(modalCtx.src, modalCtx.folder, url);
       mGenThumb.textContent = '✓ Saved';
       setTimeout(() => { mGenThumb.textContent = orig; mGenThumb.disabled = false; }, 1400);
@@ -994,5 +1038,6 @@ function lib_badge(string $slug): string
     }
   });
 </script>
+  <script src="js/theme.js"></script>
 </body>
 </html>

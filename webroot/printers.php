@@ -8,6 +8,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 require_once __DIR__ . '/printer_catalog.php';
 
 $csrf = csrf_token();
@@ -42,6 +44,7 @@ $catalog = printer_catalog();
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php">My Library</a>
+      <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php" class="active">My Printers</a>
       <a href="collections_view.php">Collections</a>
@@ -200,5 +203,6 @@ $catalog = printer_catalog();
     sync();
   });
 </script>
+  <script src="js/theme.js"></script>
 </body>
 </html>

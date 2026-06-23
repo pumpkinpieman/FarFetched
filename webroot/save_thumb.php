@@ -17,6 +17,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+if (!auth_check()) { http_response_code(401); header('Content-Type: application/json'); echo json_encode(['ok'=>false,'error'=>'auth required']); exit; }
 
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_start();
@@ -93,15 +95,32 @@ if (strlen($bytes) > 4 * 1024 * 1024) {
 
 // Write into the hidden sidecar folder so it never mixes with model files.
 $dir = $modelReal . '/.farfetched';
-if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
-    tfail('Could not create thumbnail folder.', 500);
+if (!is_dir($dir)) {
+    // A stale FILE named .farfetched would block mkdir — remove it if so.
+    if (is_file($dir)) {
+        @unlink($dir);
+    }
+    if (!@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        // Thumbnails are a nice-to-have. If the model folder isn't writable
+        // (e.g. it was added via the network share with host ownership the
+        // container user can't write), don't hard-fail with a 500 — report a
+        // soft, non-error response the client can quietly ignore.
+        echo json_encode([
+            'ok'      => false,
+            'soft'    => true,
+            'error'   => 'thumbnail folder not writable',
+            'writable' => is_writable($modelReal),
+        ]);
+        exit;
+    }
 }
 
 $tmp  = $dir . '/thumb.tmp';
 $dest = $dir . '/thumb.png';
 if (@file_put_contents($tmp, $bytes) === false || !@rename($tmp, $dest)) {
     @unlink($tmp);
-    tfail('Could not write thumbnail.', 500);
+    echo json_encode(['ok' => false, 'soft' => true, 'error' => 'thumbnail not writable']);
+    exit;
 }
 
 echo json_encode([

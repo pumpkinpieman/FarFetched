@@ -15,6 +15,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+if (!auth_check()) { http_response_code(401); exit; }
 
 $src   = (string) ($_GET['src'] ?? '');
 $model = (string) ($_GET['model'] ?? '');

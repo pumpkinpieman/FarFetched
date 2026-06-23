@@ -8,6 +8,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 
 $bySource = [];   // slug => ['models'=>, 'files'=>, 'bytes'=>]
 $byType   = [];   // ext => count
@@ -78,6 +80,7 @@ $srcColors = [
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php">My Library</a>
+      <a href="customize.php">Customize</a>
       <a href="insights.php" class="active">Insights</a>
       <a href="printers.php">My Printers</a>
       <a href="collections_view.php">Collections</a>
@@ -158,5 +161,6 @@ $srcColors = [
     sync();
   });
 </script>
+  <script src="js/theme.js"></script>
 </body>
 </html>

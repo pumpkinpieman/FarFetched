@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 
 $sources = list_sources();
 $bySlug  = [];
@@ -13,6 +15,8 @@ $fetchSources = [
     'cults3d'     => ['label' => 'Cults3D',     'desc' => 'Artistic & unique designs from the cults3d.com community',    'href' => 'index.php?src=cults3d&browse=all'],
     'stlflix'     => ['label' => 'STLFlix',     'desc' => 'Browse STLFlix platform categories and models',                'href' => 'index.php?src=stlflix&browse=all'],
     'creality'    => ['label' => 'Creality',    'desc' => 'Search & browse free models from crealitycloud.com',          'href' => 'index.php?src=creality'],
+    'nikko'       => ['label' => 'Nikko Industries', 'desc' => 'Browse the full membership library at nikkoindustriesmembership.com', 'href' => 'index.php?src=nikko&browse=all'],
+    'hex3dforum'  => ['label' => 'Hex3D Forum', 'desc' => 'Browse topics & attachments across the Hex3D Patreon members forum', 'href' => 'index.php?src=hex3dforum&browse=all'],
 ];
 
 $tiles = [];
@@ -156,6 +160,24 @@ foreach ($sources as $s) {
     </div>
 
     <div class="token-card">
+      <div class="token-source"><span></span>Nikko Industries</div>
+      <div class="browser-tabs"><span class="btab">Chrome</span><span class="btab">Firefox</span><span class="btab">Edge</span><span class="btab">Safari</span></div>
+      <div class="token-step">Log in to nikkoindustriesmembership.com with an active membership</div>
+      <div class="token-step">Open DevTools → <strong>Application/Storage</strong> tab → <strong>Cookies</strong></div>
+      <div class="token-step">Copy the entire cookie header for the site (or just <code>PHPSESSID</code> + any <code>wordpress_logged_in_*</code> cookie)</div>
+      <div class="token-note">No API exists here — this is a full browser session cookie. Re-paste when downloads start failing (no fixed expiry, varies by server config). Membership grants unlimited downloads of every model in the library.</div>
+    </div>
+
+    <div class="token-card">
+      <div class="token-source"><span></span>Hex3D Forum</div>
+      <div class="browser-tabs"><span class="btab">Chrome</span><span class="btab">Firefox</span><span class="btab">Edge</span><span class="btab">Safari</span></div>
+      <div class="token-step">Log in to hex3dpatreon.com with an active Patreon-linked account</div>
+      <div class="token-step">Open DevTools → <strong>Application/Storage</strong> tab → <strong>Cookies</strong></div>
+      <div class="token-step">Copy the entire cookie header for the site (phpBB session cookie + persistent login cookie if "Remember me" was checked)</div>
+      <div class="token-note">A phpBB forum, not an API — full browser session cookie required. You'll also need the forum IDs you want to browse (the number after <code>f=</code> in each forum's URL); paste them comma-separated in Settings. Re-paste the cookie when downloads start failing.</div>
+    </div>
+
+    <div class="token-card">
       <div class="token-source"><span></span>Safari users</div>
       <div class="browser-tabs"><span class="btab">Safari</span></div>
       <div class="token-step">Enable DevTools: <strong>Safari → Settings → Advanced → Show features for web developers</strong></div>
@@ -205,5 +227,6 @@ foreach ($sources as $s) {
   });
 </script>
 
+  <script src="js/theme.js"></script>
 </body>
 </html>

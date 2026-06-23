@@ -7,6 +7,8 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/auth.php';
+require_auth();
 
 /** Stable gradient from a name (self-contained; mirrors the library tile look). */
 function cv_tile_style(string $name): string
@@ -77,6 +79,7 @@ $csrf = csrf_token();
       <a href="jobs.php">Queue</a>
       <a href="viewer.php">3D Viewer</a>
       <a href="library.php">My Library</a>
+      <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
       <a href="collections_view.php" class="active">Collections</a>
@@ -110,18 +113,20 @@ $csrf = csrf_token();
     <?php else: ?>
       <div class="cv-pills-row">
         <div class="cv-pills">
-          <?php foreach ($cols as $c): ?>
-            <a class="cv-pill <?= (int) $c['id'] === $activeId ? 'active' : '' ?>" href="collections_view.php?id=<?= (int) $c['id'] ?>">
-              <?= e($c['name']) ?> <span class="cv-pill-cnt"><?= (int) $c['cnt'] ?></span>
-            </a>
+          <?php foreach ($cols as $c): $isActive = (int) $c['id'] === $activeId; ?>
+            <span class="cv-pill <?= $isActive ? 'active' : '' ?>">
+              <a class="cv-pill-link" href="collections_view.php?id=<?= (int) $c['id'] ?>">
+                <?= e($c['name']) ?> <span class="cv-pill-cnt"><?= (int) $c['cnt'] ?></span>
+              </a>
+              <?php if ($isActive): ?>
+                <span class="cv-pill-actions">
+                  <button class="cv-pill-ico" id="cvRename" data-id="<?= $activeId ?>" data-name="<?= e($activeName) ?>" title="Rename collection">✏️</button>
+                  <button class="cv-pill-ico" id="cvDelete" data-id="<?= $activeId ?>" title="Delete collection">🗑</button>
+                </span>
+              <?php endif; ?>
+            </span>
           <?php endforeach; ?>
         </div>
-        <?php if ($activeId > 0): ?>
-          <div class="cv-head-actions">
-            <button class="cv-icon-btn" id="cvRename" data-id="<?= $activeId ?>" data-name="<?= e($activeName) ?>" title="Rename collection">✏️</button>
-            <button class="cv-icon-btn cv-icon-danger" id="cvDelete" data-id="<?= $activeId ?>" title="Delete collection">🗑</button>
-          </div>
-        <?php endif; ?>
       </div>
 
       <?php if ($items === []): ?>
@@ -292,5 +297,6 @@ $csrf = csrf_token();
     sync();
   });
 </script>
+  <script src="js/theme.js"></script>
 </body>
 </html>
