@@ -13,6 +13,8 @@ require_auth();
 require_once __DIR__ . '/PrintablesService.php';
 require_once __DIR__ . '/STLFlixService.php';
 require_once __DIR__ . '/CrealityCloudService.php';
+require_once __DIR__ . '/NikkoService.php';
+require_once __DIR__ . '/Hex3DForumService.php';
 
 const CATEGORIES = [
     'all'         => 'All Categories',
@@ -95,7 +97,7 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
 }
 
 $source = strtolower($_GET['src'] ?? 'printables');
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality'], true)) {
+if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality', 'nikko', 'hex3dforum'], true)) {
     $source = 'printables';
 }
 
@@ -128,6 +130,43 @@ if ($source === 'creality' && creality_ready()) {
 if ($source === 'stlflix') {
     $stlflixCategories = (new STLFlixService())->categories();
     if (!array_key_exists($stlCat, $stlflixCategories)) { $stlCat = ''; }
+}
+
+// Nikko Industries category browse state.
+$nikkoCategories = ['' => 'All Models'];
+$nikkoCat    = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['nikkocat'] ?? '')));
+$nikkoBrowse = $source === 'nikko' && (isset($_GET['nikkocat']) || isset($_GET['browse']));
+if ($source === 'nikko') {
+    $nikkoCategories = (new NikkoService())->categories();
+    if (!array_key_exists($nikkoCat, $nikkoCategories)) { $nikkoCat = ''; }
+}
+
+// Hex3D Forum: browse by a configured forum ID instead of a scraped category
+// tree — the board has ~80 forums across nested categories, more than makes
+// sense as a fixed dropdown. Settings → Hex3D Forum is where the ID list
+// (and each one's display name) is maintained.
+$hex3dforumIds = hex3dforum_ids();
+$hex3dforumCategories = [];
+foreach ($hex3dforumIds as $fid) {
+    $hex3dforumCategories[$fid] = $fid; // label resolved client-side via forumName() below
+}
+$hex3dforumCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['hex3dforum_id'] ?? ''));
+$hex3dforumBrowse = $source === 'hex3dforum' && (isset($_GET['hex3dforum_id']) || isset($_GET['browse']));
+if ($source === 'hex3dforum') {
+    if (!array_key_exists($hex3dforumCat, $hex3dforumCategories)) {
+        $hex3dforumCat = $hex3dforumIds[0] ?? '';
+    }
+    // Resolve real forum names for display — one request per configured forum,
+    // acceptable since this list is short and only fetched when this source's
+    // sidebar is actually being rendered.
+    if ($hex3dforumIds !== []) {
+        $hex3dSvc = new Hex3DForumService();
+        if ($hex3dSvc->isAuthed()) {
+            foreach ($hex3dforumIds as $fid) {
+                $hex3dforumCategories[$fid] = $hex3dSvc->forumName($fid);
+            }
+        }
+    }
 }
 
 if ($source === 'makerworld') {
@@ -177,6 +216,30 @@ if ($source === 'makerworld') {
     } else {
         $models = [];
         $banner = 'Creality Cloud — add your token and user ID in Settings to search and download.';
+    }
+} elseif ($source === 'nikko') {
+    $svc           = null;
+    $initialCursor = null;
+    $nikkoReadyIdx = (string) cfg('nikko_cookie') !== '';
+    if ($nikkoReadyIdx) {
+        $models = (new NikkoService())->search('', 20, 0, $nikkoCat);
+        $banner = null;
+    } else {
+        $models = [];
+        $banner = 'Nikko Industries — add your session cookie in Settings to browse and download.';
+    }
+} elseif ($source === 'hex3dforum') {
+    $svc           = null;
+    $initialCursor = null;
+    $hex3dforumReadyIdx = (string) cfg('hex3dforum_cookie') !== '';
+    if ($hex3dforumReadyIdx && $hex3dforumCat !== '') {
+        $models = (new Hex3DForumService())->browse($hex3dforumCat, 20, 0);
+        $banner = null;
+    } else {
+        $models = [];
+        $banner = !$hex3dforumReadyIdx
+            ? 'Hex3D Forum — add your session cookie in Settings to browse and download.'
+            : 'Hex3D Forum — add at least one forum ID in Settings to browse.';
     }
 } else {
     $svc    = new PrintablesService();
@@ -274,6 +337,25 @@ $csrf = csrf_token();
         </div>
       <?php endforeach; ?>
     </nav>
+    <?php elseif ($source === 'nikko'): ?>
+    <div class="navlabel">Nikko Industries Categories</div>
+    <nav id="nikkoCatNav">
+      <?php foreach ($nikkoCategories as $cid => $label): $cid = (string) $cid; ?>
+        <a href="javascript:void(0)" data-nikkocat="<?= e($cid) ?>" data-nikkolabel="<?= e($label) ?>"
+           class="<?= ($nikkoBrowse && $cid === $nikkoCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+      <?php endforeach; ?>
+    </nav>
+    <?php elseif ($source === 'hex3dforum'): ?>
+    <div class="navlabel">Hex3D Forum</div>
+    <nav id="hex3dforumCatNav">
+      <?php if ($hex3dforumCategories === []): ?>
+        <a href="settings.php" class="hint" style="display:block;padding:9px 12px;color:var(--muted);font-size:13px;">No forum IDs configured — add some in Settings.</a>
+      <?php endif; ?>
+      <?php foreach ($hex3dforumCategories as $fid => $label): $fid = (string) $fid; ?>
+        <a href="javascript:void(0)" data-hex3dforumcat="<?= e($fid) ?>" data-hex3dforumlabel="<?= e($label) ?>"
+           class="<?= ($fid === $hex3dforumCat) ? 'active' : '' ?>"><?= e($label) ?></a>
+      <?php endforeach; ?>
+    </nav>
     <?php else: ?>
     
 
@@ -315,6 +397,8 @@ $csrf = csrf_token();
           <a href="?src=cults3d&browse=all" class="srcBtn <?= $source==='cults3d'?'active':'' ?>">Cults3D</a>
           <a href="?src=stlflix&browse=all" class="srcBtn <?= $source==='stlflix'?'active':'' ?>">STLFlix</a>
           <a href="?src=creality" class="srcBtn <?= $source==='creality'?'active':'' ?>">Creality</a>
+          <a href="?src=nikko&browse=all" class="srcBtn <?= $source==='nikko'?'active':'' ?>">Nikko Industries</a>
+          <a href="?src=hex3dforum&browse=all" class="srcBtn <?= $source==='hex3dforum'?'active':'' ?>">Hex3D Forum</a>
         </div>
         <?php if ($source === 'printables'): ?>
         <select id="fileType" onchange="location.href='?cat=<?= e($active) ?>&type='+this.value">
@@ -726,6 +810,10 @@ $csrf = csrf_token();
   const CULTS_BROWSE = <?= json_encode($cultsBrowse) ?>;
   const STL_CAT    = <?= json_encode($stlCat) ?>;
   const STL_BROWSE = <?= json_encode($stlBrowse) ?>;
+  const NIKKO_CAT    = <?= json_encode($nikkoCat) ?>;
+  const NIKKO_BROWSE = <?= json_encode($nikkoBrowse) ?>;
+  const HEX3DFORUM_CAT    = <?= json_encode($hex3dforumCat) ?>;
+  const HEX3DFORUM_BROWSE = <?= json_encode($hex3dforumBrowse) ?>;
   let mwCatActive = '';
   let pbCatActive = ACTIVE_CAT;
 
@@ -749,7 +837,11 @@ $csrf = csrf_token();
         (SOURCE === 'cults3d' && searchQuery === '' ? '&browse=1' : '') +
         (SOURCE === 'creality' && (window._crealityCatActive ?? CREALITY_CAT) !== '' ? '&crealitycat=' + encodeURIComponent(window._crealityCatActive ?? CREALITY_CAT) : '') +
         (SOURCE === 'stlflix' && (window._stlCatActive ?? STL_CAT) !== '' ? '&stlcat=' + encodeURIComponent(window._stlCatActive ?? STL_CAT) : '') +
-        (SOURCE === 'stlflix' && searchQuery === '' ? '&browse=1' : '')
+        (SOURCE === 'stlflix' && searchQuery === '' ? '&browse=1' : '') +
+        (SOURCE === 'nikko' && (window._nikkoCatActive ?? NIKKO_CAT) !== '' ? '&nikkocat=' + encodeURIComponent(window._nikkoCatActive ?? NIKKO_CAT) : '') +
+        (SOURCE === 'nikko' && searchQuery === '' ? '&browse=1' : '') +
+        (SOURCE === 'hex3dforum' ? '&hex3dforum_id=' + encodeURIComponent(window._hex3dforumCatActive ?? HEX3DFORUM_CAT) : '') +
+        (SOURCE === 'hex3dforum' ? '&browse=1' : '')
       : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
         '&cursor=' + encodeURIComponent(nextCursor || '');
 
@@ -907,6 +999,19 @@ $csrf = csrf_token();
     browseSTLFlixCategory(STL_CAT, lbl);
   }
 
+  if (SOURCE === 'nikko' && NIKKO_BROWSE) {
+    window._nikkoCatActive = NIKKO_CAT;
+    const lbl = (document.querySelector('#nikkoCatNav a.active') || {}).textContent || 'All Models';
+    browseNikkoCategory(NIKKO_CAT, lbl);
+  }
+
+  if (SOURCE === 'hex3dforum') {
+    // Server already rendered the first page for the active forum ID; just
+    // remember it so "Load more" keeps requesting the same forum.
+    window._hex3dforumCatActive = HEX3DFORUM_CAT || '';
+    mode = 'search';
+  }
+
   // MW category nav
   const mwCatNav = document.getElementById('mwCatNav');
   if (mwCatNav) {
@@ -1047,6 +1152,59 @@ $csrf = csrf_token();
     refresh();
     loading = false;
     window._stlCatActive = catId;
+    await loadMore();
+  }
+
+  // Nikko Industries category nav — same browse-by-category pattern as STLFlix.
+  const nikkoCatNav = document.getElementById('nikkoCatNav');
+  if (nikkoCatNav) {
+    nikkoCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-nikkolabel]');
+      if (!link) return;
+      e.preventDefault();
+      nikkoCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browseNikkoCategory(link.dataset.nikkocat, link.dataset.nikkolabel);
+    });
+  }
+
+  async function browseNikkoCategory(catId, label) {
+    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
+    mwCatActive = '';
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'Nikko Industries';
+    if (searchClear) searchClear.style.display = 'none';
+    refresh();
+    loading = false;
+    window._nikkoCatActive = catId;
+    await loadMore();
+  }
+
+  // Hex3D Forum nav — picks which configured forum ID to browse, rather than
+  // a scraped category tree. Same paged "search" mode as the other sources.
+  const hex3dforumCatNav = document.getElementById('hex3dforumCatNav');
+  if (hex3dforumCatNav) {
+    hex3dforumCatNav.addEventListener('click', e => {
+      const link = e.target.closest('a[data-hex3dforumlabel]');
+      if (!link) return;
+      e.preventDefault();
+      hex3dforumCatNav.querySelectorAll('a').forEach(a => a.classList.remove('active'));
+      link.classList.add('active');
+      browseHex3DForum(link.dataset.hex3dforumcat, link.dataset.hex3dforumlabel);
+    });
+  }
+
+  async function browseHex3DForum(forumId, label) {
+    mode = 'search'; searchQuery = ''; searchNext = 0; nextCursor = null;
+    mwCatActive = '';
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = label || 'Hex3D Forum';
+    if (searchClear) searchClear.style.display = 'none';
+    refresh();
+    loading = false;
+    window._hex3dforumCatActive = forumId;
     await loadMore();
   }
 
