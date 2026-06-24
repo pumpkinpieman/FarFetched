@@ -22,6 +22,8 @@ require_once __DIR__ . '/ThingiverseService.php';
 require_once __DIR__ . '/Cults3DService.php';
 require_once __DIR__ . '/STLFlixService.php';
 require_once __DIR__ . '/CrealityCloudService.php';
+require_once __DIR__ . '/NikkoService.php';
+require_once __DIR__ . '/Hex3DForumService.php';
 
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
@@ -30,7 +32,7 @@ function r_out(array $payload): void { echo json_encode($payload); exit; }
 function r_fail(string $msg): void { r_out(['ok' => false, 'error' => $msg, 'models' => []]); }
 
 $source = strtolower(trim((string) ($_GET['src'] ?? '')));
-$valid  = ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality'];
+$valid  = ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality', 'nikko', 'hex3dforum'];
 if (!in_array($source, $valid, true)) {
     r_fail('Unknown source.');
 }
@@ -117,6 +119,25 @@ try {
         $ids = array_values(array_unique(array_filter($ids)));
         $cat = $ids !== [] ? $ids[array_rand($ids)] : '';
         $models = $cc->browseCategory($cat, 24, max(1, mt_rand(1, 2)));
+
+    } elseif ($source === 'nikko') {
+        if ((string) cfg('nikko_phpsessid') === '') r_fail('Add your Nikko Industries session cookie in Settings first.');
+        $svc  = new NikkoService();
+        // Random category from the real list, plus a random early page for
+        // variety (offset = page-1 * 20). Falls back to the full library.
+        $cats = array_keys($svc->categories());
+        $cats = array_values(array_filter($cats, static fn($c) => $c !== ''));
+        $cat  = $cats !== [] ? (string) $cats[array_rand($cats)] : '';
+        $offset = 20 * mt_rand(0, 4);
+        $models = $svc->search('', 20, $offset, $cat);
+
+    } elseif ($source === 'hex3dforum') {
+        if ((string) cfg('hex3dforum_cookie') === '') r_fail('Add your Hex3D Forum session cookie in Settings first.');
+        $ids = hex3dforum_ids();
+        if ($ids === []) r_fail('Add at least one Hex3D Forum ID in Settings first.');
+        $svc = new Hex3DForumService();
+        $fid = (string) $ids[array_rand($ids)];
+        $models = $svc->browse($fid, 20, 0);
     }
 
     if (!is_array($models) || $models === []) {
