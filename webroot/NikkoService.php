@@ -114,10 +114,26 @@ final class NikkoService
     }
 
     /**
-     * Browse the library catalog, optionally filtered by category and/or a
-     * keyword (keyword filtering is done client-side against scraped titles —
-     * the site's own search box is a separate AJAX endpoint we don't rely on,
-     * since pagination-by-page-number covers everything the catalog has).
+     * Browse/search the library catalog via the theme's admin-ajax endpoint —
+     * the ONLY thing that actually paginates. The visible /page/N/ URLs are
+     * decorative (JS-intercepted); plain GETs to them return page 1 every time.
+     * Confirmed mechanism (no nonce required):
+     *
+     *   GET /wp-admin/admin-ajax.php
+     *       ?action=get_archive_search_results
+     *       &post_type=product&taxonomy=product_cat&orderby=date
+     *       &s={keyword}                         (optional)
+     *       &category[]={slug}                   (optional)
+     *       &paged={n}
+     *       &query_vars[post_type]=product
+     *       &query_vars[paged]={n}
+     *       &query_vars[posts_per_page]=20
+     *       &query_vars[orderby]=date
+     *   Header: X-Requested-With: XMLHttpRequest
+     *
+     * Response is JSON: { title, pagination, main, message }. `main` holds the
+     * products-list-item card HTML (20/page), which feeds extractListing()
+     * unchanged. `pagination` carries the "of N results" total.
      *
      * @return array<int,array<string,mixed>>
      */
@@ -126,30 +142,65 @@ final class NikkoService
         $this->lastError = '';
         $this->lastTotal = 0;
 
-        // WordPress paginates in fixed pages of ~20; map offset -> page number.
         $perPage = 20;
         $page    = (int) floor($offset / $perPage) + 1;
 
-        $url = $categorySlug !== ''
-            ? self::BASE . '/product-category/' . rawurlencode($categorySlug) . '/'
-            : self::BASE . self::LIBRARY_PATH;
-        if ($page > 1) {
-            $url = rtrim($url, '/') . '/page/' . $page . '/';
+        $params = [
+            'action'                      => 'get_archive_search_results',
+            'post_type'                   => 'product',
+            'taxonomy'                    => 'product_cat',
+            'orderby'                     => 'date',
+            'paged'                       => (string) $page,
+            'query_vars[post_type]'       => 'product',
+            'query_vars[paged]'           => (string) $page,
+            'query_vars[posts_per_page]'  => '20',
+            'query_vars[orderby]'         => 'date',
+        ];
+        if ($query !== '') {
+            $params['s'] = $query;
         }
 
-        $html = $this->getHtml($url);
-        if ($html === null) {
+        $url = self::BASE . '/wp-admin/admin-ajax.php?' . http_build_query($params);
+
+        // category[] must use empty brackets (category%5B%5D=slug), but
+        // http_build_query would render an indexed category%5B0%5D — so append
+        // it manually to match the site's expected WooCommerce filter format.
+        if ($categorySlug !== '') {
+            $url .= '&category%5B%5D=' . rawurlencode($categorySlug);
+        }
+
+        $json = $this->getHtml($url, ['X-Requested-With: XMLHttpRequest']);
+        if ($json === null) {
             return [];
         }
 
-        $this->lastTotal = $this->extractTotal($html);
-        $items = $this->extractListing($html);
+        $data = json_decode($json, true);
+        if (!is_array($data) || !isset($data['main'])) {
+            $this->lastError = 'Unexpected response from Nikko catalog endpoint.';
+            return [];
+        }
 
-        if ($query !== '') {
-            $needle = mb_strtolower($query);
-            $items = array_values(array_filter($items, static function ($it) use ($needle) {
-                return mb_strpos(mb_strtolower($it['name']), $needle) !== false;
-            }));
+        $items = $this->extractListing((string) $data['main']);
+
+        // The "of N results" total appears in the response, but which JSON
+        // field carries it has proven unreliable to assume — search the whole
+        // decoded payload. If still not found, fall back to page-fullness (a
+        // full page of 20 implies more remain), so pagination never silently
+        // stalls at 20 the way it did when this relied on a single field that
+        // turned out empty.
+        $haystack = '';
+        foreach (['pagination', 'main', 'title', 'message'] as $k) {
+            if (isset($data[$k]) && is_string($data[$k])) {
+                $haystack .= ' ' . $data[$k];
+            }
+        }
+        $this->lastTotal = $this->extractTotal($haystack);
+        if ($this->lastTotal === 0 && count($items) >= 20) {
+            // Unknown total but clearly more than one page — signal "keep
+            // going" so search_more.php's (offset+limit < total) test keeps
+            // advancing. A real end-of-list returns < 20 items, leaving total
+            // 0, which correctly stops paging.
+            $this->lastTotal = PHP_INT_MAX;
         }
 
         return array_slice($items, 0, $limit);
@@ -165,80 +216,78 @@ final class NikkoService
     }
 
     /**
-     * Pull product entries off a listing/category page. Confirmed against a
-     * live page capture — this theme is a custom component (not stock
-     * WooCommerce or Elementor's product-grid widget), so the markup doesn't
-     * match either's usual conventions:
+     * Pull product entries off a listing/category page. Confirmed against live
+     * page captures — this theme is a custom component (not stock WooCommerce
+     * or Elementor's product-grid widget). The markup, importantly, puts the
+     * CSS class BEFORE the href on the image-wrapper anchor:
      *
-     *   <div class="products-list-item ...">
-     *     <a href=".../product/{slug}/" class="products-list-item__image-wrapper">
-     *       <div class="products-list-item__image" style="background-image: url(...);">
-     *     <div class="products-list-item__tags ...">
-     *       <a href=".../product-category/{slug}/">{Label}</a>, <a ...>{Label}</a>
-     *     <a href=".../product/{slug}/" class="products-list-item__title">
-     *       ... <span class="products-list-item__title-text-content" ...>{Title}<style>...</style></span>
+     *   <div class="products-list-item js-products-list-item ">
+     *     <div class="products-list-item__inner">
+     *       <a class="products-list-item__image-wrapper" href=".../product/{slug}/">
+     *         <div class="products-list-item__image" style="background-image: url(...);">
+     *       <div class="products-list-item__tags ...">...</div>
+     *       <a class="products-list-item__title" href=".../product/{slug}/">
+     *         <span class="products-list-item__title-text-content" ...>{Title}<style>…</style></span>
      *
-     * Each card's title text is immediately followed by an inline <style>
-     * block (a per-card marquee animation) before the closing </span> — the
-     * capture below stops at the first '<' so that style block is excluded
-     * automatically.
+     * Earlier versions assumed href-before-class and silently matched nothing
+     * (every card "no preview", titles via slug fallback). This version pulls
+     * each field independently and never depends on attribute order.
      *
      * @return array<int,array<string,mixed>>
      */
     private function extractListing(string $html): array
     {
-        $out = [];
+        $out  = [];
+        $seen = [];
 
-        if (!preg_match_all(
-            '#<div class="products-list-item(?:\s[^"]*)?">(.*?)</div>\s*</div>\s*</div>#is',
-            $html,
-            $blocks
-        )) {
-            return $out;
-        }
+        // The catalog HTML can arrive two ways: a normal page fetch (clean
+        // markup) or the `main` field of the admin-ajax JSON. The JSON-embedded
+        // form keeps escaped double-quotes (\") on attributes and escaped
+        // slashes (\/) in URLs, and uses single quotes on the style attribute.
+        // Normalize the escapes so every per-card regex below matches the same
+        // way regardless of which source the HTML came from.
+        $html = str_replace(['\\/', '\\"', '&#47;', '&#038;'], ['/', '"', '/', '&'], $html);
 
-        foreach ($blocks[1] as $block) {
-            if (!preg_match(
-                '#href="https://nikkoindustriesmembership\.com/product/([a-z0-9\-]+)/?"\s+class="products-list-item__image-wrapper"#i',
-                $block,
-                $slugM
-            )) {
+        // Each card opens with this div; split the page on it so per-card
+        // regexes don't bleed across items. The class list varies (grid sizing
+        // utilities), so match the prefix loosely.
+        $cards = preg_split('#(?=<div class="products-list-item(?:[ "]))#i', $html);
+
+        foreach ($cards as $block) {
+            // Slug: any /product/{slug}/ link in this card, regardless of which
+            // attribute (class or href) comes first.
+            if (!preg_match('#/product/([a-z0-9\-]+)/?["\']#i', $block, $slugM)) {
                 continue;
             }
             $slug = strtolower($slugM[1]);
+            if (isset($seen[$slug])) continue;   // de-dupe cards that repeat the link
+            $seen[$slug] = true;
 
+            // Title text — the __title-text-content span, stopping before the
+            // inline <style> the theme appends inside it.
             $name = '';
-            if (preg_match(
-                '#class="products-list-item__title-text-content[^"]*"[^>]*>([^<]+)#i',
-                $block,
-                $nm
-            )) {
+            if (preg_match('#products-list-item__title-text-content[^"]*"[^>]*>\s*([^<]+?)\s*<#i', $block, $nm)) {
                 $name = trim(html_entity_decode($nm[1], ENT_QUOTES));
             }
             if ($name === '') {
                 $name = $this->titleFromSlug($slug);
             }
 
+            // Thumbnail — background-image url on the __image div. The style
+            // attribute may use single OR double quotes (the AJAX-sourced
+            // markup uses single), so don't hard-code either; just look for
+            // the class followed (within the same tag) by background-image.
             $thumb = '';
-            if (preg_match(
-                '#class="products-list-item__image"\s+style="background-image:\s*url\(([^)]+)\)#i',
-                $block,
-                $tm
-            )) {
+            if (preg_match('#products-list-item__image[^>]*background-image:\s*url\(([^)]+)\)#i', $block, $tm)) {
                 $thumb = $this->absoluteUrl(trim($tm[1], "'\" "));
             }
 
+            // Category tag labels (best-effort; purely cosmetic "creator" line).
             $cats = [];
-            if (preg_match(
-                '#class="products-list-item__tags[^"]*"[^>]*>(.*?)</div>#is',
-                $block,
-                $tagBlockM
-            )) {
-                if (preg_match_all('#<a[^>]+href="[^"]*product-category/[a-z0-9\-]+/?"[^>]*>\s*([^<]+?)\s*</a>#i', $tagBlockM[1], $cm)) {
-                    foreach ($cm[1] as $label) {
-                        $label = trim(html_entity_decode($label, ENT_QUOTES));
-                        if ($label !== '') $cats[] = $label;
-                    }
+            if (preg_match_all('#product-category/[a-z0-9\-]+/?"[^>]*>\s*([^<]+?)\s*</a>#i', $block, $cm)) {
+                foreach ($cm[1] as $label) {
+                    $label = trim(html_entity_decode($label, ENT_QUOTES));
+                    if ($label !== '' && !in_array($label, $cats, true)) $cats[] = $label;
                 }
             }
 
@@ -433,7 +482,6 @@ final class NikkoService
             CURLOPT_USERAGENT      => self::UA,
             CURLOPT_REFERER        => $refererUrl,
             CURLOPT_HTTPHEADER     => $headers,
-            CURLINFO_HEADER_OUT    => true,
             CURLOPT_HEADERFUNCTION => function ($ch, string $line) use (&$headerText): int {
                 $headerText .= $line;
                 return strlen($line);
@@ -446,15 +494,8 @@ final class NikkoService
         ]);
         curl_exec($ch);
         $st  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $sentHeaders = (string) curl_getinfo($ch, CURLINFO_HEADER_OUT);
         $err = curl_error($ch);
         curl_close($ch);
-
-        // One-shot diagnostic: dump exactly what we sent + the status we got,
-        // so a 404 can be diffed against a known-good manual curl. Written to a
-        // world-readable temp file; remove this block once the flow is solid.
-        @file_put_contents('/tmp/nikko_download_debug.txt',
-            "URL: $downloadUrl\nSTATUS: $st\n\n--- REQUEST HEADERS PHP SENT ---\n$sentHeaders\n\n--- RESPONSE HEADERS ---\n$headerText\n");
 
         if ($err !== '') {
             $this->lastError = 'Network error resolving download link: ' . $err;
@@ -555,7 +596,7 @@ final class NikkoService
 
     // ---- Private helpers ---------------------------------------------------
 
-    private function getHtml(string $url): ?string
+    private function getHtml(string $url, array $extraHeaders = []): ?string
     {
         if (!$this->isAuthed()) {
             $this->lastError = 'No Nikko session cookie set (paste in Settings).';
@@ -570,10 +611,14 @@ final class NikkoService
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_USERAGENT      => self::UA,
-            CURLOPT_HTTPHEADER     => [
+            // The admin-ajax endpoint gzips its JSON; without this curl returns
+            // the compressed bytes and json_decode fails. CURLOPT_ENCODING ''
+            // tells curl to advertise + transparently decode all it supports.
+            CURLOPT_ENCODING       => '',
+            CURLOPT_HTTPHEADER     => array_merge([
                 'Cookie: ' . $this->cookie,
-                'Accept: text/html,application/xhtml+xml',
-            ],
+                'Accept: text/html,application/xhtml+xml,*/*;q=0.8',
+            ], $extraHeaders),
         ]);
         $body = curl_exec($ch);
         $st   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);

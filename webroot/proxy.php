@@ -27,6 +27,7 @@ $ALLOWED_HOSTS = [
     's3.us-east-2.amazonaws.com',
     'static.stlflix.com',
     'stlflix.b-cdn.net',
+    'nikkoindustriesmembership.com',
 ];
 
 $url = trim((string) ($_GET['url'] ?? ''));

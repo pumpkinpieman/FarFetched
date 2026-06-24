@@ -459,7 +459,7 @@ $csrf = csrf_token();
           <div class="thumb">
             <?php
               $thumbUrl = (string) $m['thumb'];
-              if ($thumbUrl !== '' && in_array($source, ['cults3d', 'thingiverse'], true)) {
+              if ($thumbUrl !== '' && in_array($source, ['cults3d', 'thingiverse', 'nikko'], true)) {
                   $thumbUrl = 'proxy.php?url=' . urlencode($thumbUrl);
               }
             ?>
@@ -652,7 +652,7 @@ $csrf = csrf_token();
   }
 
   // Proxy CDN images that block cross-origin requests.
-  const PROXY_SOURCES = ['cults3d', 'thingiverse'];
+  const PROXY_SOURCES = ['cults3d', 'thingiverse', 'nikko'];
   function thumbSrc(url) {
     if (!url) return '';
     if (PROXY_SOURCES.includes(SOURCE)) return 'proxy.php?url=' + encodeURIComponent(url);
