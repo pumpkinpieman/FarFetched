@@ -164,7 +164,7 @@ foreach ($sources as $s) {
       <div class="browser-tabs"><span class="btab">Chrome</span><span class="btab">Firefox</span><span class="btab">Edge</span><span class="btab">Safari</span></div>
       <div class="token-step">Log in to nikkoindustriesmembership.com with an active membership</div>
       <div class="token-step">Open DevTools → <strong>Application/Storage</strong> tab → <strong>Cookies</strong></div>
-      <div class="token-step">Copy the entire cookie header for the site (or just <code>PHPSESSID</code> + any <code>wordpress_logged_in_*</code> cookie)</div>
+      <div class="token-step">Copy <code>PHPSESSID</code> into the first field, then copy the entire <code>wordpress_logged_in_xxx=value</code> row into the second</div>
       <div class="token-note">No API exists here — this is a full browser session cookie. Re-paste when downloads start failing (no fixed expiry, varies by server config). Membership grants unlimited downloads of every model in the library.</div>
     </div>
 

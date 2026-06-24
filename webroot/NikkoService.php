@@ -39,10 +39,41 @@ final class NikkoService
     public int    $lastTotal = 0;
 
     private string $cookie;
+    private string $deliverySessionCookie = '';
 
-    public function __construct(?string $cookie = null)
+    /**
+     * Accepts either two separate values (PHPSESSID, wordpress_logged_in_*)
+     * which are combined into a Cookie header internally, or — for backward
+     * compatibility with anything that already passes a full pre-built header
+     * — a single string in $phpSessId containing the whole thing (detected by
+     * the presence of an '=' before any ';', i.e. it already looks like a
+     * Cookie header rather than a bare session ID).
+     */
+    public function __construct(?string $phpSessId = null, ?string $wpLoggedIn = null)
     {
-        $this->cookie = trim($cookie ?? (function_exists('cfg') ? (string) cfg('nikko_cookie') : ''));
+        if ($phpSessId !== null && $wpLoggedIn === null && str_contains($phpSessId, '=')) {
+            // Whole header passed in directly.
+            $this->cookie = trim($phpSessId);
+            return;
+        }
+
+        $sess  = trim($phpSessId ?? (function_exists('cfg') ? (string) cfg('nikko_phpsessid') : ''));
+        $login = trim($wpLoggedIn ?? (function_exists('cfg') ? (string) cfg('nikko_wp_logged_in') : ''));
+
+        $parts = [];
+        if ($sess !== '')  $parts[] = 'PHPSESSID=' . $sess;
+        if ($login !== '') {
+            // WordPress's auth check validates against a specific cookie name
+            // — wordpress_logged_in_{hash}, where the hash suffix is derived
+            // from the site URL — not a generic "wordpress_logged_in". A bare
+            // value with no name has nothing correct to attach to, so require
+            // the full "name=value" pair here rather than guessing a name that
+            // WordPress won't recognize.
+            if (str_contains($login, '=')) {
+                $parts[] = $login;
+            }
+        }
+        $this->cookie = implode('; ', $parts);
     }
 
     public function isAuthed(): bool
@@ -134,10 +165,23 @@ final class NikkoService
     }
 
     /**
-     * Pull product entries off a listing/category page. Each WooCommerce
-     * product block in this theme renders as an <li class="product"> with a
-     * permalink, a title, an <img>, and category links — extracted via
-     * targeted regex since there is no JSON endpoint to hit instead.
+     * Pull product entries off a listing/category page. Confirmed against a
+     * live page capture — this theme is a custom component (not stock
+     * WooCommerce or Elementor's product-grid widget), so the markup doesn't
+     * match either's usual conventions:
+     *
+     *   <div class="products-list-item ...">
+     *     <a href=".../product/{slug}/" class="products-list-item__image-wrapper">
+     *       <div class="products-list-item__image" style="background-image: url(...);">
+     *     <div class="products-list-item__tags ...">
+     *       <a href=".../product-category/{slug}/">{Label}</a>, <a ...>{Label}</a>
+     *     <a href=".../product/{slug}/" class="products-list-item__title">
+     *       ... <span class="products-list-item__title-text-content" ...>{Title}<style>...</style></span>
+     *
+     * Each card's title text is immediately followed by an inline <style>
+     * block (a per-card marquee animation) before the closing </span> — the
+     * capture below stops at the first '<' so that style block is excluded
+     * automatically.
      *
      * @return array<int,array<string,mixed>>
      */
@@ -145,22 +189,30 @@ final class NikkoService
     {
         $out = [];
 
-        // Split on product permalinks; each /product/{slug}/ anchor starts a
-        // new card in this theme's markup.
-        if (!preg_match_all('#<li[^>]+class="[^"]*\bproduct\b[^"]*"[^>]*>(.*?)</li>#is', $html, $blocks)) {
+        if (!preg_match_all(
+            '#<div class="products-list-item(?:\s[^"]*)?">(.*?)</div>\s*</div>\s*</div>#is',
+            $html,
+            $blocks
+        )) {
             return $out;
         }
 
         foreach ($blocks[1] as $block) {
-            if (!preg_match('#href="https://nikkoindustriesmembership\.com/product/([a-z0-9\-]+)/?"#i', $block, $slugM)) {
+            if (!preg_match(
+                '#href="https://nikkoindustriesmembership\.com/product/([a-z0-9\-]+)/?"\s+class="products-list-item__image-wrapper"#i',
+                $block,
+                $slugM
+            )) {
                 continue;
             }
             $slug = strtolower($slugM[1]);
 
             $name = '';
-            if (preg_match('#<h2[^>]*class="[^"]*woocommerce-loop-product__title[^"]*"[^>]*>(.*?)</h2>#is', $block, $nm)) {
-                $name = trim(html_entity_decode(strip_tags($nm[1]), ENT_QUOTES));
-            } elseif (preg_match('#<img[^>]+alt="([^"]+)"#i', $block, $nm)) {
+            if (preg_match(
+                '#class="products-list-item__title-text-content[^"]*"[^>]*>([^<]+)#i',
+                $block,
+                $nm
+            )) {
                 $name = trim(html_entity_decode($nm[1], ENT_QUOTES));
             }
             if ($name === '') {
@@ -168,15 +220,25 @@ final class NikkoService
             }
 
             $thumb = '';
-            if (preg_match('#<img[^>]+(?:data-src|src)="([^"]+)"#i', $block, $tm)) {
-                $thumb = $this->absoluteUrl($tm[1]);
+            if (preg_match(
+                '#class="products-list-item__image"\s+style="background-image:\s*url\(([^)]+)\)#i',
+                $block,
+                $tm
+            )) {
+                $thumb = $this->absoluteUrl(trim($tm[1], "'\" "));
             }
 
             $cats = [];
-            if (preg_match_all('#product-category/([a-z0-9\-]+)/?"[^>]*>\s*([^<]+?)\s*<#i', $block, $cm)) {
-                foreach ($cm[2] as $label) {
-                    $label = trim(html_entity_decode($label, ENT_QUOTES));
-                    if ($label !== '') $cats[] = $label;
+            if (preg_match(
+                '#class="products-list-item__tags[^"]*"[^>]*>(.*?)</div>#is',
+                $block,
+                $tagBlockM
+            )) {
+                if (preg_match_all('#<a[^>]+href="[^"]*product-category/[a-z0-9\-]+/?"[^>]*>\s*([^<]+?)\s*</a>#i', $tagBlockM[1], $cm)) {
+                    foreach ($cm[1] as $label) {
+                        $label = trim(html_entity_decode($label, ENT_QUOTES));
+                        if ($label !== '') $cats[] = $label;
+                    }
                 }
             }
 
@@ -230,8 +292,39 @@ final class NikkoService
             return [];
         }
 
-        $downloadUrl = 'https://delivery.shopifyapps.com/-/' . $m[1] . '/' . $m[2] . '/download';
-        $signedUrl = $this->resolveSignedUrl($downloadUrl);
+        $landingUrl = 'https://delivery.shopifyapps.com/-/' . $m[1] . '/' . $m[2];
+
+        // The /download endpoint requires a ?download={exact filename} query
+        // param — confirmed via live capture (the button's underlying form on
+        // the landing page is method="get" action=".../download", and the
+        // submitted button value is the literal filename). Fetch the landing
+        // page first: it both carries that filename in the form, AND issues a
+        // delivery_app_session cookie that the /download request must echo back
+        // (captured inside fetchPublic, replayed inside resolveSignedUrl).
+        $landingHtml = $this->fetchPublic($landingUrl);
+        if ($landingHtml === null) {
+            // fetchPublic() already set a specific lastError (HTTP status,
+            // curl error) — keep it rather than overwriting with something
+            // vaguer, since that detail is what actually narrows down issues
+            // like Cloudflare bot-blocking vs. a dead/expired link.
+            if ($this->lastError === '') {
+                $this->lastError = 'Could not load the Shopify Digital Downloads landing page.';
+            }
+            return [];
+        }
+
+        // <button type="submit" ... name="download" value="Exact File Name.zip">
+        if (!preg_match('#name="download"\s+value="([^"]+)"#i', $landingHtml, $fm)) {
+            $this->lastError = 'Could not find a filename on the Shopify Digital Downloads landing page.';
+            return [];
+        }
+        $filename = html_entity_decode($fm[1], ENT_QUOTES);
+
+        // Match the browser's exact wire format: the form submits this as a GET
+        // query param, which application/x-www-form-urlencoded encodes spaces
+        // as '+' (not %20). Shopify's endpoint has proven picky, so mirror it.
+        $downloadUrl = $landingUrl . '/download?download=' . str_replace('%20', '+', rawurlencode($filename));
+        $signedUrl = $this->resolveSignedUrl($downloadUrl, $landingUrl);
         if ($signedUrl === '') {
             return [];
         }
@@ -239,25 +332,131 @@ final class NikkoService
         return [$signedUrl];
     }
 
-    /** Follow the /download redirect (no cookie needed here) to the signed storage URL. */
-    private function resolveSignedUrl(string $downloadUrl): string
+    /**
+     * Fetch the Shopify delivery-app landing page. Sends no Nikko membership
+     * cookie (this domain doesn't use it) but DOES set a Referer and captures
+     * the delivery_app_session cookie from the response, which the subsequent
+     * /download request must replay — see resolveSignedUrl().
+     */
+    private function fetchPublic(string $url): ?string
     {
-        $ch = curl_init($downloadUrl);
+        // Clear any session cookie captured on a previous call so a stale one
+        // from an earlier job can't leak into this request if this response
+        // doesn't issue a fresh Set-Cookie. The worker reuses one instance
+        // across all queued jobs.
+        $this->deliverySessionCookie = '';
+        $headerText = '';
+        $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_HEADER         => true,
-            CURLOPT_NOBODY         => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CONNECTTIMEOUT => 15,
             CURLOPT_USERAGENT      => self::UA,
+            CURLOPT_REFERER        => self::BASE . '/',
+            CURLOPT_HTTPHEADER     => [
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language: en-US,en;q=0.9',
+                // Shopify's Digital Downloads app returns a 404 (not 403) to
+                // requests lacking these — it checks that the hit is a genuine
+                // top-level browser navigation, not a programmatic fetch.
+                // Confirmed: identical URL/tokens 404 without these, 200 with.
+                'Sec-Fetch-Dest: document',
+                'Sec-Fetch-Mode: navigate',
+                'Sec-Fetch-Site: cross-site',
+                'Upgrade-Insecure-Requests: 1',
+            ],
+            CURLOPT_HEADERFUNCTION => function ($ch, string $line) use (&$headerText): int {
+                $headerText .= $line;
+                return strlen($line);
+            },
         ]);
-        $resp = curl_exec($ch);
+        $body = curl_exec($ch);
         $st   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
         curl_close($ch);
 
-        if ($resp === false) {
+        if ($body === false || $st >= 400) {
+            $this->lastError = 'Landing page fetch failed (HTTP ' . $st . (($err !== '') ? ', ' . $err : '') . ').';
+            return null;
+        }
+
+        // Confirmed via live capture: Shopify's delivery app issues a
+        // delivery_app_session cookie (Cloudflare-fronted) on this first hit,
+        // and a real browser carries it forward to the /download request.
+        // Without it, the second request looks like a cold, refererless hit
+        // straight to a deep download URL — likely why it 404s without this.
+        if (preg_match('/^Set-Cookie:\s*(delivery_app_session=[^;]+)/mi', $headerText, $cm)) {
+            $this->deliverySessionCookie = trim($cm[1]);
+        }
+
+        return (string) $body;
+    }
+
+    /**
+     * Resolve the /download endpoint to its signed storage URL. Replays the
+     * delivery_app_session cookie from the landing-page fetch and sets the
+     * Referer to the landing page itself — both match what a real browser
+     * sends, and a request missing either gets 404'd by Cloudflare even with
+     * correct tokens + filename.
+     */
+    private function resolveSignedUrl(string $downloadUrl, string $refererUrl): string
+    {
+        // A plain HEAD request (CURLOPT_NOBODY) 404s on this endpoint — Shopify's
+        // delivery app apparently doesn't implement HEAD, only GET. Use a real
+        // GET but stop reading after the headers via a write-function that
+        // returns 0 once they're captured, so we never pull the (irrelevant,
+        // since we don't follow the redirect ourselves) response body.
+        $headerText = '';
+        $headers = [
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.9',
+            // Same navigation-header requirement as the landing page (see
+            // fetchPublic). This request's referer is the landing page on the
+            // same delivery.shopifyapps.com origin, so Sec-Fetch-Site is
+            // same-origin here rather than cross-site.
+            'Sec-Fetch-Dest: document',
+            'Sec-Fetch-Mode: navigate',
+            'Sec-Fetch-Site: same-origin',
+            'Upgrade-Insecure-Requests: 1',
+        ];
+        if ($this->deliverySessionCookie !== '') {
+            $headers[] = 'Cookie: ' . $this->deliverySessionCookie;
+        }
+        $ch = curl_init($downloadUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_USERAGENT      => self::UA,
+            CURLOPT_REFERER        => $refererUrl,
+            CURLOPT_HTTPHEADER     => $headers,
+            CURLINFO_HEADER_OUT    => true,
+            CURLOPT_HEADERFUNCTION => function ($ch, string $line) use (&$headerText): int {
+                $headerText .= $line;
+                return strlen($line);
+            },
+            CURLOPT_WRITEFUNCTION => static function ($ch, string $data): int {
+                // Discard body, but report it as "written" so curl doesn't
+                // treat this as a failed transfer.
+                return strlen($data);
+            },
+        ]);
+        curl_exec($ch);
+        $st  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $sentHeaders = (string) curl_getinfo($ch, CURLINFO_HEADER_OUT);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        // One-shot diagnostic: dump exactly what we sent + the status we got,
+        // so a 404 can be diffed against a known-good manual curl. Written to a
+        // world-readable temp file; remove this block once the flow is solid.
+        @file_put_contents('/tmp/nikko_download_debug.txt',
+            "URL: $downloadUrl\nSTATUS: $st\n\n--- REQUEST HEADERS PHP SENT ---\n$sentHeaders\n\n--- RESPONSE HEADERS ---\n$headerText\n");
+
+        if ($err !== '') {
             $this->lastError = 'Network error resolving download link: ' . $err;
             return '';
         }
@@ -269,7 +468,7 @@ final class NikkoService
             $this->lastError = 'Expected a redirect from delivery.shopifyapps.com, got HTTP ' . $st . '.';
             return '';
         }
-        if (!preg_match('/^Location:\s*(.+)$/mi', (string) $resp, $lm)) {
+        if (!preg_match('/^Location:\s*(.+)$/mi', $headerText, $lm)) {
             $this->lastError = 'Redirect had no Location header.';
             return '';
         }

@@ -301,20 +301,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- Nikko Industries -----------------------------------------------------
     elseif ($action === 'save_nikko_cookie') {
-        $cookie = trim((string) ($_POST['nikko_cookie'] ?? ''));
-        if ($cookie === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your Nikko session cookie first.'];
+        $sess  = trim((string) ($_POST['nikko_phpsessid'] ?? ''));
+        $login = trim((string) ($_POST['nikko_wp_logged_in'] ?? ''));
+        if ($sess === '' && $login === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste at least your PHPSESSID value first.'];
         } else {
-            cfg_save(['nikko_cookie' => $cookie]);
-            $n = new NikkoService($cookie);
+            cfg_save(['nikko_phpsessid' => $sess, 'nikko_wp_logged_in' => $login]);
+            $n = new NikkoService($sess, $login);
             $notice = $n->validate()
                 ? ['type' => 'ok', 'text' => 'Nikko Industries connected successfully.']
                 : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $n->lastError];
         }
     }
     elseif ($action === 'clear_nikko_cookie') {
-        cfg_save(['nikko_cookie' => '']);
-        $notice = ['type' => 'ok', 'text' => 'Nikko Industries session cookie cleared.'];
+        cfg_save(['nikko_phpsessid' => '', 'nikko_wp_logged_in' => '']);
+        $notice = ['type' => 'ok', 'text' => 'Nikko Industries session cookies cleared.'];
     }
     elseif ($action === 'save_nikko_dir') {
         $r = apply_source_dir((string) ($_POST['nikko_dir'] ?? ''), 'nikko');
@@ -395,7 +396,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'cults3d'     => (string) cfg('cults3d_username') !== '' && (string) cfg('cults3d_token') !== '',
                 'creality'    => creality_ready(),
                 'stlflix'     => (string) cfg('stlflix_token') !== '',
-                'nikko'       => (string) cfg('nikko_cookie') !== '',
+                'nikko'       => (string) cfg('nikko_phpsessid') !== '',
                 'hex3dforum'  => (string) cfg('hex3dforum_cookie') !== '',
             ],
         ]);
@@ -457,11 +458,12 @@ $crealityDelay = (int) cfg('creality_delay');
 $crealityReady = creality_ready();
 
 // Nikko Industries
-$nikkoCookie = (string) cfg('nikko_cookie');
+$nikkoPhpSessId  = (string) cfg('nikko_phpsessid');
+$nikkoWpLoggedIn = (string) cfg('nikko_wp_logged_in');
 $nikkoDir    = get_nikko_dir();
 $nikkoWrite  = is_dir($nikkoDir) && is_writable($nikkoDir);
 $nikkoDelay  = (int) cfg('nikko_delay');
-$nikkoReady  = $nikkoCookie !== '';
+$nikkoReady  = $nikkoPhpSessId !== '';
 
 // Hex3D Forum
 $hex3dforumCookie  = (string) cfg('hex3dforum_cookie');
@@ -1309,16 +1311,18 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
-            <label for="nikko_cookie">Session cookie <?php if ($nikkoCookie !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="nikko_cookie" name="nikko_cookie" value="<?= e($nikkoCookie) ?>" placeholder="paste your full Cookie header (PHPSESSID=...; wordpress_logged_in_...=...)"><button type="button" class="reveal-btn" data-target="nikko_cookie" aria-label="Show/hide value">👁</button>
+            <label for="nikko_phpsessid">PHPSESSID <?php if ($nikkoPhpSessId !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="password" id="nikko_phpsessid" name="nikko_phpsessid" value="<?= e($nikkoPhpSessId) ?>" placeholder="e.g. fjhsbieipge8kv60abvm1dq..."><button type="button" class="reveal-btn" data-target="nikko_phpsessid" aria-label="Show/hide value">👁</button>
+            <label for="nikko_wp_logged_in" style="margin-top:14px;">wordpress_logged_in <?php if ($nikkoWpLoggedIn !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="password" id="nikko_wp_logged_in" name="nikko_wp_logged_in" value="<?= e($nikkoWpLoggedIn) ?>" placeholder="paste the FULL pair: wordpress_logged_in_xxxxx=value"><button type="button" class="reveal-btn" data-target="nikko_wp_logged_in" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_nikko_cookie">Save &amp; Connect</button>
               <?php if ($nikkoReady): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_nikko_cookie" onclick="return confirm('Clear Nikko Industries session cookie?')">Clear</button>
+              <button class="btn-ghost btn-sm" name="action" value="clear_nikko_cookie" onclick="return confirm('Clear Nikko Industries session cookies?')">Clear</button>
               <?php endif; ?>
             </div>
           </form>
-          <p class="hint">nikkoindustriesmembership.com has no API — this site is accessed entirely via browser session. Log in with an active membership, open DevTools → Application/Storage → Cookies, and copy the full cookie header (at minimum <code>PHPSESSID</code>; include any <code>wordpress_logged_in_*</code> cookie too). Membership is flat-fee unlimited downloads across the whole library, not per-model — any active member can fetch any product. Re-paste when downloads start failing; there's no fixed expiry, it depends on server session settings.</p>
+          <p class="hint">nikkoindustriesmembership.com has no API — this site is accessed entirely via browser session. Log in with an active membership, open DevTools → Application/Storage → Cookies, and copy the <code>PHPSESSID</code> value into the first field. For the second field, copy the cookie named <code>wordpress_logged_in_</code> followed by a long random suffix — <strong>paste the whole row</strong> (name and value, joined with <code>=</code>) since WordPress checks that exact name, not just the value. Membership is flat-fee unlimited downloads across the whole library, not per-model — any active member can fetch any product. Re-paste when downloads start failing; there's no fixed expiry, it depends on server session settings.</p>
         </div>
         <div class="src-body">
           <form method="post">

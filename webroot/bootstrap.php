@@ -1071,7 +1071,8 @@ function cfg_defaults(): array
         'creality_duid'              => '',
         'creality_download_dir'      => '',
         'creality_delay'             => 60,
-        'nikko_cookie'               => (string) (getenv('FETCHER_NIKKO_COOKIE') ?: ''),
+        'nikko_phpsessid'            => (string) (getenv('FETCHER_NIKKO_PHPSESSID') ?: ''),
+        'nikko_wp_logged_in'         => (string) (getenv('FETCHER_NIKKO_WP_LOGGED_IN') ?: ''),
         'nikko_download_dir'         => '',
         'nikko_delay'                => 60,
         'hex3dforum_cookie'          => (string) (getenv('FETCHER_HEX3DFORUM_COOKIE') ?: ''),
@@ -1209,8 +1210,11 @@ function cfg_save(array $patch): bool
     if (isset($patch['creality_delay'])) {
         $current['creality_delay'] = max(30, min(3600, (int) $patch['creality_delay']));
     }
-    if (array_key_exists('nikko_cookie', $patch)) {
-        $current['nikko_cookie'] = trim((string) $patch['nikko_cookie']);
+    if (array_key_exists('nikko_phpsessid', $patch)) {
+        $current['nikko_phpsessid'] = trim((string) $patch['nikko_phpsessid']);
+    }
+    if (array_key_exists('nikko_wp_logged_in', $patch)) {
+        $current['nikko_wp_logged_in'] = trim((string) $patch['nikko_wp_logged_in']);
     }
     if (array_key_exists('nikko_download_dir', $patch)) {
         $current['nikko_download_dir'] = trim((string) $patch['nikko_download_dir']);

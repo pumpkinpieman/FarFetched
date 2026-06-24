@@ -220,7 +220,7 @@ if ($source === 'makerworld') {
 } elseif ($source === 'nikko') {
     $svc           = null;
     $initialCursor = null;
-    $nikkoReadyIdx = (string) cfg('nikko_cookie') !== '';
+    $nikkoReadyIdx = (string) cfg('nikko_phpsessid') !== '';
     if ($nikkoReadyIdx) {
         $models = (new NikkoService())->search('', 20, 0, $nikkoCat);
         $banner = null;
