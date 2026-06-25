@@ -59,8 +59,11 @@ docker run -d \
   -e FETCHER_DOWNLOAD_DELAY=120 \
   -v /path/to/your/models:/downloads \
   -v /path/to/persistent/data:/var/www/html/private \
+  -v /path/to/your/custom-folders:/custom \
   ghcr.io/pumpkinpieman/farfetched:latest
 ```
+
+> The `/custom` mount is optional — it's only needed for the **Custom Local Folders** feature (Settings → Custom). See [Custom Local Folders](#custom-local-folders) below.
 
 Then open `http://your-server:16545` and add your source tokens under **Settings**.
 
@@ -77,6 +80,7 @@ Then open `http://your-server:16545` and add your source tokens under **Settings
 |---|---|
 | `/downloads` | Where your models land. Map to a host folder you control. |
 | `/var/www/html/private` | Persistent state: SQLite job queue, favorites, collections, printer profiles, tokens, config, logs, and the optional password hash. |
+| `/custom` | **Optional.** Host folder(s) you want to browse and register as Custom Local Folders (indexed in place, never copied). Map a host directory here — e.g. a Google Drive sync target or an existing model archive. See below. |
 
 ---
 
@@ -91,6 +95,47 @@ Each source needs a token or credentials, pulled from your browser's DevTools wh
 - **Hex3D Forum** — a phpBB forum, also no API; copy the full Cookie header the same way, then list which forum IDs (the number after `f=` in each forum's URL) you want FarFetched to browse.
 
 Tokens expire on each platform's own schedule (Printables ~1h, STLFlix ~30 days, Creality's `cf_clearance` fastest); cookie-based sources have no fixed expiry and vary by server config. Just re-paste when a source stops authing.
+
+---
+
+## Custom Local Folders
+
+Beyond the sources FarFetched downloads from, you can register folders you **already have on disk** — an existing model archive, a Google Drive / Dropbox folder synced locally, an SMB share, anything. These are **indexed in place (never copied)**, each subfolder is treated as one model, and they appear blended into **My Library**. Removing a registered folder never touches the files.
+
+Configure them under **Settings → Custom**, with a built-in folder browser so you don't have to type paths.
+
+### The one thing to understand: container paths, not host paths
+
+FarFetched runs in a container, so it only sees what's **bind-mounted** into it. A path that exists on your host (e.g. `/mnt/user/Downloads/MyModels`) is invisible to the app unless that location is mounted. Inside the container the same files appear at the **container path** you mapped them to — which is usually different from the host path (e.g. host `/mnt/user/Downloads` → container `/downloads`).
+
+This is the single most common point of confusion: entering a host path the container can't see fails with *"That path is not a folder or is not reachable from the container."* Always use the **container path**.
+
+### Setup
+
+1. **Add a bind mount** for the folder(s) you want to register. The convention is to map them to `/custom` in the container:
+
+   - **Unraid:** edit the FarFetched container → *Add another Path* → Container Path `/custom`, Host Path `/mnt/user/YourCustomArea`, then Apply.
+   - **docker run / compose:** add `-v /mnt/user/YourCustomArea:/custom`.
+
+   Tip: point `/custom` at a **dedicated** host folder (e.g. `/mnt/user/CustomModels`) rather than your existing Downloads, so custom folders stay separate from the auto-scanned `/downloads` sources and nothing double-lists.
+
+2. **Verify** the mount is live:
+   ```bash
+   docker exec FarFetched ls -la /custom
+   ```
+   This should list your host folder's contents. If it says *No such file or directory*, the mount isn't applied yet.
+
+3. **Register** in the app: **Settings → Custom → Browse…**, navigate into `/custom`, pick a folder, and **Add Folder**. Its models now show in My Library.
+
+### Thumbnails
+
+Custom folders use an **existing preview image** in each model subfolder (`thumb.png`, `preview.jpg`, `cover.*`, or the first image found) — they are not rendered from the STL. Subfolders without any image show a "no preview" placeholder.
+
+### Notes
+
+- The folder browser is **jailed to `/custom`** — it cannot navigate into system or app directories.
+- Registering is non-destructive and reversible: the folder list lives in config; your files are never moved, copied, or modified.
+- Drop new model subfolders into a registered folder at any time — they appear on the next My Library load (no re-import step).
 
 ---
 

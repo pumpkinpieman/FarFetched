@@ -367,6 +367,104 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $notice = ['type' => 'ok', 'text' => 'Crawl started in the background. Status updates below as it progresses; large first crawls take a long time.'];
         }
     }
+    elseif ($action === 'hex3dforum_crawl_restart') {
+        // Full kill → clear lock → reset state → verify session → relaunch.
+        // Refuses to relaunch into a dead session (the recurring "session dead"
+        // surprise) and tells the user to re-paste the SID instead.
+        if (!hex3dforum_configured()) {
+            $notice = ['type' => 'err', 'text' => 'Set your Hex3D Forum session cookie first.'];
+        } else {
+            // 1. Kill any running crawler.
+            @exec('pkill -f hex3d_crawl.php 2>/dev/null');
+            // 2. Clear the lockfile.
+            $lock = sys_get_temp_dir() . '/hex3d_crawl.lock';
+            if (is_file($lock)) @unlink($lock);
+            // 3. Reset crawl state to idle, clear last error.
+            try { db()->exec("UPDATE hex3d_crawl_state SET status = 'idle', last_error = '' WHERE id = 1"); } catch (\Throwable $e) {}
+            // 4. Verify the session is actually alive before relaunching.
+            $alive = false;
+            $probeErr = '';
+            $svcFile = __DIR__ . '/Hex3DForumService.php';
+            if (is_file($svcFile)) {
+                require_once $svcFile;
+                try {
+                    $probe = new Hex3DForumService();
+                    $alive = $probe->discoverForums() !== [];
+                    if (!$alive) $probeErr = (string) ($probe->lastError ?? '');
+                } catch (\Throwable $e) { $probeErr = $e->getMessage(); }
+            }
+            if (!$alive) {
+                $notice = ['type' => 'err', 'text' => 'Crawler stopped and state reset — but the session looks dead (no forums discoverable)'
+                    . ($probeErr !== '' ? ': ' . $probeErr : '') . '. Re-paste a fresh SID above (Save & Connect), then click Kill & restart again.'];
+            } else {
+                // 5. Relaunch detached.
+                $script = escapeshellarg(__DIR__ . '/hex3d_crawl.php');
+                $log    = escapeshellarg(sys_get_temp_dir() . '/hex3d_crawl.log');
+                @exec('nohup php ' . $script . ' > ' . $log . ' 2>&1 &');
+                $notice = ['type' => 'ok', 'text' => 'Session verified alive — crawler killed, state reset, and a fresh crawl launched. Watch progress below.'];
+            }
+        }
+    }
+
+    elseif ($action === 'add_custom_folder') {
+        $path  = trim((string) ($_POST['custom_path'] ?? ''));
+        $label = trim((string) ($_POST['custom_label'] ?? ''));
+        if ($path === '') {
+            $notice = ['type' => 'err', 'text' => 'Enter a folder path.'];
+        } elseif (!is_dir($path)) {
+            $notice = ['type' => 'err', 'text' => 'Not reachable from the container: ' . $path . ' — use the container path (what the app sees inside Docker), not the host path. If this lives outside a mounted folder, add a bind mount (e.g. host dir → /custom) in the Docker template first. Tip: the Browse button only shows folders the container can actually see.'];
+        } elseif (!is_readable($path)) {
+            $notice = ['type' => 'err', 'text' => 'That folder exists but is not readable by the app.'];
+        } else {
+            $folders = custom_folders();
+            // Reject duplicates by resolved path.
+            $already = false;
+            foreach ($folders as $f) { if (rtrim($f['path'], '/') === rtrim($path, '/')) { $already = true; break; } }
+            if ($already) {
+                $notice = ['type' => 'err', 'text' => 'That folder is already registered.'];
+            } else {
+                $folders[] = [
+                    'id'    => substr(md5($path . microtime()), 0, 12),
+                    'label' => $label !== '' ? $label : basename(rtrim($path, '/')),
+                    'path'  => $path,
+                ];
+                cfg_save(['custom_folders' => $folders]);
+                $notice = ['type' => 'ok', 'text' => 'Folder registered. Its models now appear in My Library.'];
+            }
+        }
+        $tab = 'custom';
+    }
+    elseif ($action === 'remove_custom_folder') {
+        $id = preg_replace('/[^A-Za-z0-9]/', '', (string) ($_POST['custom_id'] ?? ''));
+        $folders = array_values(array_filter(custom_folders(), static fn($f) => $f['id'] !== $id));
+        cfg_save(['custom_folders' => $folders]);
+        $notice = ['type' => 'ok', 'text' => 'Folder removed from the list. The files on disk were not touched.'];
+        $tab = 'custom';
+    }
+
+    elseif ($action === 'organize_custom_folder') {
+        $id = preg_replace('/[^A-Za-z0-9]/', '', (string) ($_POST['custom_id'] ?? ''));
+        $target = null;
+        foreach (custom_folders() as $f) { if ($f['id'] === $id) { $target = $f; break; } }
+        if ($target === null) {
+            $notice = ['type' => 'err', 'text' => 'Folder not found.'];
+        } elseif (!is_dir($target['path'])) {
+            $notice = ['type' => 'err', 'text' => 'Folder is not reachable: ' . $target['path']];
+        } else {
+            $r = organize_custom_folder($target['path']);
+            $parts = [];
+            if ($r['moved'] > 0) $parts[] = $r['moved'] . ' file' . ($r['moved'] === 1 ? '' : 's') . ' foldered';
+            if ($r['zips']  > 0) $parts[] = $r['zips'] . ' zip' . ($r['zips'] === 1 ? '' : 's') . ' extracted';
+            if ($r['skipped'] > 0) $parts[] = $r['skipped'] . ' left as-is';
+            $msg = 'Organized "' . $target['label'] . '": ' . ($parts ? implode(', ', $parts) : 'nothing to do') . '.';
+            if ($r['errors'] !== []) {
+                $msg .= ' Issues: ' . implode('; ', array_slice($r['errors'], 0, 5));
+                if (count($r['errors']) > 5) $msg .= ' (+' . (count($r['errors']) - 5) . ' more)';
+            }
+            $notice = ['type' => $r['errors'] === [] ? 'ok' : 'err', 'text' => $msg];
+        }
+        $tab = 'custom';
+    }
 
     // ---- Worker -------------------------------------------------------------
     elseif ($action === 'save_config') {
@@ -489,7 +587,7 @@ $hex3dforumReady   = $hex3dforumSid !== '' || $hex3dforumU !== '';
 
 // Active tab
 $tab = (string) ($_GET['tab'] ?? $_POST['_tab'] ?? 'sources');
-if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = 'sources';
+if (!in_array($tab, ['sources', 'worker', 'activity', 'security', 'donate', 'custom'], true)) $tab = 'sources';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -533,6 +631,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
   <!-- Tab buttons -->
   <div class="tabs">
     <button class="tab-btn <?= $tab==='sources'?'active':'' ?>" onclick="switchTab('sources')">Sources</button>
+    <button class="tab-btn <?= $tab==='custom'?'active':'' ?>" onclick="switchTab('custom')">Custom</button>
     <button class="tab-btn <?= $tab==='worker'?'active':'' ?>" onclick="switchTab('worker')">Worker</button>
     <button class="tab-btn <?= $tab==='activity'?'active':'' ?>" onclick="switchTab('activity')">Activity</button>
     <button class="tab-btn <?= $tab==='security'?'active':'' ?>" onclick="switchTab('security')">Security</button>
@@ -556,7 +655,313 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'donate'], true)) $tab = '
     
   </div>
 
-  <!-- ===================== WORKER TAB ===================== -->
+  <!-- ===================== CUSTOM TAB ===================== -->
+  <div class="tab-content <?= $tab==='custom'?'active':'' ?>" id="tab-custom">
+    <div class="panel">
+      <h2>Custom Local Folders</h2>
+      <p class="hint">Register folders that already live on disk (or any mount the app can reach). Each <strong>subfolder</strong> is treated as one model; its files are the model's parts. If a folder contains a preview image (<code>thumb.png</code>, <code>preview.jpg</code>, or any image), it's used as the thumbnail. Models appear blended into <strong>My Library</strong>. Folders are indexed in place — nothing is copied, and removing an entry never touches your files.</p>
+      <p class="hint" style="opacity:.85;">Got a folder full of <strong>loose</strong> <code>.stl</code>/<code>.3mf</code> files and <code>.zip</code>s instead of per-model subfolders? Register it, then click <strong>Organize</strong> — it moves each loose file into its own folder and extracts zips (originals go to <code>_processed/</code>) so they show as proper models. <em>Organize modifies the folder on disk; existing subfolders are left alone.</em></p>
+
+      <?php $cf = custom_folders(); ?>
+      <?php if ($cf === []): ?>
+        <p class="hint" style="opacity:.7;">No folders registered yet. Add one below.</p>
+      <?php else: ?>
+        <table class="cf-table" style="width:100%;border-collapse:collapse;margin:12px 0;">
+          <thead>
+            <tr style="text-align:left;border-bottom:1px solid var(--border,#2a2a2a);">
+              <th style="padding:8px 6px;">Label</th>
+              <th style="padding:8px 6px;">Path</th>
+              <th style="padding:8px 6px;">Status</th>
+              <th style="padding:8px 6px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($cf as $f):
+              $exists = is_dir($f['path']);
+              $readable = $exists && is_readable($f['path']);
+              $count = $exists ? count_models($f['path']) : 0;
+            ?>
+              <tr style="border-bottom:1px solid var(--border,#222);">
+                <td style="padding:8px 6px;"><?= e($f['label']) ?></td>
+                <td style="padding:8px 6px;"><code style="font-size:12px;"><?= e($f['path']) ?></code></td>
+                <td style="padding:8px 6px;" id="cf-status-<?= e($f['id']) ?>">
+                  <?php if (!$exists): ?>
+                    <span style="color:#e07a5f;">● not found</span>
+                  <?php elseif (!$readable): ?>
+                    <span style="color:#e0b15f;">● not readable</span>
+                  <?php else: ?>
+                    <span style="color:#7fb069;">● <?= (int) $count ?> model<?= $count === 1 ? '' : 's' ?></span>
+                  <?php endif; ?>
+                </td>
+                <td style="padding:8px 6px;text-align:right;white-space:nowrap;">
+                  <?php if ($exists && $readable): ?>
+                  <button type="button" class="btn-ghost btn-sm cf-organize-btn"
+                          data-id="<?= e($f['id']) ?>"
+                          data-label="<?= e($f['label']) ?>"
+                          data-status-cell="cf-status-<?= e($f['id']) ?>"
+                          title="Move loose files into per-model folders and extract zips">Organize</button>
+                  <?php endif; ?>
+                  <form method="post" style="display:inline;" onsubmit="return confirm('Remove this folder from the list? Your files are not deleted.');">
+                    <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+                    <input type="hidden" name="_tab" value="custom">
+                    <input type="hidden" name="custom_id" value="<?= e($f['id']) ?>">
+                    <button class="btn-ghost btn-sm" name="action" value="remove_custom_folder">Remove</button>
+                  </form>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      <?php endif; ?>
+
+      <form method="post" class="cf-add" style="margin-top:16px;">
+        <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+        <input type="hidden" name="_tab" value="custom">
+        <label for="custom_path">Folder path</label>
+        <div class="row" style="gap:8px;align-items:stretch;">
+          <input type="text" id="custom_path" name="custom_path" placeholder="/custom/my-models" autocomplete="off" style="flex:1;">
+          <button type="button" class="btn-ghost btn-sm" id="cf-browse-btn" style="white-space:nowrap;">Browse…</button>
+        </div>
+        <p class="hint">Pick a folder with <strong>Browse</strong>, or type a <strong>container path</strong> (what the app sees inside Docker, not the host path). Custom folders live under <code>/custom</code> — add a bind mount (host dir → <code>/custom</code>) in the FarFetched Docker template if you haven't yet, then restart the container. Host paths like <code>/mnt/user/…</code> won't work unless they're mounted.</p>
+
+        <!-- Folder picker panel (hidden until Browse is clicked) -->
+        <div id="cf-picker" style="display:none;border:1px solid var(--border,#2a2a2a);border-radius:8px;margin:8px 0;background:rgba(0,0,0,.2);">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border,#222);">
+            <button type="button" class="btn-ghost btn-sm" id="cf-up">↑ Up</button>
+            <code id="cf-cwd" style="font-size:12px;opacity:.85;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">/custom</code>
+            <button type="button" class="btn-primary btn-sm" id="cf-pick">Use this folder</button>
+          </div>
+          <div id="cf-list" style="max-height:260px;overflow:auto;padding:4px;"></div>
+          <div id="cf-msg" class="hint" style="padding:8px 10px;display:none;"></div>
+        </div>
+
+        <label for="custom_label">Label <span style="opacity:.6;">(optional)</span></label>
+        <input type="text" id="custom_label" name="custom_label" placeholder="Defaults to the folder's own name" autocomplete="off">
+        <div class="row" style="margin-top:12px;">
+          <button class="btn-primary btn-sm" name="action" value="add_custom_folder">Add Folder</button>
+        </div>
+      </form>
+
+      <script>
+      (function () {
+        const btn   = document.getElementById('cf-browse-btn');
+        const panel = document.getElementById('cf-picker');
+        const list  = document.getElementById('cf-list');
+        const cwdEl = document.getElementById('cf-cwd');
+        const msgEl = document.getElementById('cf-msg');
+        const upBtn = document.getElementById('cf-up');
+        const pick  = document.getElementById('cf-pick');
+        const pathInput = document.getElementById('custom_path');
+        if (!btn) return;
+
+        let cwd = null;      // current absolute dir
+        let parent = null;   // parent dir or null at root
+
+        function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+        async function load(path) {
+          list.innerHTML = '<div class="hint" style="padding:10px;">Loading…</div>';
+          msgEl.style.display = 'none';
+          let data;
+          try {
+            const url = 'browse_dirs.php' + (path ? ('?path=' + encodeURIComponent(path)) : '');
+            const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            data = await res.json();
+          } catch (e) {
+            list.innerHTML = '';
+            msgEl.textContent = 'Could not reach the folder browser.';
+            msgEl.style.display = 'block';
+            return;
+          }
+          if (!data.ok) {
+            list.innerHTML = '';
+            msgEl.textContent = data.message || ('Browser error: ' + (data.error || 'unknown'));
+            msgEl.style.display = 'block';
+            cwd = data.root || '/custom';
+            cwdEl.textContent = cwd;
+            parent = null;
+            upBtn.disabled = true;
+            return;
+          }
+          cwd = data.path;
+          parent = data.parent;
+          cwdEl.textContent = cwd;
+          upBtn.disabled = !parent;
+
+          if (!data.dirs.length) {
+            list.innerHTML = '<div class="hint" style="padding:10px;">No subfolders here. Click <strong>Use this folder</strong> above to pick it, or go up.</div>';
+            return;
+          }
+          list.innerHTML = '';
+          for (const d of data.dirs) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;';
+            row.onmouseenter = () => row.style.background = 'rgba(255,255,255,.05)';
+            row.onmouseleave = () => row.style.background = 'transparent';
+            const count = d.models > 0 ? (' <span style="opacity:.6;">· ' + d.models + ' model' + (d.models===1?'':'s') + '</span>') : '';
+            // Folder name (click to open/drill in)
+            const nameEl = document.createElement('span');
+            nameEl.style.cssText = 'flex:1;cursor:pointer;display:flex;align-items:center;gap:8px;';
+            nameEl.innerHTML = '<span style="opacity:.7;">📁</span><span>' + esc(d.name) + count + '</span>';
+            nameEl.title = 'Open ' + d.name;
+            nameEl.onclick = () => load(d.path);
+            // Per-row Select button (pick THIS folder without drilling in)
+            const selBtn = document.createElement('button');
+            selBtn.type = 'button';
+            selBtn.className = 'btn-ghost btn-sm';
+            selBtn.textContent = 'Select';
+            selBtn.style.cssText = 'white-space:nowrap;';
+            selBtn.onclick = (ev) => { ev.stopPropagation(); choose(d.path); };
+            const openHint = document.createElement('span');
+            openHint.style.cssText = 'opacity:.35;font-size:12px;cursor:pointer;';
+            openHint.textContent = 'open ›';
+            openHint.onclick = () => load(d.path);
+            row.appendChild(nameEl);
+            row.appendChild(selBtn);
+            row.appendChild(openHint);
+            list.appendChild(row);
+          }
+        }
+
+        // Commit a chosen path: fill the field, confirm visually, close picker.
+        function choose(path) {
+          pathInput.value = path;
+          panel.style.display = 'none';
+          // Brief highlight so it's obvious the field was filled.
+          pathInput.style.transition = 'box-shadow .15s, border-color .15s';
+          pathInput.style.boxShadow = '0 0 0 2px var(--accent, #e0a458)';
+          pathInput.focus();
+          setTimeout(() => { pathInput.style.boxShadow = ''; }, 900);
+          // Default the label to the folder's own name if empty.
+          const labelEl = document.getElementById('custom_label');
+          if (labelEl && labelEl.value.trim() === '') {
+            const base = path.replace(/\/+$/, '').split('/').pop();
+            if (base) labelEl.value = base.charAt(0).toUpperCase() + base.slice(1);
+          }
+        }
+
+        btn.addEventListener('click', () => {
+          const show = panel.style.display === 'none';
+          panel.style.display = show ? 'block' : 'none';
+          if (show && cwd === null) load(null); // first open → root
+        });
+        upBtn.addEventListener('click', () => { if (parent) load(parent); });
+        pick.addEventListener('click', () => { if (cwd) choose(cwd); });
+      })();
+
+      // Organize: chunked, pausable, with a live progress bar. Each chunk is an
+      // AJAX call; pausing flips server state and the loop stops requesting.
+      (function () {
+        const CSRF = <?= json_encode($csrf) ?>;
+        const CHUNK = 8;
+        const state = {}; // id -> { running, paused }
+
+        function post(action, id, extra) {
+          const body = new URLSearchParams(Object.assign({ action, custom_id: id, csrf: CSRF }, extra || {}));
+          return fetch('organize_run.php', { method: 'POST', body }).then(r => r.json());
+        }
+
+        function render(cell, st, ctrl) {
+          if (!cell) return;
+          const total = (st && st.total) || 0;
+          const done  = (st && st.done) || 0;
+          const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+          const status = (st && st.status) || 'running';
+          const cur = (st && st.current) ? (' · ' + st.current) : '';
+          let label;
+          if (status === 'done')        label = '✓ done — ' + done + ' processed';
+          else if (status === 'paused') label = '⏸ paused — ' + done + '/' + total;
+          else                          label = '⟳ ' + done + '/' + total + ' (' + pct + '%)' + cur;
+          cell.innerHTML =
+            '<div style="display:flex;flex-direction:column;gap:4px;min-width:160px;">' +
+              '<div style="font-size:12px;color:' + (status==='done'?'#7fb069':(status==='paused'?'#e0b15f':'#cfd8c5')) + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + label + '</div>' +
+              '<div style="height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;">' +
+                '<div style="height:100%;width:' + pct + '%;background:' + (status==='done'?'#7fb069':'#e0a458') + ';transition:width .2s;"></div>' +
+              '</div>' +
+            '</div>';
+        }
+
+        async function runLoop(id, cell, btn) {
+          const s = state[id];
+          while (s.running && !s.paused) {
+            let res;
+            try { res = await post('next', id, { chunk: CHUNK }); }
+            catch (e) { cell.innerHTML = '<span style="color:#e07a5f;">network error — retry Organize</span>'; s.running = false; resetBtn(btn); return; }
+            if (!res.ok) {
+              cell.innerHTML = '<span style="color:#e07a5f;">' + (res.error || 'error') + (res.path ? (': ' + res.path) : '') + '</span>';
+              s.running = false; resetBtn(btn); return;
+            }
+            render(cell, res.state, btn);
+            if (res.done || (res.state && res.state.status === 'done')) {
+              s.running = false; finishBtn(btn);
+              // Surface any errors compactly under the bar.
+              const errs = (res.state && res.state.errors) || [];
+              if (errs.length) {
+                cell.innerHTML += '<div class="hint" style="color:#e0b15f;font-size:11px;margin-top:4px;">' +
+                  errs.slice(0,3).map(e => e.replace(/[<>&]/g, '')).join('; ') + (errs.length>3?(' (+'+(errs.length-3)+' more)'):'') + '</div>';
+              }
+              return;
+            }
+            if (res.paused || (res.state && res.state.status === 'paused')) {
+              s.running = false; s.paused = true; pauseBtn(btn); return;
+            }
+          }
+        }
+
+        function makeCtrl(btn) {
+          // Replace the single Organize button with Pause/Resume while running.
+          return btn;
+        }
+        function resetBtn(btn) { btn.disabled = false; btn.textContent = 'Organize'; btn.dataset.mode = ''; }
+        function finishBtn(btn) { btn.disabled = false; btn.textContent = 'Organize again'; btn.dataset.mode = ''; }
+        function pauseBtn(btn)  { btn.disabled = false; btn.textContent = 'Resume'; btn.dataset.mode = 'paused'; }
+        function runningBtn(btn){ btn.disabled = false; btn.textContent = 'Pause'; btn.dataset.mode = 'running'; }
+
+        document.querySelectorAll('.cf-organize-btn').forEach(function (btn) {
+          const id   = btn.dataset.id;
+          const cell = document.getElementById(btn.dataset.statusCell);
+          state[id] = { running: false, paused: false };
+
+          btn.addEventListener('click', async function () {
+            const mode = btn.dataset.mode || '';
+
+            // Pause an in-flight run.
+            if (mode === 'running') {
+              await post('pause', id);
+              state[id].paused = true; state[id].running = false;
+              pauseBtn(btn);
+              return;
+            }
+            // Resume a paused run.
+            if (mode === 'paused') {
+              await post('resume', id);
+              state[id].paused = false; state[id].running = true;
+              runningBtn(btn);
+              runLoop(id, cell, btn);
+              return;
+            }
+
+            // Fresh start — confirm first (it modifies the folder).
+            const label = btn.dataset.label || 'this folder';
+            const ok = confirm('Organize "' + label + '"?\n\n'
+              + 'This MODIFIES the folder on disk:\n'
+              + '• loose files → moved into per-name folders\n'
+              + '• zips → extracted (originals moved to _processed/)\n\n'
+              + 'Existing subfolders are left alone. You can Pause anytime. Continue?');
+            if (!ok) return;
+
+            const seed = await post('start', id);
+            if (!seed.ok) { cell.innerHTML = '<span style="color:#e07a5f;">' + (seed.error || 'could not start') + '</span>'; return; }
+            render(cell, seed.state, btn);
+            state[id].running = true; state[id].paused = false;
+            runningBtn(btn);
+            runLoop(id, cell, btn);
+          });
+        });
+      })();
+      </script>
+    </div>
+  </div>
   <div class="tab-content <?= $tab==='worker'?'active':'' ?>" id="tab-worker">
     <div class="worker-grid">
       <div class="panel">
@@ -1417,6 +1822,11 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="hex3dforum_crawl"<?= $hex3dStatus === 'running' ? ' disabled' : '' ?>>
                 <?= $hex3dSeen > 0 ? 'Update index (crawl now)' : 'Build index (crawl now)' ?>
+              </button>
+              <button class="btn-ghost btn-sm" name="action" value="hex3dforum_crawl_restart"
+                      onclick="return confirm('Kill any running crawl, reset its state, verify the session, and start a fresh crawl?');"
+                      title="Stop a stuck/running crawl, clear the lock, reset state, check the session is alive, and relaunch">
+                Kill &amp; restart crawl
               </button>
             </div>
           </form>

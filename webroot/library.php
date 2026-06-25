@@ -110,6 +110,16 @@ function lib_folder_mtime(string $dir): int
 /** Cached thumbnail path for a model, if one has been generated. */
 function lib_thumb_rel(string $slug, string $folder): ?string
 {
+    // Custom (registered) folders: use an existing preview image, served by
+    // model_file.php?thumb=1 (which finds the image). MODELS_ROOT path
+    // construction doesn't apply since custom folders live elsewhere.
+    if (str_starts_with($slug, 'custom:')) {
+        $base = source_path($slug);
+        if ($base === null) return null;
+        if (lib_find_preview_image($base . '/' . $folder) === null) return null;
+        return 'model_file.php?src=' . rawurlencode($slug)
+            . '&model=' . rawurlencode($folder) . '&thumb=1';
+    }
     $base = MODELS_ROOT . '/' . $slug . '/' . $folder . '/.farfetched/thumb.png';
     return is_file($base) ? 'model_file.php?src=' . rawurlencode($slug)
         . '&model=' . rawurlencode($folder) . '&thumb=1' : null;
@@ -136,6 +146,8 @@ foreach ($sources as $s) {
     $slug = $s['slug'];
     foreach (list_models($s['path']) as $m) {
         if ($m['kind'] !== 'folder') continue;            // skip loose zips
+        // Skip housekeeping folders (e.g. _processed from Organize) and dotdirs.
+        if ($m['name'] === '_processed' || $m['name'] === '_processing' || ($m['name'] !== '' && $m['name'][0] === '.')) continue;
         $abs = $s['path'] . '/' . $m['name'];
         if (!lib_has_printable($abs)) continue;           // skip empty / non-printable
 

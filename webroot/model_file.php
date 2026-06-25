@@ -38,6 +38,28 @@ if ($modelReal === false || !is_dir($modelReal)) {
 // has been generated. Returns 404 otherwise (the library page falls back to a
 // gradient placeholder). Same containment guard as stream mode.
 if (isset($_GET['thumb'])) {
+    // Custom (registered) folders use an existing preview image in the model
+    // folder rather than a rendered STL thumbnail. Prefer a conventionally
+    // named file, else the first image found.
+    if (str_starts_with($src, 'custom:')) {
+        $img = lib_find_preview_image($modelReal);
+        if ($img !== null) {
+            $real = realpath($img);
+            if ($real !== false
+                && is_file($real)
+                && strncmp($real, $modelReal . DIRECTORY_SEPARATOR, strlen($modelReal) + 1) === 0) {
+                $ext = strtolower(pathinfo($real, PATHINFO_EXTENSION));
+                $mime = ['png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','gif'=>'image/gif','webp'=>'image/webp'][$ext] ?? 'application/octet-stream';
+                header('Content-Type: ' . $mime);
+                header('Cache-Control: private, max-age=86400');
+                header('X-Content-Type-Options: nosniff');
+                readfile($real);
+                exit;
+            }
+        }
+        http_response_code(404);
+        exit;
+    }
     $thumb = realpath($modelReal . '/.farfetched/thumb.png');
     if ($thumb === false
         || !is_file($thumb)

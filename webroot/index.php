@@ -253,7 +253,11 @@ if ($source === 'makerworld') {
     // forum live (which is slow and session-gated).
     $hex3dIndexCount = (int) db()->query('SELECT COUNT(*) FROM hex3d_topics')->fetchColumn();
     $hex3dforumReadyIdx = hex3dforum_configured();
-    if ($hex3dIndexCount > 0) {
+    // Only surface the cached catalog while the session is connected. Browsing
+    // reads the local index (no live call), but a disconnected source should
+    // behave like the others — show nothing but a "connect in Settings" prompt
+    // rather than exposing the cached catalog.
+    if ($hex3dIndexCount > 0 && $hex3dforumReadyIdx) {
         $where = '1=1';
         $bind  = [];
         if ($hex3dforumCat !== '') { $where = 'forum_id = :fid'; $bind[':fid'] = $hex3dforumCat; }

@@ -135,6 +135,13 @@ if ($source === 'nikko') {
 
 // ---- Hex3D Forum (served from the local crawler index) ----------------------
 if ($source === 'hex3dforum') {
+    // The cached catalog is only browsable while the session is connected — a
+    // disconnected source returns nothing (matches index.php's render gate), so
+    // pagination/search can't expose the index once the user disconnects.
+    if (!hex3dforum_configured()) {
+        echo json_encode(['ok' => true, 'models' => [], 'nextOffset' => null, 'total' => 0, 'source' => 'hex3dforum']);
+        exit;
+    }
     // Browse/search now read the pre-built hex3d_topics index (populated by
     // hex3d_crawl.php) rather than hitting the slow, session-gated forum live.
     // forum id is optional: present = filter to that forum; absent = all forums.

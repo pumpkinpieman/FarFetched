@@ -153,23 +153,111 @@ function store_write(string $file, string $value): bool
 function list_sources(): array
 {
     $root = MODELS_ROOT;
-    if (!is_dir($root)) {
-        @mkdir($root, 0777, true);
-        return [];
-    }
     $out = [];
-    foreach (scandir($root) ?: [] as $name) {
-        if ($name === '.' || $name === '..') {
-            continue;
+    if (is_dir($root)) {
+        foreach (scandir($root) ?: [] as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $path = $root . '/' . $name;
+            if (!is_dir($path)) {
+                continue;
+            }
+            $out[] = ['slug' => $name, 'path' => $path, 'count' => count_models($path)];
         }
-        $path = $root . '/' . $name;
-        if (!is_dir($path)) {
-            continue;
-        }
-        $out[] = ['slug' => $name, 'path' => $path, 'count' => count_models($path)];
+        usort($out, static fn($a, $b) => strcasecmp($a['slug'], $b['slug']));
+    } else {
+        @mkdir($root, 0777, true);
     }
-    usort($out, static fn($a, $b) => strcasecmp($a['slug'], $b['slug']));
+
+    // Append registered custom folders (indexed in place, outside MODELS_ROOT).
+    // Slug is custom:<id> so it never encodes a filesystem path; the real path
+    // is resolved from config by source_path(). Missing/unreadable folders are
+    // still listed (count 0) so the user can see and remove a broken entry.
+    foreach (custom_folders() as $cf) {
+        $p = $cf['path'];
+        $out[] = [
+            'slug'   => 'custom:' . $cf['id'],
+            'path'   => $p,
+            'count'  => is_dir($p) ? count_models($p) : 0,
+            'label'  => $cf['label'],
+            'custom' => true,
+        ];
+    }
     return $out;
+}
+
+/** Registered custom folders from config, normalized. @return array<int,array{id:string,label:string,path:string}> */
+function custom_folders(): array
+{
+    $raw = cfg('custom_folders');
+    if (!is_array($raw)) return [];
+    $out = [];
+    foreach ($raw as $e) {
+        if (!is_array($e)) continue;
+        $id   = (string) ($e['id'] ?? '');
+        $path = (string) ($e['path'] ?? '');
+        if ($id === '' || $path === '') continue;
+        $out[] = ['id' => $id, 'label' => (string) ($e['label'] ?? basename($path)), 'path' => $path];
+    }
+    return $out;
+}
+
+/** Resolve a custom:<id> slug to its registered absolute path, or null. */
+function custom_folder_path(string $slug): ?string
+{
+    if (!str_starts_with($slug, 'custom:')) return null;
+    $id = substr($slug, 7);
+    foreach (custom_folders() as $cf) {
+        if ($cf['id'] === $id) {
+            return is_dir($cf['path']) ? $cf['path'] : null;
+        }
+    }
+    return null;
+}
+
+/**
+ * Find an existing preview image in a model folder. Prefers conventionally
+ * named files (thumb/preview/cover/render) at the top level, then falls back
+ * to the first image found anywhere in the folder. Returns an absolute path
+ * or null. Used for custom-folder thumbnails (no STL rendering).
+ */
+function lib_find_preview_image(string $dir): ?string
+{
+    $exts = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+    // 1. Preferred names at the top level.
+    foreach (['thumb', 'preview', 'cover', 'render', 'image'] as $stem) {
+        foreach ($exts as $ext) {
+            foreach ([$stem . '.' . $ext, ucfirst($stem) . '.' . $ext] as $cand) {
+                $p = $dir . '/' . $cand;
+                if (is_file($p)) return $p;
+            }
+        }
+    }
+    // 2. First image anywhere (shallow-first via sorted recursive walk).
+    try {
+        $found = [];
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($it as $f) {
+            if (!$f->isFile()) continue;
+            if (in_array(strtolower($f->getExtension()), $exts, true)) {
+                $found[] = $f->getPathname();
+            }
+        }
+        if ($found !== []) {
+            // Prefer the shallowest path (fewest separators), then alphabetical.
+            usort($found, static function ($a, $b) {
+                $da = substr_count($a, '/'); $db = substr_count($b, '/');
+                return $da <=> $db ?: strcasecmp($a, $b);
+            });
+            return $found[0];
+        }
+    } catch (\Throwable $e) {
+        return null;
+    }
+    return null;
 }
 
 /** Count immediate model entries in a source folder (subfolders + loose zips). */
@@ -191,6 +279,11 @@ function count_models(string $sourcePath): int
 /** Validate a source slug and return its absolute path, or null if invalid. */
 function source_path(string $slug): ?string
 {
+    // Custom folders carry a custom:<id> slug; resolve via config (the real
+    // path lives outside MODELS_ROOT and is never built from the slug).
+    if (str_starts_with($slug, 'custom:')) {
+        return custom_folder_path($slug);
+    }
     // No separators / traversal — slug must be a single safe segment.
     if ($slug === '' || !preg_match('/^[A-Za-z0-9._-]+$/', $slug)) {
         return null;
@@ -905,6 +998,314 @@ function model_thumb(string $source, string $modelFolder, string $modelPath): ?s
  * escaping the target via absolute paths or ..). Returns true on success.
  * Used by the worker for pack downloads. LOCAL filesystem only.
  */
+/**
+ * Organize engine — resumable, chunk-based, pausable.
+ *
+ * State lives in <root>/_processing/organize.json so both the AJAX driver and
+ * an optional background worker share progress and the pause flag. The work is
+ * naturally resumable: once a loose file is moved into its folder (or a zip is
+ * extracted + moved to _processed/), it's no longer a pending top-level item,
+ * so re-scanning simply skips it.
+ *
+ * Functions:
+ *   organize_state_path($root)         → state file path
+ *   organize_read_state($root)         → array|null
+ *   organize_write_state($root,$st)    → bool
+ *   organize_pending_items($root)      → list of pending top-level names
+ *   organize_one_item($root,$name,&$s) → process a single item (mutates summary)
+ *   organize_start($root)              → seed state (total, counters), status=running
+ *   organize_chunk($root,$n)           → process up to $n pending items, update state
+ *   organize_set_status($root,$status) → pause/resume/cancel
+ *
+ * Back-compat: organize_custom_folder($root) runs the whole thing synchronously
+ * (used by the non-chunked path / CLI), built on the same primitives.
+ */
+
+function organize_state_path(string $root): string
+{
+    return rtrim($root, '/') . '/_processing/organize.json';
+}
+
+function organize_read_state(string $root): ?array
+{
+    $p = organize_state_path($root);
+    if (!is_file($p)) return null;
+    $raw = @file_get_contents($p);
+    if ($raw === false || $raw === '') return null;
+    $st = json_decode($raw, true);
+    return is_array($st) ? $st : null;
+}
+
+function organize_write_state(string $root, array $st): bool
+{
+    $dir = dirname(organize_state_path($root));
+    if (!is_dir($dir) && !@mkdir($dir, 0777, true) && !is_dir($dir)) return false;
+    $st['updated'] = time();
+    return @file_put_contents(organize_state_path($root), json_encode($st), LOCK_EX) !== false;
+}
+
+/** Top-level items still needing processing (loose model files + zips). */
+function organize_pending_items(string $root): array
+{
+    $modelExt = ['stl','3mf','obj','step','stp','scad','gcode','gco','ply','amf','off','dae','fbx','glb','gltf'];
+    $pending = [];
+    foreach (scandir($root) ?: [] as $name) {
+        if ($name === '.' || $name === '..') continue;
+        if ($name[0] === '.') continue;
+        if ($name === '_processed' || $name === '_processing') continue;
+        $abs = $root . '/' . $name;
+        if (!is_file($abs)) continue;                  // dirs are already models
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        if ($ext === 'zip' || in_array($ext, $modelExt, true)) {
+            $pending[] = $name;
+        }
+    }
+    sort($pending);
+    return $pending;
+}
+
+/** Process a single top-level item. Mutates $summary counters/errors. */
+function organize_one_item(string $root, string $name, array &$summary): void
+{
+    $modelExt = ['stl','3mf','obj','step','stp','scad','gcode','gco','ply','amf','off','dae','fbx','glb','gltf'];
+    $abs = $root . '/' . $name;
+    if (!is_file($abs)) { return; }                    // vanished or already moved
+
+    $uniqueDir = static function (string $base) use ($root): string {
+        $base = trim($base) !== '' ? $base : 'model';
+        $base = preg_replace('/[\/\\\\:*?"<>|]+/', '_', $base);
+        $cand = $base; $n = 2;
+        while (is_dir($root . '/' . $cand) || is_file($root . '/' . $cand)) {
+            $cand = $base . ' (' . $n . ')'; $n++;
+        }
+        return $root . '/' . $cand;
+    };
+
+    $ext  = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    $stem = pathinfo($name, PATHINFO_FILENAME);
+
+    if ($ext === 'zip') {
+        $wrapDir = zip_single_root_dir($abs);
+        if ($wrapDir !== null) {
+            $target = $root;
+            if (is_dir($root . '/' . $wrapDir)) { $target = $uniqueDir($stem); }
+            if (extract_zip_safe($abs, $target)) {
+                $summary['zips']++;
+                custom_move_to_processed($root, $abs, $summary);
+            } else {
+                $summary['errors'][] = 'Failed to extract: ' . $name;
+            }
+        } else {
+            $target = $uniqueDir($stem);
+            if (extract_zip_safe($abs, $target)) {
+                $summary['zips']++;
+                custom_move_to_processed($root, $abs, $summary);
+            } else {
+                @rmdir($target);
+                $summary['errors'][] = 'Failed to extract: ' . $name;
+            }
+        }
+        return;
+    }
+
+    if (in_array($ext, $modelExt, true)) {
+        $target = $uniqueDir($stem);
+        if (!@mkdir($target, 0777, true) && !is_dir($target)) {
+            $summary['errors'][] = 'Could not create folder for: ' . $name;
+            return;
+        }
+        if (@rename($abs, $target . '/' . $name)) {
+            $summary['moved']++;
+        } elseif (@copy($abs, $target . '/' . $name) && @unlink($abs)) {
+            $summary['moved']++;
+        } else {
+            $summary['errors'][] = 'Could not move: ' . $name;
+            @rmdir($target);
+        }
+        return;
+    }
+
+    $summary['skipped']++;
+}
+
+/** Seed the state file for a fresh run (or restart). Returns state or error. */
+function organize_start(string $root): array
+{
+    $realRoot = realpath($root);
+    if ($realRoot === false || !is_dir($realRoot)) {
+        return ['ok' => false, 'error' => 'Folder not found: ' . $root];
+    }
+    if (!is_writable($realRoot)) {
+        return ['ok' => false, 'error' => 'Folder is not writable by the app: ' . $realRoot];
+    }
+    $pending = organize_pending_items($realRoot);
+    $st = [
+        'status'  => 'running',
+        'total'   => count($pending),
+        'done'    => 0,
+        'moved'   => 0,
+        'zips'    => 0,
+        'skipped' => 0,
+        'errors'  => [],
+        'current' => null,
+        'started' => time(),
+    ];
+    organize_write_state($realRoot, $st);
+    return ['ok' => true, 'state' => $st];
+}
+
+/** Process up to $n pending items. Honors a paused state (no-op while paused). */
+function organize_chunk(string $root, int $n = 8): array
+{
+    $realRoot = realpath($root);
+    if ($realRoot === false || !is_dir($realRoot)) {
+        return ['ok' => false, 'error' => 'Folder not found.'];
+    }
+    $st = organize_read_state($realRoot);
+    if ($st === null) {
+        $seed = organize_start($realRoot);
+        if (!$seed['ok']) return $seed;
+        $st = $seed['state'];
+    }
+    if (($st['status'] ?? '') === 'paused') {
+        return ['ok' => true, 'state' => $st, 'paused' => true];
+    }
+    if (($st['status'] ?? '') === 'done') {
+        return ['ok' => true, 'state' => $st, 'done' => true];
+    }
+
+    $pending = organize_pending_items($realRoot);
+    if ($pending === []) {
+        $st['status']  = 'done';
+        $st['current'] = null;
+        organize_write_state($realRoot, $st);
+        return ['ok' => true, 'state' => $st, 'done' => true];
+    }
+
+    $summary = ['moved' => $st['moved'], 'zips' => $st['zips'], 'skipped' => $st['skipped'], 'errors' => $st['errors']];
+    $processed = 0;
+    foreach ($pending as $name) {
+        // Re-check pause between items so a Pause click lands within one chunk.
+        $live = organize_read_state($realRoot);
+        if ($live !== null && ($live['status'] ?? '') === 'paused') {
+            $st['status'] = 'paused';
+            break;
+        }
+        $st['current'] = $name;
+        organize_write_state($realRoot, $st);     // surface "current" to the UI
+        organize_one_item($realRoot, $name, $summary);
+        $processed++;
+        $st['done']    = (int) $st['done'] + 1;
+        $st['moved']   = $summary['moved'];
+        $st['zips']    = $summary['zips'];
+        $st['skipped'] = $summary['skipped'];
+        $st['errors']  = array_slice($summary['errors'], 0, 50);
+        if ($processed >= $n) break;
+    }
+
+    // If nothing remains after this chunk, mark done.
+    if (organize_pending_items($realRoot) === [] && ($st['status'] ?? '') !== 'paused') {
+        $st['status'] = 'done';
+        $st['current'] = null;
+    }
+    organize_write_state($realRoot, $st);
+    return ['ok' => true, 'state' => $st, 'done' => ($st['status'] === 'done')];
+}
+
+/** Set status to 'paused' or 'running' (resume). */
+function organize_set_status(string $root, string $status): array
+{
+    $realRoot = realpath($root);
+    if ($realRoot === false) return ['ok' => false, 'error' => 'Folder not found.'];
+    $st = organize_read_state($realRoot);
+    if ($st === null) return ['ok' => false, 'error' => 'No organize in progress.'];
+    if (!in_array($status, ['paused', 'running'], true)) {
+        return ['ok' => false, 'error' => 'Bad status.'];
+    }
+    $st['status'] = $status;
+    organize_write_state($realRoot, $st);
+    return ['ok' => true, 'state' => $st];
+}
+
+/**
+ * Synchronous whole-folder organize (back-compat / CLI). Built on the same
+ * per-item primitive. Returns ['moved','zips','skipped','errors'].
+ */
+function organize_custom_folder(string $root): array
+{
+    $summary = ['moved' => 0, 'zips' => 0, 'skipped' => 0, 'errors' => []];
+    $realRoot = realpath($root);
+    if ($realRoot === false || !is_dir($realRoot)) {
+        $summary['errors'][] = 'Folder not found: ' . $root;
+        return $summary;
+    }
+    if (!is_writable($realRoot)) {
+        $summary['errors'][] = 'Folder is not writable by the app: ' . $realRoot;
+        return $summary;
+    }
+    // Count already-organized subfolders as skipped, for an informative summary.
+    foreach (scandir($realRoot) ?: [] as $name) {
+        if ($name === '.' || $name === '..' || $name[0] === '.') continue;
+        if ($name === '_processed' || $name === '_processing') continue;
+        if (is_dir($realRoot . '/' . $name)) $summary['skipped']++;
+    }
+    foreach (organize_pending_items($realRoot) as $name) {
+        organize_one_item($realRoot, $name, $summary);
+    }
+    return $summary;
+}
+
+/** Move a processed zip into <root>/_processed/, keeping the file. */
+function custom_move_to_processed(string $root, string $zipPath, array &$summary): void
+{
+    $bin = $root . '/_processed';
+    if (!is_dir($bin) && !@mkdir($bin, 0777, true) && !is_dir($bin)) {
+        $summary['errors'][] = 'Could not create _processed for: ' . basename($zipPath);
+        return;
+    }
+    $dest = $bin . '/' . basename($zipPath);
+    // Avoid clobbering an existing processed zip of the same name.
+    if (is_file($dest)) {
+        $dest = $bin . '/' . pathinfo($zipPath, PATHINFO_FILENAME)
+              . '-' . substr(md5((string) microtime()), 0, 6) . '.zip';
+    }
+    if (!@rename($zipPath, $dest)) {
+        if (@copy($zipPath, $dest)) { @unlink($zipPath); }
+    }
+}
+
+/**
+ * If a zip's entries all live under a single top-level folder, return that
+ * folder name; otherwise null (the zip is "flat" or has multiple roots).
+ */
+function zip_single_root_dir(string $zipPath): ?string
+{
+    if (!is_file($zipPath)) return null;
+    $za = new ZipArchive();
+    if ($za->open($zipPath) !== true) return null;
+    $root = null;
+    $multiple = false;
+    for ($i = 0; $i < $za->numFiles; $i++) {
+        $entry = $za->getNameIndex($i);
+        if ($entry === false || $entry === '') continue;
+        $norm = str_replace('\\', '/', $entry);
+        if ($norm[0] === '/' || $norm === '' ) continue;
+        $top = explode('/', $norm)[0];
+        if ($top === '' ) continue;
+        if ($root === null) {
+            $root = $top;
+        } elseif ($root !== $top) {
+            $multiple = true;
+            break;
+        }
+    }
+    $za->close();
+    if ($multiple || $root === null) return null;
+    // Only treat as "wrapped" if there's actually a folder (entries beyond just
+    // the bare top name) — a single loose file isn't a wrapping dir.
+    return $root;
+}
+
 function extract_zip_safe(string $zipPath, string $targetDir): bool
 {
     if (!is_file($zipPath)) {
@@ -1082,6 +1483,10 @@ function cfg_defaults(): array
         'hex3dforum_forum_ids'       => '',
         'hex3dforum_download_dir'    => '',
         'hex3dforum_delay'           => 60,
+        // Custom local folders the user registers to surface in My Library.
+        // Each entry: ['id' => unique, 'label' => display name, 'path' => abs path].
+        // Indexed in place (never copied); removing an entry never touches files.
+        'custom_folders'             => [],
     ];
 }
 
@@ -1246,6 +1651,22 @@ function cfg_save(array $patch): bool
     }
     if (isset($patch['hex3dforum_delay'])) {
         $current['hex3dforum_delay'] = max(30, min(3600, (int) $patch['hex3dforum_delay']));
+    }
+    if (array_key_exists('custom_folders', $patch) && is_array($patch['custom_folders'])) {
+        // Sanitize each entry: keep a stable id, a display label, and an
+        // absolute path. Paths are stored verbatim (validated at use-time);
+        // ids are opaque so source slugs never encode a filesystem path.
+        $clean = [];
+        foreach ($patch['custom_folders'] as $entry) {
+            if (!is_array($entry)) continue;
+            $path = trim((string) ($entry['path'] ?? ''));
+            if ($path === '') continue;
+            $id    = preg_replace('/[^A-Za-z0-9]/', '', (string) ($entry['id'] ?? '')) ?: substr(md5($path . microtime()), 0, 12);
+            $label = trim((string) ($entry['label'] ?? ''));
+            if ($label === '') $label = basename(rtrim($path, '/'));
+            $clean[] = ['id' => $id, 'label' => $label, 'path' => $path];
+        }
+        $current['custom_folders'] = $clean;
     }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
