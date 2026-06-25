@@ -141,31 +141,48 @@ if ($source === 'nikko') {
     if (!array_key_exists($nikkoCat, $nikkoCategories)) { $nikkoCat = ''; }
 }
 
-// Hex3D Forum: browse by a configured forum ID instead of a scraped category
-// tree — the board has ~80 forums across nested categories, more than makes
-// sense as a fixed dropdown. Settings → Hex3D Forum is where the ID list
-// (and each one's display name) is maintained.
-$hex3dforumIds = hex3dforum_ids();
+// Hex3D Forum: the board's own index is the catalog. Scrape every forum the
+// logged-in member can see (id => name) live, rather than maintaining a manual
+// ID list. One request to index.php replaces what used to be one request per
+// forum just to resolve names.
 $hex3dforumCategories = [];
-foreach ($hex3dforumIds as $fid) {
-    $hex3dforumCategories[$fid] = $fid; // label resolved client-side via forumName() below
-}
 $hex3dforumCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['hex3dforum_id'] ?? ''));
 $hex3dforumBrowse = $source === 'hex3dforum' && (isset($_GET['hex3dforum_id']) || isset($_GET['browse']));
 if ($source === 'hex3dforum') {
-    if (!array_key_exists($hex3dforumCat, $hex3dforumCategories)) {
-        $hex3dforumCat = $hex3dforumIds[0] ?? '';
+    $hex3dSvc = new Hex3DForumService();
+    if ($hex3dSvc->isAuthed()) {
+        $hex3dforumCategories = $hex3dSvc->discoverForums();
     }
-    // Resolve real forum names for display — one request per configured forum,
-    // acceptable since this list is short and only fetched when this source's
-    // sidebar is actually being rendered.
-    if ($hex3dforumIds !== []) {
-        $hex3dSvc = new Hex3DForumService();
-        if ($hex3dSvc->isAuthed()) {
-            foreach ($hex3dforumIds as $fid) {
-                $hex3dforumCategories[$fid] = $hex3dSvc->forumName($fid);
-            }
-        }
+    $hex3dforumIds = array_keys($hex3dforumCategories);
+    // Note: do NOT force-select the first forum here when none was requested —
+    // an empty $hex3dforumCat means "All Models" (added below). Only the case
+    // where a specific, now-invalid forum id was requested needs correcting,
+    // and that's handled after the All entry is prepended.
+
+    // Hide forums that have no indexed models (empty containers, request
+    // boards, FAQ sections, etc.). Only filter once the crawler has actually
+    // indexed something — otherwise show all so a fresh install isn't blank.
+    $hex3dNonEmpty = [];
+    foreach (db()->query('SELECT DISTINCT forum_id FROM hex3d_topics')->fetchAll(PDO::FETCH_COLUMN) as $fidWithTopics) {
+        $hex3dNonEmpty[(string) $fidWithTopics] = true;
+    }
+    if ($hex3dNonEmpty !== []) {
+        $hex3dforumCategories = array_filter(
+            $hex3dforumCategories,
+            static fn($label, $fid) => isset($hex3dNonEmpty[(string) $fid]),
+            ARRAY_FILTER_USE_BOTH
+        );
+    }
+
+    // Prepend an "All Models" entry (forum id '' = no filter = every indexed
+    // topic across all tiers), matching how the other sources expose "All".
+    if ($hex3dforumCategories !== []) {
+        $hex3dforumCategories = ['' => 'All Models'] + $hex3dforumCategories;
+    }
+    // Resolve the selection: empty string = All (valid). A specific forum id
+    // that no longer exists (e.g. filtered out as empty) falls back to All.
+    if ($hex3dforumCat !== '' && !array_key_exists($hex3dforumCat, $hex3dforumCategories)) {
+        $hex3dforumCat = '';
     }
 }
 
@@ -231,15 +248,43 @@ if ($source === 'makerworld') {
 } elseif ($source === 'hex3dforum') {
     $svc           = null;
     $initialCursor = null;
-    $hex3dforumReadyIdx = (string) cfg('hex3dforum_cookie') !== '';
-    if ($hex3dforumReadyIdx && $hex3dforumCat !== '') {
-        $models = (new Hex3DForumService())->browse($hex3dforumCat, 20, 0);
+    // Browse reads the local crawler index (hex3d_topics). An empty index means
+    // the crawler hasn't run yet — guide the user there rather than hitting the
+    // forum live (which is slow and session-gated).
+    $hex3dIndexCount = (int) db()->query('SELECT COUNT(*) FROM hex3d_topics')->fetchColumn();
+    $hex3dforumReadyIdx = hex3dforum_configured();
+    if ($hex3dIndexCount > 0) {
+        $where = '1=1';
+        $bind  = [];
+        if ($hex3dforumCat !== '') { $where = 'forum_id = :fid'; $bind[':fid'] = $hex3dforumCat; }
+        // Total matching rows → tells us whether there's a next page to scroll.
+        $cntStmt = db()->prepare("SELECT COUNT(*) FROM hex3d_topics WHERE $where");
+        $cntStmt->execute($bind);
+        $hex3dMatchTotal = (int) $cntStmt->fetchColumn();
+
+        $stmt = db()->prepare(
+            "SELECT forum_id, topic_id, forum_name, title, thumb
+               FROM hex3d_topics WHERE $where ORDER BY forum_name, title LIMIT 20"
+        );
+        $stmt->execute($bind);
+        $models = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $thumb = (string) $r['thumb'];
+            $models[] = [
+                'id' => (string) $r['topic_id'], 'slug' => $r['forum_id'] . '-' . $r['topic_id'],
+                'name' => (string) $r['title'], 'creator' => (string) ($r['forum_name'] ?: 'Hex3D'),
+                'thumb' => $thumb, 'images' => $thumb !== '' ? [$thumb] : [], 'size' => 0, 'source' => 'hex3dforum',
+            ];
+        }
+        // If more than the first page exists, hand the JS a cursor (next offset)
+        // so infinite scroll keeps pulling pages from search_more.php.
+        $initialCursor = ($hex3dMatchTotal > 20) ? 20 : null;
         $banner = null;
     } else {
         $models = [];
         $banner = !$hex3dforumReadyIdx
             ? 'Hex3D Forum — add your session cookie in Settings to browse and download.'
-            : 'Hex3D Forum — add at least one forum ID in Settings to browse.';
+            : 'Hex3D Forum — the index is empty. Run the crawler (Settings → Hex3D Forum → Crawl now) to build it.';
     }
 } else {
     $svc    = new PrintablesService();
@@ -349,7 +394,7 @@ $csrf = csrf_token();
     <div class="navlabel">Hex3D Forum</div>
     <nav id="hex3dforumCatNav">
       <?php if ($hex3dforumCategories === []): ?>
-        <a href="settings.php" class="hint" style="display:block;padding:9px 12px;color:var(--muted);font-size:13px;">No forum IDs configured — add some in Settings.</a>
+        <a href="settings.php" class="hint" style="display:block;padding:9px 12px;color:var(--muted);font-size:13px;">No forums found — check your Hex3D Forum session cookie in Settings.</a>
       <?php endif; ?>
       <?php foreach ($hex3dforumCategories as $fid => $label): $fid = (string) $fid; ?>
         <a href="javascript:void(0)" data-hex3dforumcat="<?= e($fid) ?>" data-hex3dforumlabel="<?= e($label) ?>"
@@ -423,6 +468,8 @@ $csrf = csrf_token();
         'cults3d'     => 'Search all of Cults3D — e.g. miniature, keychain, lamp…',
         'stlflix'     => 'Search STLFlix — e.g. vista vase, dragon egg, wall light…',
         'creality'    => 'Search Creality Cloud — e.g. dice tower, bracket, dragon…',
+        'nikko'       => 'Search Nikko Industries — e.g. helmet, armor, mask…',
+        'hex3dforum'  => 'Search your Hex3D library — e.g. skeletor, duck, bust…',
         default       => 'Search all of Printables — e.g. belt sander, toothpick, sanding block…',
       } ?>" autocomplete="off">
       <button class="btn-primary" id="searchGo">Search</button>
@@ -459,7 +506,7 @@ $csrf = csrf_token();
           <div class="thumb">
             <?php
               $thumbUrl = (string) $m['thumb'];
-              if ($thumbUrl !== '' && in_array($source, ['cults3d', 'thingiverse', 'nikko'], true)) {
+              if ($thumbUrl !== '' && in_array($source, ['cults3d', 'thingiverse', 'nikko', 'hex3dforum'], true)) {
                   $thumbUrl = 'proxy.php?url=' . urlencode($thumbUrl);
               }
             ?>
@@ -652,7 +699,7 @@ $csrf = csrf_token();
   }
 
   // Proxy CDN images that block cross-origin requests.
-  const PROXY_SOURCES = ['cults3d', 'thingiverse', 'nikko'];
+  const PROXY_SOURCES = ['cults3d', 'thingiverse', 'nikko', 'hex3dforum'];
   function thumbSrc(url) {
     if (!url) return '';
     if (PROXY_SOURCES.includes(SOURCE)) return 'proxy.php?url=' + encodeURIComponent(url);
@@ -842,6 +889,10 @@ $csrf = csrf_token();
         (SOURCE === 'nikko' && searchQuery === '' ? '&browse=1' : '') +
         (SOURCE === 'hex3dforum' ? '&hex3dforum_id=' + encodeURIComponent(window._hex3dforumCatActive ?? HEX3DFORUM_CAT) : '') +
         (SOURCE === 'hex3dforum' ? '&browse=1' : '')
+      : (SOURCE === 'hex3dforum')
+        ? 'search_more.php?q=&offset=' + encodeURIComponent(nextCursor || 0) +
+          '&src=hex3dforum&browse=1' +
+          '&hex3dforum_id=' + encodeURIComponent(window._hex3dforumCatActive ?? HEX3DFORUM_CAT)
       : 'browse_more.php?cat=' + encodeURIComponent(pbCatActive) +
         '&cursor=' + encodeURIComponent(nextCursor || '');
 
@@ -873,6 +924,10 @@ $csrf = csrf_token();
 
     if (mode === 'search') {
       searchNext = data.nextOffset ?? null;
+    } else if (SOURCE === 'hex3dforum') {
+      // Hex3D browse reads the index via search_more.php, which returns
+      // nextOffset (not cursor) — carry it forward for doom-scroll.
+      nextCursor = data.nextOffset ?? null;
     } else {
       nextCursor = (data.cursor && data.models.length) ? data.cursor : null;
     }
@@ -1006,10 +1061,15 @@ $csrf = csrf_token();
   }
 
   if (SOURCE === 'hex3dforum') {
-    // Server already rendered the first page for the active forum ID; just
-    // remember it so "Load more" keeps requesting the same forum.
+    // Initialize identically to clicking "All Models" in the sidebar — that
+    // path paginates correctly to the end. We clear the server-rendered first
+    // page and reload from offset 0 through the same browse function, so initial
+    // load and nav-click behave the same (avoids a cursor-seeding edge that
+    // capped initial load at ~100). HEX3DFORUM_CAT is '' for the All view, or a
+    // forum id if the page was opened on a specific tier.
     window._hex3dforumCatActive = HEX3DFORUM_CAT || '';
-    mode = 'search';
+    const h3label = (document.querySelector('#hex3dforumCatNav a.active') || {}).textContent || 'All Models';
+    browseHex3DForum(HEX3DFORUM_CAT || '', h3label);
   }
 
   // MW category nav

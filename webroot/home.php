@@ -174,7 +174,7 @@ foreach ($sources as $s) {
       <div class="token-step">Log in to hex3dpatreon.com with an active Patreon-linked account</div>
       <div class="token-step">Open DevTools → <strong>Application/Storage</strong> tab → <strong>Cookies</strong></div>
       <div class="token-step">Copy the entire cookie header for the site (phpBB session cookie + persistent login cookie if "Remember me" was checked)</div>
-      <div class="token-note">A phpBB forum, not an API — full browser session cookie required. You'll also need the forum IDs you want to browse (the number after <code>f=</code> in each forum's URL); paste them comma-separated in Settings. Re-paste the cookie when downloads start failing.</div>
+      <div class="token-note">A phpBB forum, not an API — full browser session cookie required. Once it's set, every forum your account can see is discovered automatically and listed on the Browse page (no IDs to configure). Re-paste the cookie when downloads start failing.</div>
     </div>
 
     <div class="token-card">

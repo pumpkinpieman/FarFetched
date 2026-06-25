@@ -133,25 +133,64 @@ if ($source === 'nikko') {
     exit;
 }
 
-// ---- Hex3D Forum (phpBB, browse by forum ID) ---------------------------------
+// ---- Hex3D Forum (served from the local crawler index) ----------------------
 if ($source === 'hex3dforum') {
-    $hex3d = new Hex3DForumService();
+    // Browse/search now read the pre-built hex3d_topics index (populated by
+    // hex3d_crawl.php) rather than hitting the slow, session-gated forum live.
+    // forum id is optional: present = filter to that forum; absent = all forums.
+    // BUT a search query always searches the WHOLE index — the per-forum filter
+    // is a browse convenience, not a search constraint (otherwise selecting a
+    // container forum with 0 topics would hide all matches).
     $forumId = preg_replace('/[^0-9]/', '', (string) ($_GET['hex3dforum_id'] ?? ''));
-    $configuredIds = hex3dforum_ids();
+    $limit   = 20;
 
-    if ($forumId === '' && $configuredIds !== []) {
-        $forumId = $configuredIds[0];
+    $where  = ['1=1'];
+    $args   = [];
+    if ($forumId !== '' && $q === '') {
+        $where[] = 'forum_id = :fid';
+        $args[':fid'] = $forumId;
     }
-    if ($forumId === '') {
-        echo json_encode(['ok' => false, 'error' => 'No forum ID selected — paste forum IDs in Settings → Hex3D Forum.']);
-        exit;
+    if ($q !== '') {
+        $where[] = 'title LIKE :q';
+        $args[':q'] = '%' . $q . '%';
+    }
+    $whereSql = implode(' AND ', $where);
+
+    $total = (int) (function () use ($whereSql, $args) {
+        $st = db()->prepare("SELECT COUNT(*) FROM hex3d_topics WHERE $whereSql");
+        $st->execute($args);
+        return $st->fetchColumn();
+    })();
+
+    $st = db()->prepare(
+        "SELECT forum_id, topic_id, forum_name, title, thumb
+           FROM hex3d_topics
+          WHERE $whereSql
+          ORDER BY forum_name, title
+          LIMIT :lim OFFSET :off"
+    );
+    foreach ($args as $k => $v) { $st->bindValue($k, $v); }
+    $st->bindValue(':lim', $limit, PDO::PARAM_INT);
+    $st->bindValue(':off', $offset, PDO::PARAM_INT);
+    $st->execute();
+
+    $models = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $thumb = (string) $r['thumb'];
+        $models[] = [
+            'id'      => (string) $r['topic_id'],
+            'slug'    => $r['forum_id'] . '-' . $r['topic_id'],
+            'name'    => (string) $r['title'],
+            'creator' => (string) ($r['forum_name'] ?: 'Hex3D'),
+            'thumb'   => $thumb,
+            'images'  => $thumb !== '' ? [$thumb] : [],
+            'size'    => 0,
+            'source'  => 'hex3dforum',
+        ];
     }
 
-    $limit  = 20;
-    $models = $hex3d->browse($forumId, $limit, $offset);
-    if ($hex3d->lastError !== '') { echo json_encode(['ok' => false, 'error' => $hex3d->lastError]); exit; }
-    $nextOffset = (($offset + $limit) < $hex3d->lastTotal) ? $offset + $limit : null;
-    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $hex3d->lastTotal, 'source' => 'hex3dforum']);
+    $nextOffset = (($offset + $limit) < $total) ? $offset + $limit : null;
+    echo json_encode(['ok' => true, 'models' => $models, 'nextOffset' => $nextOffset, 'total' => $total, 'source' => 'hex3dforum']);
     exit;
 }
 

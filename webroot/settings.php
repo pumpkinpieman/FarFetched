@@ -328,24 +328,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- Hex3D Forum -----------------------------------------------------
     elseif ($action === 'save_hex3dforum_cookie') {
-        $cookie = trim((string) ($_POST['hex3dforum_cookie'] ?? ''));
-        if ($cookie === '') {
-            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste your Hex3D Forum session cookie first.'];
+        $u   = trim((string) ($_POST['hex3dforum_u'] ?? ''));
+        $sid = trim((string) ($_POST['hex3dforum_sid'] ?? ''));
+        $k   = trim((string) ($_POST['hex3dforum_k'] ?? ''));
+        if ($sid === '' && $u === '') {
+            $notice = ['type' => 'err', 'text' => 'Nothing to save — paste at least your User ID and SID first.'];
         } else {
-            cfg_save(['hex3dforum_cookie' => $cookie]);
-            $h = new Hex3DForumService($cookie);
+            cfg_save(['hex3dforum_u' => $u, 'hex3dforum_sid' => $sid, 'hex3dforum_k' => $k]);
+            // Construct with no arg so it reads the three fields we just saved.
+            $h = new Hex3DForumService();
             $notice = $h->validate()
                 ? ['type' => 'ok', 'text' => 'Hex3D Forum connected successfully.']
                 : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $h->lastError];
         }
     }
     elseif ($action === 'clear_hex3dforum_cookie') {
-        cfg_save(['hex3dforum_cookie' => '']);
-        $notice = ['type' => 'ok', 'text' => 'Hex3D Forum session cookie cleared.'];
-    }
-    elseif ($action === 'save_hex3dforum_ids') {
-        cfg_save(['hex3dforum_forum_ids' => (string) ($_POST['hex3dforum_forum_ids'] ?? '')]);
-        $notice = ['type' => 'ok', 'text' => 'Hex3D Forum IDs saved.'];
+        cfg_save(['hex3dforum_u' => '', 'hex3dforum_sid' => '', 'hex3dforum_k' => '', 'hex3dforum_cookie' => '']);
+        $notice = ['type' => 'ok', 'text' => 'Hex3D Forum session cleared.'];
     }
     elseif ($action === 'save_hex3dforum_dir') {
         $r = apply_source_dir((string) ($_POST['hex3dforum_dir'] ?? ''), 'hex3dforum');
@@ -354,6 +353,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     elseif ($action === 'save_hex3dforum_delay') {
         cfg_save(['hex3dforum_delay' => (int) ($_POST['hex3dforum_delay'] ?? 60)]);
         $notice = ['type' => 'ok', 'text' => 'Hex3D Forum pacing saved.'];
+    }
+    elseif ($action === 'hex3dforum_crawl') {
+        // Launch the crawler detached so the request returns immediately — the
+        // run can take hours. Output goes to a log the user can tail.
+        if (!hex3dforum_configured()) {
+            $notice = ['type' => 'err', 'text' => 'Set your Hex3D Forum session cookie first.'];
+        } else {
+            $script = escapeshellarg(__DIR__ . '/hex3d_crawl.php');
+            $log    = escapeshellarg(sys_get_temp_dir() . '/hex3d_crawl.log');
+            // nohup + & so it survives the request ending; stdout/err to the log.
+            @exec('nohup php ' . $script . ' > ' . $log . ' 2>&1 &');
+            $notice = ['type' => 'ok', 'text' => 'Crawl started in the background. Status updates below as it progresses; large first crawls take a long time.'];
+        }
     }
 
     // ---- Worker -------------------------------------------------------------
@@ -397,7 +409,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'creality'    => creality_ready(),
                 'stlflix'     => (string) cfg('stlflix_token') !== '',
                 'nikko'       => (string) cfg('nikko_phpsessid') !== '',
-                'hex3dforum'  => (string) cfg('hex3dforum_cookie') !== '',
+                'hex3dforum'  => hex3dforum_configured(),
             ],
         ]);
         exit;
@@ -466,12 +478,13 @@ $nikkoDelay  = (int) cfg('nikko_delay');
 $nikkoReady  = $nikkoPhpSessId !== '';
 
 // Hex3D Forum
-$hex3dforumCookie  = (string) cfg('hex3dforum_cookie');
-$hex3dforumIdsRaw  = (string) cfg('hex3dforum_forum_ids');
+$hex3dforumU       = (string) cfg('hex3dforum_u');
+$hex3dforumSid     = (string) cfg('hex3dforum_sid');
+$hex3dforumK       = (string) cfg('hex3dforum_k');
 $hex3dforumDir     = get_hex3dforum_dir();
 $hex3dforumWrite   = is_dir($hex3dforumDir) && is_writable($hex3dforumDir);
 $hex3dforumDelay   = (int) cfg('hex3dforum_delay');
-$hex3dforumReady   = $hex3dforumCookie !== '';
+$hex3dforumReady   = $hex3dforumSid !== '' || $hex3dforumU !== '';
 
 
 // Active tab
@@ -1364,28 +1377,51 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
-            <label for="hex3dforum_cookie">Session cookie <?php if ($hex3dforumCookie !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="hex3dforum_cookie" name="hex3dforum_cookie" value="<?= e($hex3dforumCookie) ?>" placeholder="paste your full Cookie header from a logged-in hex3dpatreon.com tab"><button type="button" class="reveal-btn" data-target="hex3dforum_cookie" aria-label="Show/hide value">👁</button>
+            <label for="hex3dforum_u">User ID <?php if ($hex3dforumU !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="text" id="hex3dforum_u" name="hex3dforum_u" value="<?= e($hex3dforumU) ?>" placeholder="the phpbb3_..._u cookie value (a number)">
+            <label for="hex3dforum_sid" style="margin-top:12px;">Session ID (SID) <?php if ($hex3dforumSid !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="password" id="hex3dforum_sid" name="hex3dforum_sid" value="<?= e($hex3dforumSid) ?>" placeholder="the phpbb3_..._sid cookie value"><button type="button" class="reveal-btn" data-target="hex3dforum_sid" aria-label="Show/hide value">👁</button>
+            <label for="hex3dforum_k" style="margin-top:12px;">Login Key <span style="color:var(--muted);font-weight:400;">(optional, from "Remember me")</span> <?php if ($hex3dforumK !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
+            <input type="password" id="hex3dforum_k" name="hex3dforum_k" value="<?= e($hex3dforumK) ?>" placeholder="the phpbb3_..._k cookie value"><button type="button" class="reveal-btn" data-target="hex3dforum_k" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_hex3dforum_cookie">Save &amp; Connect</button>
               <?php if ($hex3dforumReady): ?>
-              <button class="btn-ghost btn-sm" name="action" value="clear_hex3dforum_cookie" onclick="return confirm('Clear Hex3D Forum session cookie?')">Clear</button>
+              <button class="btn-ghost btn-sm" name="action" value="clear_hex3dforum_cookie" onclick="return confirm('Clear Hex3D Forum session?')">Clear</button>
               <?php endif; ?>
             </div>
           </form>
-          <p class="hint">hex3dpatreon.com is a phpBB forum with no API — log in with an active Patreon-linked account, then DevTools → Application/Storage → Cookies → copy the full cookie header (phpBB session cookie, plus the persistent login cookie if "Remember me" was checked). Re-paste when downloads start failing.</p>
+          <p class="hint">hex3dpatreon.com is a phpBB forum with no API. Log in (check "Remember me"), then DevTools → Application/Storage → Cookies → copy three values: <code>phpbb3_…_u</code> → User ID, <code>phpbb3_…_sid</code> → Session ID, <code>phpbb3_…_k</code> → Login Key. Paste just the values (not the cookie names). The SID is what actually unlocks content and it rotates when your browser session refreshes — re-paste it when browsing/crawling starts failing.</p>
         </div>
         <div class="src-body">
+          <p class="hint" style="margin-top:0;">Forums are discovered automatically — once your session cookie is set, the Browse page lists every forum your account can see. <strong>Heads up:</strong> hex3dpatreon.com permits a replayed session to load the forum <em>index</em> but rejects it on actual forum/topic pages unless the session ID rides along in the URL — FarFetched handles that automatically by reading the SID out of your session cookie. Browsing reads a locally-built index (below), so keep your cookie fresh enough for the crawler to run.</p>
+        </div>
+        <div class="src-body">
+          <?php
+            $hex3dState = db()->query('SELECT * FROM hex3d_crawl_state WHERE id = 1')->fetch(PDO::FETCH_ASSOC) ?: [];
+            $hex3dSeen  = (int) ($hex3dState['topics_seen'] ?? 0);
+            $hex3dDone  = (int) ($hex3dState['details_done'] ?? 0);
+            $hex3dStatus = (string) ($hex3dState['status'] ?? 'idle');
+            $hex3dErr    = (string) ($hex3dState['last_error'] ?? '');
+          ?>
+          <label>Local index</label>
+          <p class="hint" style="margin-top:4px;">
+            Status: <strong><?= e(ucfirst($hex3dStatus)) ?></strong> ·
+            <strong><?= $hex3dSeen ?></strong> topics indexed ·
+            <strong><?= $hex3dDone ?></strong> with thumbnails
+            <?php if ($hex3dState['finished_at'] ?? ''): ?> · last finished <?= e($hex3dState['finished_at']) ?><?php endif; ?>
+            <?php if ($hex3dErr !== ''): ?><br><span style="color:var(--err);"><?= e($hex3dErr) ?></span><?php endif; ?>
+          </p>
           <form method="post">
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
-            <label for="hex3dforum_forum_ids">Forum IDs to browse <span style="color:var(--muted);font-weight:400;">(comma or newline separated)</span></label>
-            <textarea id="hex3dforum_forum_ids" name="hex3dforum_forum_ids" placeholder="370,371,372,373,374,375,376,377,378,379,410,348,350,354,..." style="min-height:80px;"><?= e($hex3dforumIdsRaw) ?></textarea>
             <div class="row">
-              <button class="btn-primary btn-sm" name="action" value="save_hex3dforum_ids">Save Forum IDs</button>
+              <button class="btn-primary btn-sm" name="action" value="hex3dforum_crawl"<?= $hex3dStatus === 'running' ? ' disabled' : '' ?>>
+                <?= $hex3dSeen > 0 ? 'Update index (crawl now)' : 'Build index (crawl now)' ?>
+              </button>
             </div>
           </form>
-          <p class="hint">The number after <code>f=</code> in each forum's URL (e.g. <code>viewforum.php?f=370</code> → <code>370</code>). This board has ~80 forums nested under several top-level categories — there's no single "all models" view, so list every forum ID you want FarFetched to browse. The Browse page lets you pick one forum at a time from this list.</p>
+          <p class="hint">The crawler walks every accessible forum and records each model (title, thumbnail, attachments) into a local index that Browse/Search read instantly. It's <strong>incremental</strong> (re-runs only fetch new topics) and <strong>resumable</strong> (a dropped session picks up next run). The first full crawl is large and paced slowly to be polite to the board — it may span several runs. For unattended nightly updates, add a cron entry on your server:</p>
+          <pre style="background:var(--panel-2,#0d0d0d);padding:10px;border-radius:6px;overflow-x:auto;font-size:12px;">0 4 * * * docker exec FarFetched php /var/www/html/webroot/hex3d_crawl.php >> /tmp/hex3d_crawl.log 2>&1</pre>
         </div>
         <div class="src-body">
           <form method="post">

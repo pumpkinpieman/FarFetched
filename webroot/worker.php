@@ -289,6 +289,12 @@ while (true) {
             // SQLite handle left over from a failed execute() cannot be re-run
             // (it raises "bad parameter or other API misuse"), so every retry
             // needs a fresh statement.
+            // Retry budget is generous because a concurrent process (the Hex3D
+            // crawler) can hold write intent for stretches at a time, and on
+            // FUSE/network mounts SQLite's own busy_timeout isn't always honored.
+            // ~12 attempts with capped backoff + jitter rides out multi-second
+            // contention without crashing the queue. Total worst case ~30s.
+            $maxAttempts = 12;
             for ($attempt = 1; ; $attempt++) {
                 try {
                     $stmt = $this->pdo->prepare($sql);
@@ -297,13 +303,16 @@ while (true) {
                 } catch (\PDOException $e) {
                     $locked = stripos($e->getMessage(), 'locked') !== false
                            || stripos($e->getMessage(), 'busy') !== false;
-                    if (!$locked || $attempt >= 5) {
+                    if (!$locked || $attempt >= $maxAttempts) {
                         throw $e;
                     }
                     if (function_exists('logln')) {
-                        logln('  DB locked, retrying status write (' . $attempt . '/5)…');
+                        logln('  DB locked, retrying status write (' . $attempt . '/' . $maxAttempts . ')…');
                     }
-                    usleep(500000 * $attempt); // 0.5s, 1s, 1.5s, 2s backoff
+                    // Backoff grows then caps at 3s, plus 0–250ms jitter so a
+                    // concurrent writer and this retry don't lock-step forever.
+                    $backoff = (int) min(3000000, 250000 * $attempt);
+                    usleep($backoff + random_int(0, 250000));
                 }
             }
         }

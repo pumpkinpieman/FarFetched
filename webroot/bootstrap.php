@@ -1076,6 +1076,9 @@ function cfg_defaults(): array
         'nikko_download_dir'         => '',
         'nikko_delay'                => 60,
         'hex3dforum_cookie'          => (string) (getenv('FETCHER_HEX3DFORUM_COOKIE') ?: ''),
+        'hex3dforum_u'               => (string) (getenv('FETCHER_HEX3DFORUM_U') ?: ''),
+        'hex3dforum_sid'             => (string) (getenv('FETCHER_HEX3DFORUM_SID') ?: ''),
+        'hex3dforum_k'               => (string) (getenv('FETCHER_HEX3DFORUM_K') ?: ''),
         'hex3dforum_forum_ids'       => '',
         'hex3dforum_download_dir'    => '',
         'hex3dforum_delay'           => 60,
@@ -1225,6 +1228,12 @@ function cfg_save(array $patch): bool
     if (array_key_exists('hex3dforum_cookie', $patch)) {
         $current['hex3dforum_cookie'] = trim((string) $patch['hex3dforum_cookie']);
     }
+    foreach (['hex3dforum_u', 'hex3dforum_sid', 'hex3dforum_k'] as $hkey) {
+        if (array_key_exists($hkey, $patch)) {
+            $current[$hkey] = trim((string) $patch[$hkey]);
+        }
+    }
+    // (helper hex3dforum_configured() lives near the other source helpers)
     if (array_key_exists('hex3dforum_forum_ids', $patch)) {
         // Stored as a comma-separated string of forum IDs; normalize input
         // that may arrive as newline/space separated from a textarea.
@@ -1244,6 +1253,18 @@ function cfg_save(array $patch): bool
         return false;
     }
     @chmod(CONFIG_STORE, 0600);
+
+    // CONFIG_STORE is a PHP file loaded via include, so OPcache keeps a compiled
+    // copy. Without invalidating it, the next cfg_all() include in THIS request
+    // (e.g. when settings.php re-renders the form) returns the OLD values — the
+    // "save doesn't take until I refresh" bug. Invalidate so re-reads are fresh.
+    if (function_exists('opcache_invalidate')) {
+        @opcache_invalidate(CONFIG_STORE, true);
+    }
+    // Belt-and-suspenders: clear the stat cache too, so file_exists/include see
+    // the new mtime on filesystems that cache stat results (e.g. FUSE mounts).
+    clearstatcache(true, CONFIG_STORE);
+
     return true;
 }
 
@@ -1298,6 +1319,17 @@ function get_hex3dforum_dir(): string
 {
     $v = trim((string) cfg('hex3dforum_download_dir'));
     return $v !== '' ? $v : HEX3DFORUM_DOWNLOAD_DIR;
+}
+
+/**
+ * True when Hex3D Forum has a usable session configured — either the three
+ * split fields (user id + sid, k optional) or the legacy combined cookie.
+ * sid is the part that actually matters for content access.
+ */
+function hex3dforum_configured(): bool
+{
+    if (trim((string) cfg('hex3dforum_sid')) !== '') return true;
+    return trim((string) cfg('hex3dforum_cookie')) !== '';
 }
 
 /** @return string[] configured forum IDs, in the order pasted. */
@@ -1518,6 +1550,46 @@ function init_schema(PDO $pdo): void
         // New uniqueness key spanning source (old table-level UNIQUE stays harmless).
         $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_src_unique ON download_jobs(source, model_id, file_type)");
     }
+
+    // Hex3D Forum local index — populated by the background crawler
+    // (hex3d_crawl.php). Browse/search read from here instead of hitting the
+    // forum live, since the board is slow, session-gated, and paginated only
+    // via admin-ajax-style page walks. One row per topic (= one model).
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS hex3d_topics (
+            forum_id       TEXT    NOT NULL,
+            topic_id       TEXT    NOT NULL,
+            forum_name     TEXT    NOT NULL DEFAULT '',
+            title          TEXT    NOT NULL DEFAULT '',
+            thumb          TEXT    NOT NULL DEFAULT '',
+            attachment_ids TEXT    NOT NULL DEFAULT '[]',
+            detail_done    INTEGER NOT NULL DEFAULT 0,
+            first_seen     TEXT    NOT NULL DEFAULT (datetime('now')),
+            indexed_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (forum_id, topic_id)
+        );
+    SQL);
+    // detail_done flags whether the per-topic page has been fetched yet (thumb
+    // + attachment IDs filled). The crawler inserts the title/id cheaply during
+    // the forum-list pass, then fills details incrementally — so a half-finished
+    // crawl still leaves a usable, growing index.
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_hex3d_forum ON hex3d_topics(forum_id);');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_hex3d_detail ON hex3d_topics(detail_done);');
+
+    // Single-row crawl state for status display + resumability.
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS hex3d_crawl_state (
+            id             INTEGER PRIMARY KEY CHECK (id = 1),
+            status         TEXT    NOT NULL DEFAULT 'idle',
+            started_at     TEXT    NOT NULL DEFAULT '',
+            finished_at    TEXT    NOT NULL DEFAULT '',
+            topics_seen    INTEGER NOT NULL DEFAULT 0,
+            details_done   INTEGER NOT NULL DEFAULT 0,
+            last_error     TEXT    NOT NULL DEFAULT '',
+            updated_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+    SQL);
+    $pdo->exec("INSERT OR IGNORE INTO hex3d_crawl_state (id, status) VALUES (1, 'idle')");
 }
 
 // ---- View helpers ---------------------------------------------------------

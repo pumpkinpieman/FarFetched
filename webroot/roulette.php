@@ -132,10 +132,11 @@ try {
         $models = $svc->search('', 20, $offset, $cat);
 
     } elseif ($source === 'hex3dforum') {
-        if ((string) cfg('hex3dforum_cookie') === '') r_fail('Add your Hex3D Forum session cookie in Settings first.');
-        $ids = hex3dforum_ids();
-        if ($ids === []) r_fail('Add at least one Hex3D Forum ID in Settings first.');
+        if (!hex3dforum_configured()) r_fail('Add your Hex3D Forum session cookie in Settings first.');
         $svc = new Hex3DForumService();
+        $forums = $svc->discoverForums();
+        if ($forums === []) r_fail('No forums discoverable — check your Hex3D Forum session cookie in Settings.');
+        $ids = array_keys($forums);
         $fid = (string) $ids[array_rand($ids)];
         $models = $svc->browse($fid, 20, 0);
     }

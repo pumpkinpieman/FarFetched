@@ -37,17 +37,62 @@ declare(strict_types=1);
  */
 final class Hex3DForumService
 {
-    private const BASE = 'https://www.hex3dpatreon.com';
-    private const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    // Bare domain (no www) — matches how the board issues its own links and
+    // referers; the www host is a separate origin for session validation.
+    private const BASE = 'https://hex3dpatreon.com';
+    private const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:152.0) Gecko/20100101 Firefox/152.0';
+
+    // phpBB names its cookies phpbb3_{boardhash}_{u,sid,k}. The board hash is
+    // fixed per-install (derived at setup, not per-session), so it's a constant
+    // here — if hex3dpatreon ever reinstalls and it changes, this is the one
+    // line to update. Used to reconstruct cookie names from the bare values the
+    // user pastes into the three Settings fields.
+    private const COOKIE_PREFIX = 'phpbb3_3ceqg_';
 
     public string $lastError = '';
     public int    $lastTotal = 0;
 
     private string $cookie;
+    private string $sid = '';
 
+    /**
+     * Builds the session cookie from either:
+     *   - the three bare values stored in config (hex3dforum_u/_sid/_k), which
+     *     is the normal path (Settings has three labeled fields), OR
+     *   - a single pre-built Cookie header passed in / stored in the legacy
+     *     hex3dforum_cookie field (backward compatibility).
+     */
     public function __construct(?string $cookie = null)
     {
-        $this->cookie = trim($cookie ?? (function_exists('cfg') ? (string) cfg('hex3dforum_cookie') : ''));
+        if ($cookie !== null && $cookie !== '') {
+            // Explicit header passed in (e.g. validate-on-save with a raw value).
+            $this->cookie = trim($cookie);
+        } else {
+            $u   = function_exists('cfg') ? trim((string) cfg('hex3dforum_u'))   : '';
+            $sid = function_exists('cfg') ? trim((string) cfg('hex3dforum_sid')) : '';
+            $k   = function_exists('cfg') ? trim((string) cfg('hex3dforum_k'))   : '';
+
+            if ($u !== '' || $sid !== '' || $k !== '') {
+                $parts = [];
+                if ($u   !== '') $parts[] = self::COOKIE_PREFIX . 'u='   . $u;
+                if ($sid !== '') $parts[] = self::COOKIE_PREFIX . 'sid=' . $sid;
+                if ($k   !== '') $parts[] = self::COOKIE_PREFIX . 'k='   . $k;
+                $this->cookie = implode('; ', $parts);
+            } else {
+                // Legacy single combined-cookie field.
+                $this->cookie = function_exists('cfg') ? trim((string) cfg('hex3dforum_cookie')) : '';
+            }
+        }
+
+        // This board runs phpBB's strict session mode: forum/topic/download
+        // pages reject a request whose session ID is only in the cookie — the
+        // SID must ALSO travel as a ?sid= URL parameter (and in the Referer),
+        // exactly as the board's own links do. Pull it out of the cookie so we
+        // can thread it through every content URL. Confirmed via live capture:
+        // identical request login-walls without ?sid=, returns 200 with it.
+        if (preg_match('/phpbb3_[a-z0-9]+_sid=([a-f0-9]+)/i', $this->cookie, $m)) {
+            $this->sid = $m[1];
+        }
     }
 
     public function isAuthed(): bool
@@ -56,13 +101,79 @@ final class Hex3DForumService
     }
 
     /**
+     * Append the session ID as a URL parameter — required by this board for
+     * any authenticated content page. No-op if we couldn't parse a SID.
+     */
+    private function withSid(string $url): string
+    {
+        if ($this->sid === '') return $url;
+        $sep = str_contains($url, '?') ? '&' : '?';
+        return $url . $sep . 'sid=' . $this->sid;
+    }
+
+    /**
+     * Scrape the board index for every forum the logged-in member can see,
+     * returning an ordered id => name map. This is how the source enumerates
+     * its catalog — there's no fixed ID list to maintain; the board's own
+     * index is the source of truth, re-read live each time.
+     *
+     * Two markup shapes are parsed (both verified against the real index):
+     *   - Top-level categories:  <a href="./viewforum.php?f=N" class="cat_title">Name</a>
+     *   - Sub-forum tiles:        <a href="./viewforum.php?f=N" class="tile_inner">
+     *                                ... <div class="tile_title"> Name
+     *
+     * @return array<string,string> forumId => display name, in page order
+     */
+    public function discoverForums(): array
+    {
+        $this->lastError = '';
+        $html = $this->getHtml(self::BASE . '/index.php');
+        if ($html === null) {
+            return [];
+        }
+
+        $forums = [];
+
+        // Top-level category links.
+        if (preg_match_all(
+            '#<a[^>]+href="\./viewforum\.php\?f=(\d+)"\s+class="cat_title">\s*([^<]+?)\s*</a>#i',
+            $html,
+            $cm,
+            PREG_SET_ORDER
+        )) {
+            foreach ($cm as $m) {
+                $forums[$m[1]] = trim(html_entity_decode($m[2], ENT_QUOTES));
+            }
+        }
+
+        // Sub-forum tiles (name lives in a nested tile_title div).
+        if (preg_match_all(
+            '#<a href="\./viewforum\.php\?f=(\d+)" class="tile_inner">.*?<div class="tile_title">\s*([^<]+?)\s*<#is',
+            $html,
+            $sm,
+            PREG_SET_ORDER
+        )) {
+            foreach ($sm as $m) {
+                $forums[$m[1]] = trim(html_entity_decode($m[2], ENT_QUOTES));
+            }
+        }
+
+        if ($forums === []) {
+            $this->lastError = 'No forums found on the board index — session may be expired, or the board is empty for this account.';
+        }
+
+        return $forums;
+    }
+
+    /**
      * Resolve a forum's display name by scraping its own page title. Used so
      * Settings can show a friendly label next to a pasted forum ID without
      * maintaining a hardcoded id => name map.
      */
-    public function forumName(string $forumId): string
+    public function forumName(int|string $forumId): string
     {
-        $html = $this->getHtml(self::BASE . '/viewforum.php?f=' . rawurlencode($forumId));
+        $forumId = (string) $forumId;
+        $html = $this->getHtml($this->withSid(self::BASE . '/viewforum.php?f=' . rawurlencode($forumId)));
         if ($html === null) {
             return 'Forum ' . $forumId;
         }
@@ -83,12 +194,13 @@ final class Hex3DForumService
      *
      * @return array<int,array<string,mixed>>
      */
-    public function browse(string $forumId, int $limit = 20, int $offset = 0): array
+    public function browse(int|string $forumId, int $limit = 20, int $offset = 0): array
     {
+        $forumId = (string) $forumId;
         $this->lastError = '';
         $this->lastTotal = 0;
 
-        $url = self::BASE . '/viewforum.php?f=' . rawurlencode($forumId);
+        $url = $this->withSid(self::BASE . '/viewforum.php?f=' . rawurlencode($forumId));
         if ($offset > 0) {
             $url .= '&start=' . $offset;
         }
@@ -151,6 +263,81 @@ final class Hex3DForumService
     }
 
     /**
+     * Fetch a single topic page once and pull out both its preview thumbnail
+     * and all attachment IDs — used by the background crawler so indexing a
+     * topic costs ONE request, not separate calls for image and files.
+     *
+     * The model preview is the first content image in the post body that lives
+     * under the board's own upload path (/imag2/ or /download/file.php?...&mode=view),
+     * skipping theme chrome, the Hex3D logo, QR codes, and avatars.
+     *
+     * @return array{thumb:string, attachment_ids:string[]}|null  null if the
+     *         page couldn't be loaded (caller decides whether the session died).
+     */
+    public function fetchTopicDetail(string $forumId, string $topicId): ?array
+    {
+        $this->lastError = '';
+
+        $url = $this->withSid(self::BASE . '/viewtopic.php?f=' . rawurlencode($forumId) . '&t=' . rawurlencode($topicId));
+        $html = $this->getHtml($url);
+        if ($html === null) {
+            return null;
+        }
+
+        // Attachment IDs (may be zero — some topics are image-only posts).
+        $attachmentIds = [];
+        if (preg_match_all('#(?:href|src)="\./download/file\.php\?id=(\d+)#i', $html, $am)) {
+            $attachmentIds = array_values(array_unique($am[1]));
+        }
+
+        // Preview thumbnail: phpBB tags user-posted content images with
+        // class="postimage" — that's the model preview. Avatars (class="avatar"),
+        // the board logo, and smilies (class="smilies") never carry it, so this
+        // one attribute cleanly separates the real image from all the chrome.
+        // The src is often relative (e.g. "imag/preduck1.PNG"), so resolve it.
+        // Confirmed against real markup:
+        //   <img src="imag/preduck1.PNG" class="postimage" alt="Image">
+        $thumb = '';
+        if (preg_match('#<img[^>]*\bclass="[^"]*postimage[^"]*"[^>]*>#i', $html, $imgTag)) {
+            if (preg_match('#src="([^"]+)"#i', $imgTag[0], $sm)) {
+                $thumb = $this->absoluteUrl(html_entity_decode($sm[1], ENT_QUOTES));
+            }
+        }
+        // Some posts put class before src in a different order, or use a
+        // postimage anchor wrapping the img — fall back to any board-hosted
+        // /imag/ or /imag2/ upload that isn't avatar/logo/smilie chrome.
+        if ($thumb === '' && preg_match_all('#<img[^>]+src="([^"]+)"[^>]*>#i', $html, $imgs, PREG_SET_ORDER)) {
+            foreach ($imgs as $img) {
+                $full = $img[0];
+                $src  = html_entity_decode($img[1], ENT_QUOTES);
+                $low  = strtolower($full);
+                if (str_contains($low, 'avatar')   || str_contains($low, 'smilies') ||
+                    str_contains($low, 'logo')     || str_contains($low, '/styles/') ||
+                    str_contains($low, 'patreon')) {
+                    continue;
+                }
+                if (preg_match('#(^|/)imag2?/#i', $src)) {
+                    $thumb = $this->absoluteUrl($src);
+                    break;
+                }
+            }
+        }
+
+        return ['thumb' => $thumb, 'attachment_ids' => $attachmentIds];
+    }
+
+    /** Resolve a possibly-relative URL against the board base. */
+    private function absoluteUrl(string $url): string
+    {
+        if ($url === '') return '';
+        if (preg_match('#^https?://#i', $url)) return $url;
+        if (str_starts_with($url, '//')) return 'https:' . $url;
+        if (str_starts_with($url, './')) return self::BASE . '/' . substr($url, 2);
+        if ($url[0] === '/') return self::BASE . $url;
+        return self::BASE . '/' . $url;
+    }
+
+    /**
      * Resolve every attachment download URL for a topic. A single topic can
      * have multiple files (e.g. one zip per color variant) — confirmed
      * directly in the source UI screenshots.
@@ -169,9 +356,9 @@ final class Hex3DForumService
             [$forumId, $topicId] = explode('-', $slug, 2);
         }
 
-        $url = self::BASE . '/viewtopic.php?t=' . rawurlencode($topicId);
+        $url = $this->withSid(self::BASE . '/viewtopic.php?t=' . rawurlencode($topicId));
         if ($forumId !== '') {
-            $url = self::BASE . '/viewtopic.php?f=' . rawurlencode($forumId) . '&t=' . rawurlencode($topicId);
+            $url = $this->withSid(self::BASE . '/viewtopic.php?f=' . rawurlencode($forumId) . '&t=' . rawurlencode($topicId));
         }
 
         $html = $this->getHtml($url);
@@ -193,7 +380,8 @@ final class Hex3DForumService
         $ids = array_unique($m[1]);
         $urls = [];
         foreach ($ids as $id) {
-            $urls[] = self::BASE . '/download/file.php?id=' . $id;
+            // Download endpoint is session-gated too — SID in the URL.
+            $urls[] = $this->withSid(self::BASE . '/download/file.php?id=' . $id);
         }
         return $urls;
     }
@@ -216,15 +404,23 @@ final class Hex3DForumService
             return false;
         }
 
-        $written = 0;
+       $written = 0;
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 5,
-            CURLOPT_TIMEOUT        => 0,
-            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_CONNECTTIMEOUT => 60,
             CURLOPT_USERAGENT      => self::UA,
-            CURLOPT_HTTPHEADER     => ['Cookie: ' . $this->cookie],
+            CURLOPT_REFERER        => self::BASE . '/index.php' . ($this->sid !== '' ? '?sid=' . $this->sid : ''),
+            CURLOPT_HTTPHEADER     => [
+                'Cookie: ' . $this->cookie,
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Sec-Fetch-Dest: document',
+                'Sec-Fetch-Mode: navigate',
+                'Sec-Fetch-Site: same-origin',
+                'Sec-Fetch-User: ?1',
+            ],
             CURLOPT_FILE           => $fh,
             CURLOPT_WRITEFUNCTION  => static function ($ch, string $data) use ($fh, &$written, $progressFn): int {
                 $n = fwrite($fh, $data);
@@ -295,12 +491,24 @@ final class Hex3DForumService
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 5,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_CONNECTTIMEOUT => 30,
             CURLOPT_USERAGENT      => self::UA,
+            CURLOPT_ENCODING       => '',
+            // Referer must carry the SID-bearing index URL, and the navigation
+            // Sec-Fetch headers must be present — both are part of what this
+            // board checks on content pages (verified against a working browser
+            // capture). Without the SID-in-referer the session is rejected.
+            CURLOPT_REFERER        => self::BASE . '/index.php' . ($this->sid !== '' ? '?sid=' . $this->sid : ''),
             CURLOPT_HTTPHEADER     => [
                 'Cookie: ' . $this->cookie,
-                'Accept: text/html,application/xhtml+xml',
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: en-US,en;q=0.9',
+                'Sec-Fetch-Dest: document',
+                'Sec-Fetch-Mode: navigate',
+                'Sec-Fetch-Site: same-origin',
+                'Sec-Fetch-User: ?1',
+                'Upgrade-Insecure-Requests: 1',
             ],
         ]);
         $body = curl_exec($ch);

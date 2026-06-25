@@ -28,6 +28,7 @@ $ALLOWED_HOSTS = [
     'static.stlflix.com',
     'stlflix.b-cdn.net',
     'nikkoindustriesmembership.com',
+    'hex3dpatreon.com',
 ];
 
 $url = trim((string) ($_GET['url'] ?? ''));
@@ -64,6 +65,33 @@ if ($scheme !== 'https' || !in_array($host, $ALLOWED_HOSTS, true)) {
 // Block private/internal IP ranges in case of redirect.
 // Allow up to 3 redirects but only within the same allowlist.
 $ch = curl_init($url);
+$proxyHeaders = ['Accept: image/*'];
+
+// Hex3D board images (/imag/, /imag2/) are session-gated — without the login
+// cookie they 403. Attach the stored session so previews actually load. Other
+// hosts serve images publicly and need no auth.
+if ($host === 'hex3dpatreon.com') {
+    require_once __DIR__ . '/bootstrap.php';
+    $h3u   = trim((string) cfg('hex3dforum_u'));
+    $h3sid = trim((string) cfg('hex3dforum_sid'));
+    $h3k   = trim((string) cfg('hex3dforum_k'));
+    $cookieParts = [];
+    if ($h3u   !== '') $cookieParts[] = 'phpbb3_3ceqg_u='   . $h3u;
+    if ($h3sid !== '') $cookieParts[] = 'phpbb3_3ceqg_sid=' . $h3sid;
+    if ($h3k   !== '') $cookieParts[] = 'phpbb3_3ceqg_k='   . $h3k;
+    if ($cookieParts !== []) {
+        $proxyHeaders[] = 'Cookie: ' . implode('; ', $cookieParts);
+        $proxyHeaders[] = 'Referer: https://hex3dpatreon.com/index.php' . ($h3sid !== '' ? '?sid=' . $h3sid : '');
+    }
+    // phpBB scripts like download/file.php enforce the SID as a URL parameter
+    // (static /imag/ uploads don't — Apache serves those directly). Without it,
+    // an attachment-image fetch is rejected → 502. Append it for script URLs.
+    if ($h3sid !== '' && str_contains($url, 'download/file.php') && !str_contains($url, 'sid=')) {
+        $url .= (str_contains($url, '?') ? '&' : '?') . 'sid=' . $h3sid;
+        curl_setopt($ch, CURLOPT_URL, $url);
+    }
+}
+
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_FOLLOWLOCATION => true,
@@ -71,7 +99,7 @@ curl_setopt_array($ch, [
     CURLOPT_TIMEOUT        => 30,
     CURLOPT_CONNECTTIMEOUT => 10,
     CURLOPT_USERAGENT      => 'Mozilla/5.0 FarFetched/1.0',
-    CURLOPT_HTTPHEADER     => ['Accept: image/*'],
+    CURLOPT_HTTPHEADER     => $proxyHeaders,
 ]);
 
 $body     = curl_exec($ch);
