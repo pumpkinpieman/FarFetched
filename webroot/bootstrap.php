@@ -1747,10 +1747,82 @@ function get_hex3dforum_dir(): string
  * split fields (user id + sid, k optional) or the legacy combined cookie.
  * sid is the part that actually matters for content access.
  */
+/**
+ * Sanitize a pasted Hex3D cookie value. Users frequently paste more than the
+ * bare value — the whole "name=value" pair, a trailing semicolon, surrounding
+ * quotes, or even several cookies at once copied from DevTools. This extracts
+ * just the value for the requested field ('u', 'sid', or 'k').
+ *
+ *   "phpbb3_3ceqg_sid=abc123"        → "abc123"
+ *   "abc123; phpbb3_3ceqg_u=21504"   → "abc123" (for sid), "21504" (for u)
+ *   '"abc123"'                        → "abc123"
+ *   "  abc123  "                      → "abc123"
+ */
+function hex3dforum_clean_cookie_value(string $raw, string $field): string
+{
+    $raw = trim($raw);
+    if ($raw === '') return '';
+
+    // If they pasted a whole cookie blob, try to find this field's named cookie
+    // first (phpbb3_<board>_<field>=value), regardless of which box it landed in.
+    if (preg_match('/phpbb3_[a-z0-9]+_' . preg_quote($field, '/') . '=([^;\s"\']+)/i', $raw, $m)) {
+        return trim($m[1]);
+    }
+
+    // Otherwise: strip a leading "name=" (any name), surrounding quotes, and any
+    // trailing "; othercookie=..." that got dragged along.
+    $val = $raw;
+    // Drop everything after the first semicolon (one cookie per field).
+    if (($semi = strpos($val, ';')) !== false) {
+        $val = substr($val, 0, $semi);
+    }
+    // Strip a leading "name=" if present.
+    if (preg_match('/^\s*[A-Za-z0-9_]+\s*=\s*(.*)$/s', $val, $m)) {
+        $val = $m[1];
+    }
+    // Strip surrounding quotes and whitespace.
+    $val = trim($val);
+    $val = trim($val, "\"'");
+    return trim($val);
+}
+
 function hex3dforum_configured(): bool
 {
     if (trim((string) cfg('hex3dforum_sid')) !== '') return true;
     return trim((string) cfg('hex3dforum_cookie')) !== '';
+}
+
+/**
+ * Validate the FORMAT of pasted Hex3D credential values and return a list of
+ * human-readable warnings (empty list = all look fine). This is a light sanity
+ * check only — the live validate() is the real test. Formats observed on
+ * hex3dpatreon.com's phpBB install:
+ *   _u   : numeric user id
+ *   _sid : 32 hex chars
+ *   _k   : 16-char alphanumeric login key (this board's format — NOT the 32-hex
+ *          phpBB default; verified against a live cookie capture)
+ * We only warn on things that are clearly wrong (e.g. obvious whitespace, a
+ * pasted cookie name, or a non-numeric user id), and deliberately do NOT police
+ * the exact length/charset of _k or _sid, since those vary by phpBB build and a
+ * false "looks wrong" warning is worse than none.
+ */
+function hex3dforum_format_warnings(string $u, string $sid, string $k): array
+{
+    $warn = [];
+    if ($u !== '' && !ctype_digit($u)) {
+        $warn[] = 'User ID should be just a number (the phpbb3_…_u cookie value), e.g. 21504 — got "' . $u . '".';
+    }
+    // Catch a leftover cookie-name prefix or stray "=" that the sanitizer should
+    // have stripped — a strong signal something was pasted whole by mistake.
+    foreach (['Session ID' => $sid, 'Login Key' => $k] as $label => $val) {
+        if ($val === '') continue;
+        if (str_contains($val, '=') || stripos($val, 'phpbb') !== false) {
+            $warn[] = $label . ' still contains a cookie name or "=" — paste just the value, not the whole "name=value" pair.';
+        } elseif (preg_match('/\s/', $val)) {
+            $warn[] = $label . ' contains a space — copy just the cookie value with no surrounding text.';
+        }
+    }
+    return $warn;
 }
 
 /** @return string[] configured forum IDs, in the order pasted. */

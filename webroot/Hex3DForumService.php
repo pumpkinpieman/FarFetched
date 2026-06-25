@@ -54,6 +54,9 @@ final class Hex3DForumService
 
     private string $cookie;
     private string $sid = '';
+    private string $u   = '';   // bare user id  (for remember-me refresh)
+    private string $k   = '';   // bare login key (for remember-me refresh)
+    private bool   $refreshTried = false; // one auto-refresh attempt per request
 
     /**
      * Builds the session cookie from either:
@@ -71,6 +74,8 @@ final class Hex3DForumService
             $u   = function_exists('cfg') ? trim((string) cfg('hex3dforum_u'))   : '';
             $sid = function_exists('cfg') ? trim((string) cfg('hex3dforum_sid')) : '';
             $k   = function_exists('cfg') ? trim((string) cfg('hex3dforum_k'))   : '';
+            $this->u = $u;
+            $this->k = $k;
 
             if ($u !== '' || $sid !== '' || $k !== '') {
                 $parts = [];
@@ -404,13 +409,13 @@ final class Hex3DForumService
             return false;
         }
 
-       $written = 0;
+        $written = 0;
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS      => 5,
-            CURLOPT_TIMEOUT        => 60,
-            CURLOPT_CONNECTTIMEOUT => 60,
+            CURLOPT_TIMEOUT        => 0,
+            CURLOPT_CONNECTTIMEOUT => 30,
             CURLOPT_USERAGENT      => self::UA,
             CURLOPT_REFERER        => self::BASE . '/index.php' . ($this->sid !== '' ? '?sid=' . $this->sid : ''),
             CURLOPT_HTTPHEADER     => [
@@ -521,6 +526,10 @@ final class Hex3DForumService
             return null;
         }
         if ($st === 401 || $st === 403) {
+            // Auth failure may be a dead SID — try one remember-me refresh first.
+            if (!$this->refreshTried && $this->refreshSession()) {
+                return $this->getHtml($url);
+            }
             $this->lastError = 'Hex3D Forum auth failed (HTTP ' . $st . ') — re-paste session cookie in Settings.';
             return null;
         }
@@ -529,9 +538,114 @@ final class Hex3DForumService
             return null;
         }
         if (stripos((string) $body, 'This board has no forums') !== false) {
+            // Session looks dead. Before erroring, try a one-shot remember-me
+            // refresh: phpBB will mint a fresh SID from a valid _k login key.
+            // If _k is invalid (board clears it, returns guest u=1), this fails
+            // cleanly and we fall through to the re-paste error below.
+            if (!$this->refreshTried && $this->refreshSession()) {
+                // Refresh succeeded — retry the original request once with the
+                // new SID now in $this->cookie / $this->sid.
+                return $this->getHtml($url);
+            }
             $this->lastError = 'Hex3D Forum session expired or lacks access — re-paste session cookie in Settings.';
             return null;
         }
         return (string) $body;
+    }
+
+    /**
+     * Attempt to regenerate a live session from the stored remember-me login
+     * key (_k). phpBB, given a valid _u + _k and no (or a dead) SID, auto-logs
+     * the user in and issues a fresh SID via Set-Cookie. We capture that SID,
+     * verify it actually authenticates (not the guest user id 1), persist it to
+     * config, and update our in-memory cookie/sid so the caller can retry.
+     *
+     * Returns true on a verified refresh, false otherwise (caller then errors).
+     * The probe established the failure signature: a dead _k yields Set-Cookie
+     * u=1 (guest) and an empty _k (board clearing it) — we treat that as failure.
+     */
+    private function refreshSession(): bool
+    {
+        $this->refreshTried = true;
+        if ($this->u === '' || $this->k === '') {
+            return false; // nothing to refresh from
+        }
+
+        // Request the board with u + k only (no sid) so phpBB re-auths via the
+        // login key and issues a new session. Capture response headers.
+        $cookie = self::COOKIE_PREFIX . 'u=' . $this->u . '; ' . self::COOKIE_PREFIX . 'k=' . $this->k;
+        $ch = curl_init(self::BASE . '/index.php');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER         => true,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_USERAGENT      => self::UA,
+            CURLOPT_HTTPHEADER     => ['Cookie: ' . $cookie],
+        ]);
+        $resp  = curl_exec($ch);
+        $hsize = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        curl_close($ch);
+        if ($resp === false) {
+            return false;
+        }
+        $headers = substr((string) $resp, 0, $hsize);
+
+        // Pull every Set-Cookie line and read the relevant values.
+        $newSid = '';
+        $newU   = '';
+        $newK   = null; // null = not present, '' = explicitly cleared
+        foreach (preg_split('/\r\n/', $headers) ?: [] as $h) {
+            if (stripos($h, 'set-cookie:') !== 0) continue;
+            if (preg_match('/' . preg_quote(self::COOKIE_PREFIX, '/') . 'sid=([^;]*)/i', $h, $m)) $newSid = trim($m[1]);
+            if (preg_match('/' . preg_quote(self::COOKIE_PREFIX, '/') . 'u=([^;]*)/i',   $h, $m)) $newU   = trim($m[1]);
+            if (preg_match('/' . preg_quote(self::COOKIE_PREFIX, '/') . 'k=([^;]*)/i',   $h, $m)) $newK   = trim($m[1]);
+        }
+
+        // Failure signatures from the live probe:
+        //  - guest user id (u=1) means the login key was NOT accepted
+        //  - an explicitly cleared _k (k=) means the board rejected the key
+        //  - no fresh sid issued
+        if ($newSid === '' || $newU === '1' || $newU === '' || $newK === '') {
+            return false;
+        }
+
+        // Provisionally adopt the new SID and verify it really authenticates by
+        // fetching the index again and checking we're NOT seeing the guest wall.
+        $candidateCookie = self::COOKIE_PREFIX . 'u=' . $this->u
+            . '; ' . self::COOKIE_PREFIX . 'sid=' . $newSid
+            . '; ' . self::COOKIE_PREFIX . 'k=' . $this->k;
+
+        $ch2 = curl_init(self::BASE . '/index.php?sid=' . rawurlencode($newSid));
+        curl_setopt_array($ch2, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_USERAGENT      => self::UA,
+            CURLOPT_HTTPHEADER     => ['Cookie: ' . $candidateCookie],
+        ]);
+        $verifyBody = curl_exec($ch2);
+        curl_close($ch2);
+        if ($verifyBody === false || stripos((string) $verifyBody, 'This board has no forums') !== false) {
+            return false; // new sid still not authed — give up
+        }
+
+        // Verified. Persist the new SID and update in-memory state so the retry
+        // (and the rest of this request's calls) use it. Keep _k as-is unless the
+        // board issued a rotated one.
+        if (function_exists('cfg_save')) {
+            $patch = ['hex3dforum_sid' => $newSid];
+            if ($newK !== null && $newK !== '' && $newK !== $this->k) {
+                $patch['hex3dforum_k'] = $newK;
+                $this->k = $newK;
+            }
+            @cfg_save($patch);
+        }
+        $this->sid    = $newSid;
+        $this->cookie = $candidateCookie;
+        return true;
     }
 }

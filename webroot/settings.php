@@ -328,18 +328,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // ---- Hex3D Forum -----------------------------------------------------
     elseif ($action === 'save_hex3dforum_cookie') {
-        $u   = trim((string) ($_POST['hex3dforum_u'] ?? ''));
-        $sid = trim((string) ($_POST['hex3dforum_sid'] ?? ''));
-        $k   = trim((string) ($_POST['hex3dforum_k'] ?? ''));
+        $rawU   = (string) ($_POST['hex3dforum_u'] ?? '');
+        $rawSid = (string) ($_POST['hex3dforum_sid'] ?? '');
+        $rawK   = (string) ($_POST['hex3dforum_k'] ?? '');
+        // Forgiving paste: strip cookie-name prefixes, quotes, stray semicolons,
+        // or a whole cookie blob down to the bare value for each field.
+        $u   = hex3dforum_clean_cookie_value($rawU,   'u');
+        $sid = hex3dforum_clean_cookie_value($rawSid, 'sid');
+        $k   = hex3dforum_clean_cookie_value($rawK,   'k');
+        $wasCleaned = ($u !== trim($rawU)) || ($sid !== trim($rawSid)) || ($k !== trim($rawK));
         if ($sid === '' && $u === '') {
             $notice = ['type' => 'err', 'text' => 'Nothing to save — paste at least your User ID and SID first.'];
         } else {
             cfg_save(['hex3dforum_u' => $u, 'hex3dforum_sid' => $sid, 'hex3dforum_k' => $k]);
+            // Format check first — catches the common "wrong cookie" mistake with
+            // a specific message before the live validation's generic error.
+            $fmtWarn = hex3dforum_format_warnings($u, $sid, $k);
             // Construct with no arg so it reads the three fields we just saved.
             $h = new Hex3DForumService();
-            $notice = $h->validate()
-                ? ['type' => 'ok', 'text' => 'Hex3D Forum connected successfully.']
-                : ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $h->lastError];
+            if ($h->validate()) {
+                $txt = 'Hex3D Forum connected successfully.'
+                    . ($wasCleaned ? ' (Tidied up the pasted values for you.)' : '');
+                // Even on success, surface a format note if something looked odd
+                // (e.g. a non-standard but working SID) — informational only.
+                $notice = ['type' => 'ok', 'text' => $txt];
+            } else {
+                // Validation failed — lead with the most likely cause. If a field
+                // looks malformed, that's almost certainly why; show it first.
+                if ($fmtWarn !== []) {
+                    $notice = ['type' => 'err', 'text' => 'Couldn\'t connect — and one or more values look wrong: '
+                        . implode(' ', $fmtWarn)];
+                } else {
+                    $notice = ['type' => 'err', 'text' => 'Saved, but validation failed: ' . $h->lastError
+                        . ' — this almost always means the SID has already expired. Grab a FRESH sid value from your browser cookies and paste it again right away (the SID rotates quickly).'];
+                }
+            }
         }
     }
     elseif ($action === 'clear_hex3dforum_cookie') {
@@ -1336,6 +1359,15 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
     if (!btn) return;
     var input = document.getElementById(btn.getAttribute('data-target'));
     if (!input) return;
+    // New masked-text fields (type=text + CSS masking) avoid Chromium's password
+    // manager clearing pasted values on submit. Toggle the CSS mask, not the type.
+    if (input.classList.contains('masked-field')) {
+      var masked = input.getAttribute('data-mask') === '1';
+      input.setAttribute('data-mask', masked ? '0' : '1');
+      btn.textContent = masked ? '🙈' : '👁';
+      return;
+    }
+    // Legacy password fields elsewhere — toggle the type.
     if (input.type === 'password') {
       input.type = 'text';
       btn.textContent = '🙈';
@@ -1490,9 +1522,9 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
             <label for="tv_client_id">Client ID <span style="font-weight:400;text-transform:none;">(optional — for OAuth downloads)</span></label>
-            <input type="password" id="tv_client_id" name="tv_client_id" value="<?= e($tvClientId) ?>" placeholder="your-app-client-id"><button type="button" class="reveal-btn" data-target="tv_client_id" aria-label="Show/hide value">👁</button>
+            <input type="text" id="tv_client_id" name="tv_client_id" value="<?= e($tvClientId) ?>" placeholder="your-app-client-id" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="tv_client_id" aria-label="Show/hide value">👁</button>
             <label for="tv_api_key" style="margin-top:10px;">App Token / API Key</label>
-            <input type="password" id="tv_api_key" name="tv_api_key" value="<?= e($tvApiKey) ?>" placeholder="paste your Thingiverse app token"><button type="button" class="reveal-btn" data-target="tv_api_key" aria-label="Show/hide value">👁</button>
+            <input type="text" id="tv_api_key" name="tv_api_key" value="<?= e($tvApiKey) ?>" placeholder="paste your Thingiverse app token" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="tv_api_key" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_tv_token">Save &amp; Connect</button>
               <?php if ($tvReady): ?>
@@ -1546,7 +1578,7 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <label for="cults_username">Cults3D Username</label>
             <input type="text" id="cults_username" name="cults_username" value="<?= e($cultsUser) ?>" placeholder="your-cults3d-username">
             <label for="cults_api_key" style="margin-top:10px;">API Key</label>
-            <input type="password" id="cults_api_key" name="cults_api_key" value="<?= e($cultsTok) ?>" placeholder="paste your Cults3D API key"><button type="button" class="reveal-btn" data-target="cults_api_key" aria-label="Show/hide value">👁</button>
+            <input type="text" id="cults_api_key" name="cults_api_key" value="<?= e($cultsTok) ?>" placeholder="paste your Cults3D API key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="cults_api_key" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_cults_token">Save &amp; Connect</button>
               <?php if ($cultsReady): ?>
@@ -1561,9 +1593,9 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
             <label for="cults_session">Download session — <code>_session_id</code> cookie <?php if ($cultsSess !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value"><button type="button" class="reveal-btn" data-target="cults_session" aria-label="Show/hide value">👁</button>
+            <input type="text" id="cults_session" name="cults_session" value="<?= e($cultsSess) ?>" placeholder="paste your _session_id cookie value" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="cults_session" aria-label="Show/hide value">👁</button>
             <label for="cults_cf_clearance" style="margin-top:10px;"><code>cf_clearance</code> cookie (optional, helps avoid Cloudflare blocks)</label>
-            <input type="password" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)"><button type="button" class="reveal-btn" data-target="cults_cf_clearance" aria-label="Show/hide value">👁</button>
+            <input type="text" id="cults_cf_clearance" name="cults_cf_clearance" value="<?= e($cultsCf) ?>" placeholder="paste your cf_clearance cookie value (optional)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="cults_cf_clearance" aria-label="Show/hide value">👁</button>
             <label for="cults_browser" style="margin-top:10px;">Your browser <span style="color:var(--muted);font-weight:400;">(must match where you copied the cookies)</span></label>
             <select id="cults_browser" name="cults_browser" class="short" style="width:auto;min-width:160px;">
               <?php foreach (['chrome'=>'Chrome','firefox'=>'Firefox','edge'=>'Edge','safari'=>'Safari'] as $bval=>$blabel): ?>
@@ -1676,11 +1708,11 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
             <label for="creality_token">Token (__CXY_TOKEN_ / model_token)</label>
-            <input type="password" id="creality_token" name="creality_token" value="<?= e($crealityTok) ?>" placeholder="64-char token from the Cookie or request header"><button type="button" class="reveal-btn" data-target="creality_token" aria-label="Show/hide value">👁</button>
+            <input type="text" id="creality_token" name="creality_token" value="<?= e($crealityTok) ?>" placeholder="64-char token from the Cookie or request header" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="creality_token" aria-label="Show/hide value">👁</button>
             <label for="creality_user_id">User ID (model_user_id)</label>
-            <input type="password" id="creality_user_id" name="creality_user_id" value="<?= e($crealityUid) ?>" placeholder="your numeric model_user_id"><button type="button" class="reveal-btn" data-target="creality_user_id" aria-label="Show/hide value">👁</button>
+            <input type="text" id="creality_user_id" name="creality_user_id" value="<?= e($crealityUid) ?>" placeholder="your numeric model_user_id" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="creality_user_id" aria-label="Show/hide value">👁</button>
             <label for="creality_cf_clearance">cf_clearance cookie (optional, helps avoid 403)</label>
-            <input type="password" id="creality_cf_clearance" name="creality_cf_clearance" value="<?= e($crealityCf) ?>" placeholder="cf_clearance cookie value"><button type="button" class="reveal-btn" data-target="creality_cf_clearance" aria-label="Show/hide value">👁</button>
+            <input type="text" id="creality_cf_clearance" name="creality_cf_clearance" value="<?= e($crealityCf) ?>" placeholder="cf_clearance cookie value" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="creality_cf_clearance" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_creality_token">Save &amp; Connect</button>
               <?php if ($crealityReady): ?>
@@ -1730,9 +1762,9 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
             <input type="hidden" name="_tab" value="sources">
             <label for="nikko_phpsessid">PHPSESSID <?php if ($nikkoPhpSessId !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="nikko_phpsessid" name="nikko_phpsessid" value="<?= e($nikkoPhpSessId) ?>" placeholder="e.g. fjhsbieipge8kv60abvm1dq..."><button type="button" class="reveal-btn" data-target="nikko_phpsessid" aria-label="Show/hide value">👁</button>
+            <input type="text" id="nikko_phpsessid" name="nikko_phpsessid" value="<?= e($nikkoPhpSessId) ?>" placeholder="e.g. fjhsbieipge8kv60abvm1dq..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="nikko_phpsessid" aria-label="Show/hide value">👁</button>
             <label for="nikko_wp_logged_in" style="margin-top:14px;">wordpress_logged_in <?php if ($nikkoWpLoggedIn !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="nikko_wp_logged_in" name="nikko_wp_logged_in" value="<?= e($nikkoWpLoggedIn) ?>" placeholder="paste the FULL pair: wordpress_logged_in_xxxxx=value"><button type="button" class="reveal-btn" data-target="nikko_wp_logged_in" aria-label="Show/hide value">👁</button>
+            <input type="text" id="nikko_wp_logged_in" name="nikko_wp_logged_in" value="<?= e($nikkoWpLoggedIn) ?>" placeholder="paste the FULL pair: wordpress_logged_in_xxxxx=value" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="nikko_wp_logged_in" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_nikko_cookie">Save &amp; Connect</button>
               <?php if ($nikkoReady): ?>
@@ -1785,9 +1817,9 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
             <label for="hex3dforum_u">User ID <?php if ($hex3dforumU !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
             <input type="text" id="hex3dforum_u" name="hex3dforum_u" value="<?= e($hex3dforumU) ?>" placeholder="the phpbb3_..._u cookie value (a number)">
             <label for="hex3dforum_sid" style="margin-top:12px;">Session ID (SID) <?php if ($hex3dforumSid !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="hex3dforum_sid" name="hex3dforum_sid" value="<?= e($hex3dforumSid) ?>" placeholder="the phpbb3_..._sid cookie value"><button type="button" class="reveal-btn" data-target="hex3dforum_sid" aria-label="Show/hide value">👁</button>
+            <input type="text" id="hex3dforum_sid" name="hex3dforum_sid" value="<?= e($hex3dforumSid) ?>" placeholder="the phpbb3_..._sid cookie value" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="hex3dforum_sid" aria-label="Show/hide value">👁</button>
             <label for="hex3dforum_k" style="margin-top:12px;">Login Key <span style="color:var(--muted);font-weight:400;">(optional, from "Remember me")</span> <?php if ($hex3dforumK !== ''): ?><span style="color:var(--ok);font-weight:600;">(set)</span><?php endif; ?></label>
-            <input type="password" id="hex3dforum_k" name="hex3dforum_k" value="<?= e($hex3dforumK) ?>" placeholder="the phpbb3_..._k cookie value"><button type="button" class="reveal-btn" data-target="hex3dforum_k" aria-label="Show/hide value">👁</button>
+            <input type="text" id="hex3dforum_k" name="hex3dforum_k" value="<?= e($hex3dforumK) ?>" placeholder="the phpbb3_..._k cookie value" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-mask="1" class="masked-field"><button type="button" class="reveal-btn" data-target="hex3dforum_k" aria-label="Show/hide value">👁</button>
             <div class="row">
               <button class="btn-primary btn-sm" name="action" value="save_hex3dforum_cookie">Save &amp; Connect</button>
               <?php if ($hex3dforumReady): ?>
@@ -1795,7 +1827,14 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
               <?php endif; ?>
             </div>
           </form>
-          <p class="hint">hex3dpatreon.com is a phpBB forum with no API. Log in (check "Remember me"), then DevTools → Application/Storage → Cookies → copy three values: <code>phpbb3_…_u</code> → User ID, <code>phpbb3_…_sid</code> → Session ID, <code>phpbb3_…_k</code> → Login Key. Paste just the values (not the cookie names). The SID is what actually unlocks content and it rotates when your browser session refreshes — re-paste it when browsing/crawling starts failing.</p>
+          <p class="hint"><strong>hex3dpatreon.com</strong> is a phpBB forum with no API, so FarFetched uses your browser session. Setup:</p>
+          <ol class="hint" style="margin:4px 0 8px 18px;padding:0;line-height:1.6;">
+            <li>Log in to hex3dpatreon.com <strong>with "Remember me" checked</strong> (this creates the durable <code>_k</code> login-key cookie — without it the session dies almost immediately).</li>
+            <li>Open DevTools (F12) → <strong>Application</strong> (Chrome) or <strong>Storage</strong> (Firefox) → <strong>Cookies</strong> → hex3dpatreon.com.</li>
+            <li>Copy these three values into the boxes above: <code>phpbb3_…_u</code> → User ID, <code>phpbb3_…_sid</code> → Session ID, <code>phpbb3_…_k</code> → Login Key.</li>
+            <li>Click <strong>Save &amp; Connect</strong> right away.</li>
+          </ol>
+          <p class="hint">You can paste just the value, or the whole <code>name=value</code> — FarFetched strips the cookie name for you. <strong>If you get "session expired or lacks access":</strong> the SID rotated between copying and saving. Grab a <em>fresh</em> <code>_sid</code> value and save again immediately — the SID changes frequently, the User ID and Login Key rarely do, so usually only the SID needs re-pasting. Make sure your account has active forum access, too.</p>
         </div>
         <div class="src-body">
           <p class="hint" style="margin-top:0;">Forums are discovered automatically — once your session cookie is set, the Browse page lists every forum your account can see. <strong>Heads up:</strong> hex3dpatreon.com permits a replayed session to load the forum <em>index</em> but rejects it on actual forum/topic pages unless the session ID rides along in the URL — FarFetched handles that automatically by reading the SID out of your session cookie. Browsing reads a locally-built index (below), so keep your cookie fresh enough for the crawler to run.</p>
