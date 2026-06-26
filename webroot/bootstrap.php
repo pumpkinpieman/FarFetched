@@ -2106,25 +2106,36 @@ function db(): PDO
         }
     }
 
+    // CRITICAL ORDERING: set busy_timeout FIRST, before any journal_mode PRAGMA.
+    // PRAGMA journal_mode is a write-class operation; if another connection is
+    // mid-write when we run it, SQLite throws "database is locked" *instantly*
+    // unless a busy_timeout is already in effect. Setting the timeout first lets
+    // the journal-mode change WAIT for the lock instead of crashing — this is the
+    // fix for two workers (cron + manual) connecting in the same instant.
+    $pdo->exec('PRAGMA busy_timeout = 30000;');
+
+    // Only change journal_mode when it's not already what we want — the change is
+    // a write, so skipping it on already-correct DBs avoids needless lock risk on
+    // every connection (db() is called constantly by Apache and the worker).
+    $current = '';
+    try { $current = strtolower((string) $pdo->query('PRAGMA journal_mode;')->fetchColumn()); }
+    catch (\Throwable $e) { $current = ''; }
+
     if ($useWal) {
-        @$pdo->exec('PRAGMA journal_mode = WAL;');
-        $mode = '';
-        try { $mode = (string) $pdo->query('PRAGMA journal_mode;')->fetchColumn(); }
-        catch (\Throwable $e) { $mode = ''; }
-        if (strtolower($mode) !== 'wal') {
-            // WAL didn't even stick — fall back to the portable DELETE journal.
-            @$pdo->exec('PRAGMA journal_mode = DELETE;');
+        if ($current !== 'wal') {
+            @$pdo->exec('PRAGMA journal_mode = WAL;');
+            try { $current = strtolower((string) $pdo->query('PRAGMA journal_mode;')->fetchColumn()); }
+            catch (\Throwable $e) { $current = ''; }
+            if ($current !== 'wal') {
+                @$pdo->exec('PRAGMA journal_mode = DELETE;'); // WAL didn't stick
+            }
         }
     } else {
-        // FUSE/network mount: WAL is unsafe here, use DELETE (POSIX file locks).
-        @$pdo->exec('PRAGMA journal_mode = DELETE;');
+        // FUSE/network mount: WAL unsafe, ensure DELETE (only write if needed).
+        if ($current !== 'delete') {
+            @$pdo->exec('PRAGMA journal_mode = DELETE;');
+        }
     }
-    // busy_timeout: how long SQLite retries a locked DB before throwing.
-    // Generous (30s) because the worker can hold write intent across a paced
-    // download, and on some bind-mounted/FUSE volumes advisory flock between
-    // the cron worker and a manual run isn't fully reliable — the timeout is
-    // the real guard against "database is locked".
-    $pdo->exec('PRAGMA busy_timeout = 30000;');
     // NORMAL is safe under WAL and reduces fsync contention between writers.
     $pdo->exec('PRAGMA synchronous = NORMAL;');
 
@@ -2132,7 +2143,31 @@ function db(): PDO
         @chmod(DB_PATH, 0600);
     }
 
-    init_schema($pdo);
+    // Schema init does CREATE TABLE / INSERT OR IGNORE — these are WRITES, and
+    // running them on every db() call means every Apache page-render and every
+    // worker connection issues schema writes that collide with an active worker
+    // (→ "database is locked" at init_schema). Run it only when the DB is brand
+    // new, or when a cheap probe shows the core table is missing (e.g. an older
+    // DB that predates a table). Existing, initialized DBs skip it entirely.
+    $needSchema = $fresh;
+    if (!$needSchema) {
+        try {
+            $has = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='download_jobs' LIMIT 1")->fetchColumn();
+            $needSchema = ($has === false);
+        } catch (\Throwable $e) {
+            $needSchema = true; // can't tell — be safe and run it
+        }
+    }
+    if ($needSchema) {
+        // Serialize the schema write through the cross-platform mutex so two
+        // simultaneous fresh-init attempts (cron + Apache) don't collide.
+        $lk = db_write_lock();
+        try {
+            init_schema($pdo);
+        } finally {
+            db_write_unlock($lk);
+        }
+    }
     return $pdo;
 }
 

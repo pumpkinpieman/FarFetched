@@ -19,6 +19,15 @@ chown -R www-data:www-data "$DOWNLOAD_DIR" 2>/dev/null || true
 chmod 0775 "$DOWNLOAD_DIR" 2>/dev/null || true
 chmod 0775 "$DOWNLOAD_DIR/printables" "$DOWNLOAD_DIR/makerworld" 2>/dev/null || true
 
+# Fix ownership of persistent dirs on startup — files created by host-side
+# processes (manual cp, Unraid mover, backups/restores) land as the share's
+# default owner (e.g. nobody:users / 99:100), which Apache (www-data, UID 33)
+# can't write — causing "readonly database" and delete failures. Chowning here
+# makes the container self-correct regardless of how files arrived.
+chown -R www-data:www-data /var/www/html/private 2>/dev/null || true
+# Models dir too (only if owned wrong — keep it cheap on large libraries):
+find /downloads -not -user www-data -exec chown www-data:www-data {} + 2>/dev/null || true
+
 # cron needs the env vars too (cron strips the container environment),
 # so persist the ones the worker reads into a file the crontab sources.
 {
