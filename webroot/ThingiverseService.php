@@ -120,6 +120,13 @@ final class ThingiverseService
      * Returns array of full-size image URLs.
      * @return string[]
      */
+    /** Cover image URL for a single thing, or '' if unavailable. */
+    public function coverForModel(string $thingId): string
+    {
+        $imgs = $this->getThingImages($thingId);
+        return $imgs[0] ?? '';
+    }
+
     public function getThingImages(string $thingId): array
     {
         $thingId = preg_replace('/[^a-z0-9\-]/', '', strtolower($thingId));

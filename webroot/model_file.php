@@ -60,17 +60,30 @@ if (isset($_GET['thumb'])) {
         http_response_code(404);
         exit;
     }
-    $thumb = realpath($modelReal . '/.farfetched/thumb.png');
-    if ($thumb === false
-        || !is_file($thumb)
-        || strncmp($thumb, $modelReal . DIRECTORY_SEPARATOR, strlen($modelReal) + 1) !== 0) {
+    // Online sources: serve either the saved source cover (prefer=source) or the
+    // generated STL render. When source is preferred but absent, fall back to the
+    // generated render so a missing cover never breaks the tile.
+    $preferSource = (($_GET['prefer'] ?? '') === 'source');
+    $candidates = $preferSource
+        ? ['/.farfetched/source.png', '/.farfetched/thumb.png']
+        : ['/.farfetched/thumb.png'];
+    $served = null;
+    foreach ($candidates as $rel) {
+        $p = realpath($modelReal . $rel);
+        if ($p !== false && is_file($p)
+            && strncmp($p, $modelReal . DIRECTORY_SEPARATOR, strlen($modelReal) + 1) === 0) {
+            $served = $p;
+            break;
+        }
+    }
+    if ($served === null) {
         http_response_code(404);
         exit;
     }
     header('Content-Type: image/png');
     header('Cache-Control: private, max-age=86400');
     header('X-Content-Type-Options: nosniff');
-    readfile($thumb);
+    readfile($served);
     exit;
 }
 

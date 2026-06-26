@@ -1483,6 +1483,20 @@ function cfg_defaults(): array
         'hex3dforum_forum_ids'       => '',
         'hex3dforum_download_dir'    => '',
         'hex3dforum_delay'           => 60,
+        // Per-source toggle: when on, save the source's own cover image during
+        // download and prefer it in My Library (falling back to the generated
+        // STL render if the source image is missing). Default off = current
+        // behavior (generated renders only).
+        'source_thumbs'              => [
+            'printables'  => false,
+            'makerworld'  => false,
+            'thingiverse' => false,
+            'cults3d'     => false,
+            'stlflix'     => false,
+            'creality'    => false,
+            'nikko'       => false,
+            'hex3dforum'  => false,
+        ],
         // Custom local folders the user registers to surface in My Library.
         // Each entry: ['id' => unique, 'label' => display name, 'path' => abs path].
         // Indexed in place (never copied); removing an entry never touches files.
@@ -1668,6 +1682,20 @@ function cfg_save(array $patch): bool
         }
         $current['custom_folders'] = $clean;
     }
+    if (array_key_exists('source_thumbs', $patch) && is_array($patch['source_thumbs'])) {
+        // Boolean per known source slug. Unknown keys are ignored; missing keys
+        // keep their current value so a partial patch only flips what's sent.
+        $known = ['printables','makerworld','thingiverse','cults3d','stlflix','creality','nikko','hex3dforum'];
+        $cur = is_array($current['source_thumbs'] ?? null) ? $current['source_thumbs'] : [];
+        foreach ($known as $slug) {
+            if (array_key_exists($slug, $patch['source_thumbs'])) {
+                $cur[$slug] = (bool) $patch['source_thumbs'][$slug];
+            } elseif (!array_key_exists($slug, $cur)) {
+                $cur[$slug] = false;
+            }
+        }
+        $current['source_thumbs'] = $cur;
+    }
 
     $payload = "<?php return " . var_export($current, true) . ";\n";
     if (file_put_contents(CONFIG_STORE, $payload, LOCK_EX) === false) {
@@ -1790,6 +1818,69 @@ function hex3dforum_configured(): bool
 {
     if (trim((string) cfg('hex3dforum_sid')) !== '') return true;
     return trim((string) cfg('hex3dforum_cookie')) !== '';
+}
+
+/** True if source-thumbnail preference is enabled for this source slug. */
+function source_thumbs_on(string $slug): bool
+{
+    // custom: folders already use their own preview image; this toggle is for
+    // the online sources only.
+    if (str_starts_with($slug, 'custom:')) return false;
+    $st = cfg('source_thumbs');
+    return is_array($st) && !empty($st[$slug]);
+}
+
+/** Absolute path to a model's saved source-cover image, if one exists. */
+function source_thumb_file(string $slug, string $folder): ?string
+{
+    if (str_starts_with($slug, 'custom:')) return null;
+    $f = MODELS_ROOT . '/' . $slug . '/' . $folder . '/.farfetched/source.png';
+    return is_file($f) ? $f : null;
+}
+
+/**
+ * Download a source cover image and save it as the model's source.png inside
+ * its .farfetched dir. Returns true on success. Used both at download time and
+ * by the backfill tool. Converts whatever format the source serves (jpg/webp)
+ * to PNG when GD is available; otherwise stores the raw bytes under source.png.
+ * Safe to call when disabled/absent — it simply returns false.
+ */
+function save_source_thumb(string $modelDir, string $coverUrl): bool
+{
+    $coverUrl = trim($coverUrl);
+    if ($coverUrl === '' || !preg_match('~^https?://~i', $coverUrl)) return false;
+    if (!is_dir($modelDir)) return false;
+
+    $ch = curl_init($coverUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 FarFetched/1.0',
+    ]);
+    $data = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($data === false || $code >= 400 || strlen((string) $data) < 64) return false;
+
+    $ffDir = rtrim($modelDir, '/') . '/.farfetched';
+    if (!is_dir($ffDir) && !@mkdir($ffDir, 0775, true) && !is_dir($ffDir)) return false;
+    $dest = $ffDir . '/source.png';
+
+    // Re-encode to PNG when GD is present so the served Content-Type is honest
+    // and odd formats (webp/avif) become broadly viewable. Fall back to raw.
+    if (function_exists('imagecreatefromstring')) {
+        $img = @imagecreatefromstring((string) $data);
+        if ($img !== false) {
+            $ok = @imagepng($img, $dest);
+            imagedestroy($img);
+            if ($ok) { @chmod($dest, 0664); return true; }
+        }
+    }
+    if (@file_put_contents($dest, $data) !== false) { @chmod($dest, 0664); return true; }
+    return false;
 }
 
 /**
@@ -1947,11 +2038,21 @@ function init_schema(PDO $pdo): void
             attempts     INTEGER NOT NULL DEFAULT 0,
             last_error   TEXT    NOT NULL DEFAULT '',
             saved_path   TEXT    NOT NULL DEFAULT '',
+            cover_url    TEXT    NOT NULL DEFAULT '',
             created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
             updated_at   TEXT    NOT NULL DEFAULT (datetime('now')),
             UNIQUE(source, model_id, file_type)
         );
     SQL);
+
+    // Migration: add cover_url to pre-existing job tables (saves the source's
+    // cover image at download time when source-thumbnails are enabled).
+    try {
+        $cols = $pdo->query("PRAGMA table_info(download_jobs)")->fetchAll(PDO::FETCH_COLUMN, 1);
+        if (!in_array('cover_url', (array) $cols, true)) {
+            $pdo->exec("ALTER TABLE download_jobs ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''");
+        }
+    } catch (\Throwable $e) { /* non-fatal */ }
 
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status ON download_jobs(status);');
     // Composite index for the live-queue snapshot query (jobs_status.php),

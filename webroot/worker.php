@@ -801,10 +801,17 @@ while (true) {
                     logln('  Saved: ' . $dest);
                     if (extract_zip_safe($dest, $destDir)) {
                         logln('  Extracted into: ' . $destDir);
-                        if (cfg('keep_zip') !== true) {
-                            @unlink($dest);
-                            logln('  Removed zip (keep_zip off).');
-                        }
+                        // NOTE: keep_zip is intentionally FORCED ON for Hex3D,
+                        // regardless of the global setting. Hex3D attachments are
+                        // saved with generic names (download/file.php?id=N has no
+                        // filename, so we use "<folder>_N.zip"). The "exists,
+                        // skip" guard above matches on that zip name — so if we
+                        // delete the zip after extracting, the next run can't tell
+                        // the model was already fetched and re-downloads it
+                        // forever (a download loop). Keeping the zip is what lets
+                        // the skip-guard recognize completed Hex3D models.
+                        // (Other sources keep stable per-file names, so they can
+                        // honor keep_zip safely.)
                     } else {
                         logln('  Extract failed; zip kept at ' . $dest);
                     }

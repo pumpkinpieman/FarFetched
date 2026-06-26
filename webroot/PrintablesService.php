@@ -512,15 +512,27 @@ final class PrintablesService
         $this->lastError = '';
         $query = <<<'GQL'
         query ModelInfo($id: ID!) {
-          model: print(id: $id) { id name slug }
+          model: print(id: $id) { id name slug image { filePath } }
         }
         GQL;
         $data = $this->gql($query, ['id' => $modelId]);
         $m = $data['model'] ?? [];
+        $cover = (string) ($m['image']['filePath'] ?? '');
+        if ($cover !== '' && !preg_match('~^https?://~i', $cover)) {
+            $cover = 'https://media.printables.com/' . ltrim($cover, '/');
+        }
         return [
-            'name' => (string) ($m['name'] ?? ''),
-            'slug' => (string) ($m['slug'] ?? ''),
+            'name'  => (string) ($m['name'] ?? ''),
+            'slug'  => (string) ($m['slug'] ?? ''),
+            'cover' => $cover,
         ];
+    }
+
+    /** Cover image URL for a single model, or '' if unavailable. */
+    public function coverForModel(string $modelId): string
+    {
+        $info = $this->getModelInfo($modelId);
+        return (string) ($info['cover'] ?? '');
     }
 
     /**

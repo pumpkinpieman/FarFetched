@@ -184,6 +184,26 @@ final class MakerWorldService
      *
      * @return array{ok:bool,printSeconds?:int,weightG?:int,colors?:int,plates?:int,profiles?:array}
      */
+    /**
+     * Cover image URL for a single design, or '' if unavailable. Uses the same
+     * design-service endpoint as getPrintStats; the design object carries the
+     * cover (and/or a design_pictures gallery whose first entry is the cover).
+     */
+    public function coverForModel(string $designId): string
+    {
+        $json = $this->apiGet(self::API . '/design-service/design/' . $designId);
+        if (!is_array($json)) return '';
+        // The design endpoint returns fields at the top level (no data wrapper).
+        // Verified field names: coverUrl (primary), coverPortrait / coverLandscape
+        // as fallbacks. Values are already absolute https URLs.
+        $root = (isset($json['data']) && is_array($json['data'])) ? $json['data'] : $json;
+        foreach (['coverUrl', 'coverPortrait', 'coverLandscape'] as $key) {
+            $u = trim((string) ($root[$key] ?? ''));
+            if ($u !== '') return $u;
+        }
+        return '';
+    }
+
     public function getPrintStats(string $designId): array
     {
         $json = $this->apiGet(self::API . '/design-service/design/' . $designId);

@@ -72,8 +72,8 @@ if (count($models) > $batchCap) {
 
 $pdo = db();
 $stmt = $pdo->prepare(
-    'INSERT OR IGNORE INTO download_jobs (source, model_id, slug, name, creator, file_type, status)
-     VALUES (:source, :model_id, :slug, :name, :creator, :file_type, "queued")'
+    'INSERT OR IGNORE INTO download_jobs (source, model_id, slug, name, creator, file_type, cover_url, status)
+     VALUES (:source, :model_id, :slug, :name, :creator, :file_type, :cover_url, "queued")'
 );
 
 $queued = 0;
@@ -94,6 +94,9 @@ try {
             ':name'      => substr((string) ($m['name'] ?? ''), 0, 300),
             ':creator'   => substr((string) ($m['creator'] ?? ''), 0, 120),
             ':file_type' => $fileType,
+            // Cover/thumbnail URL from the browse grid, saved so the worker can
+            // store the source's own image when source-thumbnails are enabled.
+            ':cover_url'  => substr((string) ($m['thumb'] ?? ($m['cover'] ?? '')), 0, 1000),
         ]);
         if ($stmt->rowCount() > 0) {
             $queued++;

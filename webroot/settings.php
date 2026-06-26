@@ -137,6 +137,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $notice = ['type' => $r['ok'] ? 'ok' : 'err', 'text' => $r['msg']];
     }
 
+    // ---- Source thumbnails (per-source toggle) ------------------------------
+    elseif ($action === 'save_source_thumbs') {
+        // Checkboxes only POST when checked, so build the full map explicitly.
+        $known = ['printables','makerworld','thingiverse','cults3d','stlflix','creality','nikko','hex3dforum'];
+        $sel = $_POST['source_thumbs'] ?? [];
+        $map = [];
+        foreach ($known as $s) {
+            $map[$s] = is_array($sel) && !empty($sel[$s]);
+        }
+        cfg_save(['source_thumbs' => $map]);
+        $on = array_keys(array_filter($map));
+        $notice = ['type' => 'ok', 'text' => $on === []
+            ? 'Source thumbnails disabled for all sources (using generated renders).'
+            : 'Source thumbnails enabled for: ' . implode(', ', $on) . '. Use “Backfill now” to fetch images for existing models.'];
+    }
+
     // ---- MakerWorld ---------------------------------------------------------
     elseif ($action === 'save_mw_token') {
         $tok = trim((string) ($_POST['mw_token'] ?? ''));
@@ -1040,6 +1056,43 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'security', 'donate', 'cus
         </form>
 
         <hr>
+        <h2>Thumbnails</h2>
+        <?php
+          $stCfg = cfg('source_thumbs'); if (!is_array($stCfg)) $stCfg = [];
+          $thumbSources = [
+            'printables'  => 'Printables',
+            'makerworld'  => 'MakerWorld',
+            'thingiverse' => 'Thingiverse',
+            'cults3d'     => 'Cults3D',
+            'stlflix'     => 'STLFlix',
+            'creality'    => 'Creality',
+            'nikko'       => 'Nikko Industries',
+            'hex3dforum'  => 'Hex3D Forum',
+          ];
+        ?>
+        <form method="post">
+          <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+          <input type="hidden" name="_tab" value="worker">
+          <p class="hint" style="margin-top:0;">By default, My Library shows a thumbnail rendered from the model's 3D file. Turn a source on below to use that <strong>site's own cover image</strong> instead — it's downloaded and saved alongside the model. If a source image isn't available for a model, the generated render is used as a fallback.</p>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 24px;margin:10px 0;">
+            <?php foreach ($thumbSources as $slug => $label): ?>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:13.5px;font-weight:500;color:var(--ink);">
+                <input type="checkbox" name="source_thumbs[<?= e($slug) ?>]" value="1" <?= !empty($stCfg[$slug]) ? 'checked' : '' ?> style="width:auto;">
+                <?= e($label) ?>
+              </label>
+            <?php endforeach; ?>
+          </div>
+          <div class="row" style="margin-top:6px;">
+            <button class="btn-primary btn-sm" name="action" value="save_source_thumbs">Save thumbnail sources</button>
+          </div>
+        </form>
+        <div class="row" style="margin-top:12px;">
+          <button class="btn-ghost btn-sm" type="button" id="backfillThumbsBtn">📥 Backfill now (fetch source images for existing models)</button>
+          <span id="backfillThumbsStatus" class="hint" style="margin-left:8px;"></span>
+        </div>
+        <p class="hint">Backfill downloads the source cover image for models you already have (only for sources enabled above, and only where a cover URL was captured at download time). New downloads are picked up automatically. Re-runnable any time; it skips models that already have a saved image.</p>
+
+        <hr>
         <form method="post">
           <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
           <input type="hidden" name="_tab" value="worker">
@@ -1354,6 +1407,36 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
   // Show/hide toggles for masked credential fields.
   // Delegated so it works even though the buttons live in modals rendered
   // later in the document than this script.
+  (function () {
+    var bf = document.getElementById('backfillThumbsBtn');
+    if (!bf) return;
+    bf.addEventListener('click', function () {
+      var st = document.getElementById('backfillThumbsStatus');
+      bf.disabled = true;
+      if (st) st.textContent = 'Fetching source images… (looking up older models may take a minute)';
+      var body = new URLSearchParams();
+      body.set('csrf', <?= json_encode($csrf) ?>);
+      fetch('source_thumbs_backfill.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString()
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!d || !d.ok) {
+          if (st) st.textContent = 'Error: ' + ((d && d.error) || 'unknown');
+        } else if (d.note) {
+          if (st) st.textContent = d.note;
+        } else {
+          if (st) st.textContent = 'Done — saved ' + d.saved +
+            (d.resolved ? (' (' + d.resolved + ' looked up from source)') : '') +
+            ', skipped ' + d.skipped +
+            (d.failed ? (', failed ' + d.failed) : '') + ' (scanned ' + d.scanned + ').';
+        }
+      }).catch(function (err) {
+        if (st) st.textContent = 'Request failed: ' + err;
+      }).finally(function () { bf.disabled = false; });
+    });
+  })();
+
   document.addEventListener('click', function (e) {
     var btn = e.target.closest('.reveal-btn');
     if (!btn) return;

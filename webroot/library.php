@@ -120,8 +120,17 @@ function lib_thumb_rel(string $slug, string $folder): ?string
         return 'model_file.php?src=' . rawurlencode($slug)
             . '&model=' . rawurlencode($folder) . '&thumb=1';
     }
-    $base = MODELS_ROOT . '/' . $slug . '/' . $folder . '/.farfetched/thumb.png';
-    return is_file($base) ? 'model_file.php?src=' . rawurlencode($slug)
+    // Online sources: if the per-source "use source thumbnails" toggle is on and
+    // a saved source cover exists, prefer it; otherwise fall back to the
+    // generated STL render. model_file.php serves whichever via prefer=source.
+    $genThumb = MODELS_ROOT . '/' . $slug . '/' . $folder . '/.farfetched/thumb.png';
+    $srcThumb = MODELS_ROOT . '/' . $slug . '/' . $folder . '/.farfetched/source.png';
+    $preferSource = source_thumbs_on($slug) && is_file($srcThumb);
+    if ($preferSource) {
+        return 'model_file.php?src=' . rawurlencode($slug)
+            . '&model=' . rawurlencode($folder) . '&thumb=1&prefer=source';
+    }
+    return is_file($genThumb) ? 'model_file.php?src=' . rawurlencode($slug)
         . '&model=' . rawurlencode($folder) . '&thumb=1' : null;
 }
 
