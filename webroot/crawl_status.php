@@ -22,6 +22,8 @@ if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 
 require_once __DIR__ . '/bootstrap.php';
 
+cli_fix_ownership_after_root();
+
 $flags    = array_slice($argv, 1);
 $doStart  = in_array('--start', $flags, true);
 $doRestart= in_array('--restart', $flags, true);

@@ -109,6 +109,63 @@ define('CREALITY_DOWNLOAD_DIR',      rtrim(MODELS_ROOT, '/') . '/creality');
 define('NIKKO_DOWNLOAD_DIR',         rtrim(MODELS_ROOT, '/') . '/nikko');
 define('HEX3DFORUM_DOWNLOAD_DIR',    rtrim(MODELS_ROOT, '/') . '/hex3dforum');
 
+/**
+ * CLI root-ownership guard.
+ *
+ * The web app (Apache/PHP) runs as www-data (UID 33). When a maintenance script
+ * is launched as root (e.g. `docker exec FarFetched php ...` without `-u
+ * www-data`), any files it creates are owned by root and the web app can no
+ * longer delete or modify them — which breaks library deletes and re-downloads.
+ *
+ * This guard, called at the top of a CLI script, registers a shutdown function
+ * that — only when the process is running as root — chowns any root-owned files
+ * under the models tree (and the private dir) back to www-data on exit. It only
+ * touches files that are actually root-owned, so the common (non-root) case and
+ * the already-correct files are left untouched and it stays cheap.
+ *
+ * No-op when not CLI, not root, or when the POSIX/uid functions are unavailable.
+ */
+function cli_fix_ownership_after_root(int $targetUid = 33, int $targetGid = 33): void
+{
+    if (PHP_SAPI !== 'cli') return;
+    if (!function_exists('posix_geteuid')) return;     // POSIX ext required
+    if (posix_geteuid() !== 0) return;                 // only when running as root
+
+    fwrite(STDERR, "[FarFetched] NOTE: running as root. Files created this run will be "
+        . "chowned to www-data ($targetUid:$targetGid) on exit so the web app can "
+        . "manage them. Tip: run with `docker exec -u www-data ...` to avoid this.\n");
+
+    register_shutdown_function(static function () use ($targetUid, $targetGid): void {
+        $roots = array_unique([rtrim(MODELS_ROOT, '/'), rtrim(PRIVATE_DIR, '/')]);
+        $fixed = 0;
+        foreach ($roots as $root) {
+            if (!is_dir($root)) continue;
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+            // Fix the root dir itself first.
+            $st = @stat($root);
+            if ($st !== false && ($st['uid'] === 0 || $st['gid'] === 0)) {
+                if (@chown($root, $targetUid)) { @chgrp($root, $targetGid); $fixed++; }
+            }
+            foreach ($it as $path => $info) {
+                $s = @stat($path);
+                if ($s === false) continue;
+                // Only touch root-owned entries — leave correctly-owned files alone.
+                if ($s['uid'] === 0 || $s['gid'] === 0) {
+                    if (@chown($path, $targetUid)) { @chgrp($path, $targetGid); $fixed++; }
+                }
+            }
+        }
+        if ($fixed > 0) {
+            fwrite(STDERR, "[FarFetched] chowned $fixed root-owned item(s) back to "
+                . "$targetUid:$targetGid.\n");
+        }
+    });
+}
+
+
 // Seconds between file downloads: now runtime-configurable via the Settings UI.
 // Resolution order is defaults <- env <- stored config (UI wins). The constant
 // is defined further down, once the config layer (cfg) is available.
@@ -1937,6 +1994,59 @@ function creality_ready(): bool
  * SQLite chosen deliberately: single-user local tool, no DB server to run,
  * one portable file under the private dir.
  */
+/**
+ * Cross-platform DB write mutex.
+ *
+ * SQLite's own locking (WAL shared-memory, DELETE-journal POSIX locks, flock on
+ * the DB file) is unreliable on FUSE / network filesystems (Unraid shfs, NFS,
+ * SMB) — producing intermittent "database is locked" crashes when multiple
+ * processes (cron worker + a still-running worker + Apache page polls) touch the
+ * DB at once. We can't dictate where users mount their data, so instead of
+ * relying on the DB filesystem's locking, we serialize writers through an flock
+ * on a lockfile that lives on a filesystem where flock ALWAYS works: tmpfs.
+ *
+ * Lock location resolution (first writable wins):
+ *   /dev/shm  (tmpfs/RAM — present in virtually all Linux containers)
+ *   /tmp      (tmpfs or local overlay — flock-reliable)
+ *   PRIVATE_DIR / sys temp (last resort)
+ *
+ * Usage: $h = db_write_lock(); ...writes...; db_write_unlock($h);
+ */
+function db_write_lock_path(): string
+{
+    static $path = null;
+    if ($path !== null) return $path;
+    $name = 'farfetched_db.lock';
+    foreach (['/dev/shm', '/tmp', PRIVATE_DIR] as $dir) {
+        if (is_dir($dir) && is_writable($dir)) { $path = $dir . '/' . $name; return $path; }
+    }
+    $path = sys_get_temp_dir() . '/' . $name;
+    return $path;
+}
+
+/**
+ * Acquire the global DB write lock. Returns a file handle (release with
+ * db_write_unlock) or null if unavailable. Blocks up to ~$timeoutMs, then
+ * returns the handle anyway so the SQLite busy_timeout/retry stays as backstop.
+ */
+function db_write_lock(int $timeoutMs = 30000)
+{
+    $fh = @fopen(db_write_lock_path(), 'c');
+    if ($fh === false) return null;
+    $deadline = microtime(true) + ($timeoutMs / 1000);
+    do {
+        if (@flock($fh, LOCK_EX | LOCK_NB)) return $fh;
+        usleep(20000 + random_int(0, 15000)); // 20–35ms jittered
+    } while (microtime(true) < $deadline);
+    return $fh;
+}
+
+/** Release a lock acquired via db_write_lock(). */
+function db_write_unlock($fh): void
+{
+    if (is_resource($fh)) { @flock($fh, LOCK_UN); @fclose($fh); }
+}
+
 function db(): PDO
 {
     static $pdo = null;
@@ -1961,16 +2071,52 @@ function db(): PDO
     // verify it actually took; if not, fall back to the portable DELETE journal
     // (plain POSIX file locks) which works on every filesystem.
     $pdo->exec('PRAGMA foreign_keys = ON;');
-    @$pdo->exec('PRAGMA journal_mode = WAL;');
-    $mode = '';
-    try {
-        $mode = (string) $pdo->query('PRAGMA journal_mode;')->fetchColumn();
-    } catch (\Throwable $e) {
-        $mode = '';
+
+    // Journal mode selection. WAL gives the best concurrency BUT it relies on a
+    // shared-memory (-shm) file and mmap primitives that DO NOT work on FUSE /
+    // network filesystems (Unraid shfs, NFS, SMB, etc.). The catch: on FUSE,
+    // `PRAGMA journal_mode=WAL` still *reports* success ("wal") even though
+    // cross-process locking is silently broken — which produces intermittent
+    // "database is locked" crashes under concurrent writers (worker + crawler +
+    // Apache). So we cannot trust the returned mode alone; we must detect the
+    // underlying filesystem and force the portable DELETE journal (POSIX file
+    // locks, reliable everywhere) when the DB lives on a FUSE/network mount.
+    $useWal = true;
+    $dbDir  = dirname(DB_PATH);
+    // Cheap, dependency-free FS probe: read the mount type from /proc/mounts.
+    if (is_readable('/proc/mounts')) {
+        $mounts = @file('/proc/mounts', FILE_IGNORE_NEW_LINES) ?: [];
+        $bestLen = -1; $bestType = '';
+        foreach ($mounts as $line) {
+            $parts = explode(' ', $line);
+            if (count($parts) < 3) continue;
+            $mountPoint = $parts[1];
+            $fsType     = $parts[2];
+            // Find the longest mount point that is a prefix of our DB dir.
+            if (strncmp($dbDir . '/', rtrim($mountPoint, '/') . '/', strlen(rtrim($mountPoint, '/')) + 1) === 0
+                && strlen($mountPoint) > $bestLen) {
+                $bestLen = strlen($mountPoint);
+                $bestType = strtolower($fsType);
+            }
+        }
+        // Filesystems where WAL's shared memory is unreliable.
+        $walUnsafe = ['fuse', 'fuse.shfs', 'shfs', 'nfs', 'nfs4', 'cifs', 'smbfs', 'fuseblk', '9p', 'fuse.glusterfs'];
+        foreach ($walUnsafe as $bad) {
+            if ($bestType === $bad || strncmp($bestType, 'fuse', 4) === 0) { $useWal = false; break; }
+        }
     }
-    if (strtolower($mode) !== 'wal') {
-        // WAL didn't stick (likely a FUSE/network mount). DELETE journaling is
-        // slower under concurrency but reliable everywhere.
+
+    if ($useWal) {
+        @$pdo->exec('PRAGMA journal_mode = WAL;');
+        $mode = '';
+        try { $mode = (string) $pdo->query('PRAGMA journal_mode;')->fetchColumn(); }
+        catch (\Throwable $e) { $mode = ''; }
+        if (strtolower($mode) !== 'wal') {
+            // WAL didn't even stick — fall back to the portable DELETE journal.
+            @$pdo->exec('PRAGMA journal_mode = DELETE;');
+        }
+    } else {
+        // FUSE/network mount: WAL is unsafe here, use DELETE (POSIX file locks).
         @$pdo->exec('PRAGMA journal_mode = DELETE;');
     }
     // busy_timeout: how long SQLite retries a locked DB before throwing.
@@ -2000,22 +2146,30 @@ function db(): PDO
 function db_exec_retry(string $sql, array $params = [], int $tries = 5): \PDOStatement
 {
     $pdo = db();
-    for ($attempt = 1; ; $attempt++) {
-        try {
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute($params);
-            return $stmt;
-        } catch (\PDOException $e) {
-            $locked = stripos($e->getMessage(), 'locked') !== false
-                   || stripos($e->getMessage(), 'busy') !== false;
-            if (!$locked || $attempt >= $tries) {
-                throw $e;
+    // Serialize this write against other processes via the tmpfs mutex, so
+    // concurrent writers queue instead of colliding at the (possibly FUSE) DB
+    // layer. The lock is held only for the single execute, then released.
+    $lock = db_write_lock();
+    try {
+        for ($attempt = 1; ; $attempt++) {
+            try {
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                return $stmt;
+            } catch (\PDOException $e) {
+                $locked = stripos($e->getMessage(), 'locked') !== false
+                       || stripos($e->getMessage(), 'busy') !== false;
+                if (!$locked || $attempt >= $tries) {
+                    throw $e;
+                }
+                if (function_exists('logln')) {
+                    logln('  DB locked, retrying write (' . $attempt . '/' . $tries . ')…');
+                }
+                usleep(500000 * $attempt); // 0.5s, 1s, 1.5s… backoff
             }
-            if (function_exists('logln')) {
-                logln('  DB locked, retrying write (' . $attempt . '/' . $tries . ')…');
-            }
-            usleep(500000 * $attempt); // 0.5s, 1s, 1.5s… backoff
         }
+    } finally {
+        db_write_unlock($lock);
     }
 }
 

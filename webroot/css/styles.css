@@ -144,7 +144,7 @@
   --warn: #f5c842;
 }
 
-[data-theme="light"] {
+:root[data-theme="light"] {
   /* Dynamic Light Theme Variable Inversions */
   --bg: #f7f5f2;       
   --panel: #ede8e0;    
@@ -157,7 +157,7 @@
 }
 
 /* Midnight — moody teal & coral */
-[data-theme="midnight"] {
+:root[data-theme="midnight"] {
   --bg: #0a1a2a;
   --panel: #0f2438;
   --card: #152c44;
@@ -172,7 +172,7 @@
 }
 
 /* Forest — deep green & amber */
-[data-theme="forest"] {
+:root[data-theme="forest"] {
   --bg: #0c1410;
   --panel: #121e17;
   --card: #1a2c20;
@@ -187,7 +187,7 @@
 }
 
 /* Nord — cool arctic blue */
-[data-theme="nord"] {
+:root[data-theme="nord"] {
   --bg: #2e3440;
   --panel: #323a48;
   --card: #3b4252;
@@ -202,7 +202,7 @@
 }
 
 /* Mono — neutral grayscale */
-[data-theme="mono"] {
+:root[data-theme="mono"] {
   --bg: #131313;
   --panel: #1b1b1b;
   --card: #262626;

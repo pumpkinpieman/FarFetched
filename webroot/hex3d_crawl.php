@@ -42,6 +42,8 @@ if (PHP_SAPI !== 'cli') {
     exit("hex3d_crawl.php is a CLI script.\n");
 }
 
+cli_fix_ownership_after_root();
+
 $phase1Only = in_array('--phase1-only', $argv, true);
 
 function crawl_log(string $msg): void

@@ -82,6 +82,16 @@ Then open `http://your-server:16545` and add your source tokens under **Settings
 | `/var/www/html/private` | Persistent state: SQLite job queue, favorites, collections, printer profiles, tokens, config, logs, and the optional password hash. |
 | `/custom` | **Optional.** Host folder(s) you want to browse and register as Custom Local Folders (indexed in place, never copied). Map a host directory here — e.g. a Google Drive sync target or an existing model archive. See below. |
 
+> **⚠️ Storage placement — keep the database on stable local storage.**
+> The `/var/www/html/private` volume holds a **SQLite database** (`fetcher.db`). SQLite's file locking is **unreliable on networked or merged/synced filesystems** — NFS, SMB/CIFS, and FUSE overlays such as **Unraid's array+cache user-shares**. Placing the database there causes intermittent `database is locked` errors and stalled queues, because the storage layer can relocate or sync the file underneath an open connection.
+>
+> **Map `/var/www/html/private` to a real local filesystem (a plain SSD/disk path), not a synced share.**
+> - **Unraid:** set the `appdata` share to **cache-only** (`Use cache pool: Only`, or `Prefer` then run Mover) so the database lives on the cache SSD — *not* on the array. Mapping to the raw `/mnt/cache/...` path (instead of the FUSE `/mnt/user/...` path) achieves the same.
+> - **Synology / QNAP / NAS:** keep it on internal SSD/HDD, not an NFS/SMB-mounted volume.
+> - **Generic Docker:** a local bind-mount or named volume on the host's own disk is ideal.
+>
+> FarFetched auto-detects FUSE/network mounts and falls back to the portable `DELETE` journal mode (instead of WAL) to stay as safe as possible, but no application setting can fully compensate for a database file the storage layer is actively syncing. Stable local storage is strongly recommended. The `/downloads` and `/custom` volumes have no such constraint — only the `private` (database) volume matters here.
+
 ---
 
 ## Finding your auth tokens

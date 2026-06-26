@@ -36,6 +36,11 @@ require_once __DIR__ . '/CrealityCloudService.php';
 require_once __DIR__ . '/NikkoService.php';
 require_once __DIR__ . '/Hex3DForumService.php';
 
+// Auto-correct root-created file ownership on exit (no-op unless run as root).
+// The worker is the main file creator; when launched via `docker exec -d` it
+// runs as root, so this keeps downloaded models owned by www-data.
+cli_fix_ownership_after_root();
+
 // Retry cap now comes from the UI-editable config (clamped in cfg_save).
 $maxAttempts = (int) cfg('max_attempts');
 const LOCK_FILE      = PRIVATE_DIR . '/worker.lock';
@@ -90,18 +95,44 @@ function progress_writer(int $jobId, string $file): callable
 }
 
 // ---- Single-instance lock -------------------------------------------------
-$lock = fopen(LOCK_FILE, 'c');
+$lock = fopen(LOCK_FILE, 'c+');
 if ($lock === false) {
     logln('FATAL: cannot open lock file.');
     exit(1);
 }
-if (!flock($lock, LOCK_EX | LOCK_NB)) {
-    // Expected, harmless no-op: a worker is already running (likely mid-download
-    // or in a paced wait), so this duplicate instance steps aside. The active
-    // worker keeps processing the queue. Not an error.
-    logln('[info] Worker already running — this instance is standing down (queue is being handled).');
+// Primary guard: flock advisory lock (works on local filesystems).
+$gotFlock = flock($lock, LOCK_EX | LOCK_NB);
+
+// FUSE-resilient secondary guard: flock() is unreliable on FUSE/network mounts
+// (Unraid shfs), so a second worker can slip past flock and run concurrently —
+// causing "database is locked" contention. Back flock with a PID-liveness check:
+// the lockfile stores the running worker's PID; if that PID is still alive, this
+// instance stands down regardless of what flock reported.
+$existingPid = 0;
+$raw = stream_get_contents($lock);
+if (is_string($raw) && trim($raw) !== '') {
+    $existingPid = (int) trim($raw);
+}
+$pidAlive = static function (int $pid): bool {
+    if ($pid <= 0) return false;
+    if (is_dir('/proc/' . $pid)) return true;                 // Linux: /proc check
+    if (function_exists('posix_kill')) return @posix_kill($pid, 0); // signal-0 probe
+    return false;
+};
+
+if (!$gotFlock || ($existingPid > 0 && $existingPid !== getmypid() && $pidAlive($existingPid))) {
+    logln('[info] Worker already running (pid ' . ($existingPid ?: '?')
+        . ') — this instance is standing down (queue is being handled).');
     exit(0);
 }
+
+// We own the lock — record our PID so other instances can detect us even if
+// flock is unreliable on this filesystem.
+ftruncate($lock, 0);
+rewind($lock);
+fwrite($lock, (string) getmypid());
+fflush($lock);
+
 
 $svc    = new PrintablesService();
 $mw     = new MakerWorldService();
@@ -251,70 +282,38 @@ while (true) {
     $slug    = $job['slug'] !== '' ? $job['slug'] : $modelId;
     $name    = (string) ($job['name'] ?? '');
 
-    // Helper: always re-prepares to avoid SQLite PDO "bad parameter" state
-    // after a previous execute() error on the same statement handle.
-    $updJob = static function (string $st, int $inc, string $err, string $path, int $id) use ($pdo): void {
-        $stmt = $pdo->prepare(
+    // Both job-status writers now delegate to db_exec_retry(), which serializes
+    // every write through the cross-platform tmpfs mutex (db_write_lock) and
+    // applies the busy_timeout/retry backstop. This is what prevents the
+    // "database is locked" crashes on FUSE/network mounts where SQLite's own
+    // locking is unreliable — all writers (this worker, a cron-launched worker,
+    // the crawler, Apache) queue on one flock instead of colliding.
+    $updJob = static function (string $st, int $inc, string $err, string $path, int $id): void {
+        db_exec_retry(
             "UPDATE download_jobs
              SET status = :st, attempts = attempts + :inc, last_error = :err,
                  saved_path = :path, updated_at = datetime('now')
-             WHERE id = :id"
+             WHERE id = :id",
+            [':st' => $st, ':inc' => $inc, ':err' => $err, ':path' => $path, ':id' => $id],
+            12
         );
-        $stmt->execute([
-            ':st'   => $st,
-            ':inc'  => $inc,
-            ':err'  => $err,
-            ':path' => $path,
-            ':id'   => $id,
-        ]);
     };
-    $upd = new class($pdo) {
-        private \PDO $pdo;
-        public function __construct(\PDO $pdo) { $this->pdo = $pdo; }
+    $upd = new class {
         public function execute(array $p): void {
-            $sql = "UPDATE download_jobs
+            db_exec_retry(
+                "UPDATE download_jobs
                  SET status = :st, attempts = attempts + :inc, last_error = :err,
                      saved_path = :path, updated_at = datetime('now')
-                 WHERE id = :id";
-            $params = [
-                ':st'   => (string) ($p[':st']   ?? ''),
-                ':inc'  => (int)    ($p[':inc']  ?? 0),
-                ':err'  => (string) ($p[':err']  ?? ''),
-                ':path' => (string) ($p[':path'] ?? ''),
-                ':id'   => (int)    ($p[':id']   ?? 0),
-            ];
-            // busy_timeout (30s) handles normal contention; this retry is a final
-            // guard so a transient lock never crashes the worker mid-queue.
-            // The statement is re-prepared inside each attempt: a non-emulated
-            // SQLite handle left over from a failed execute() cannot be re-run
-            // (it raises "bad parameter or other API misuse"), so every retry
-            // needs a fresh statement.
-            // Retry budget is generous because a concurrent process (the Hex3D
-            // crawler) can hold write intent for stretches at a time, and on
-            // FUSE/network mounts SQLite's own busy_timeout isn't always honored.
-            // ~12 attempts with capped backoff + jitter rides out multi-second
-            // contention without crashing the queue. Total worst case ~30s.
-            $maxAttempts = 12;
-            for ($attempt = 1; ; $attempt++) {
-                try {
-                    $stmt = $this->pdo->prepare($sql);
-                    $stmt->execute($params);
-                    return;
-                } catch (\PDOException $e) {
-                    $locked = stripos($e->getMessage(), 'locked') !== false
-                           || stripos($e->getMessage(), 'busy') !== false;
-                    if (!$locked || $attempt >= $maxAttempts) {
-                        throw $e;
-                    }
-                    if (function_exists('logln')) {
-                        logln('  DB locked, retrying status write (' . $attempt . '/' . $maxAttempts . ')…');
-                    }
-                    // Backoff grows then caps at 3s, plus 0–250ms jitter so a
-                    // concurrent writer and this retry don't lock-step forever.
-                    $backoff = (int) min(3000000, 250000 * $attempt);
-                    usleep($backoff + random_int(0, 250000));
-                }
-            }
+                 WHERE id = :id",
+                [
+                    ':st'   => (string) ($p[':st']   ?? ''),
+                    ':inc'  => (int)    ($p[':inc']  ?? 0),
+                    ':err'  => (string) ($p[':err']  ?? ''),
+                    ':path' => (string) ($p[':path'] ?? ''),
+                    ':id'   => (int)    ($p[':id']   ?? 0),
+                ],
+                12
+            );
         }
     };
 

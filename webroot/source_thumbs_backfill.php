@@ -25,6 +25,9 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 
+// Auto-correct root-created file ownership on exit (no-op unless run as root).
+cli_fix_ownership_after_root();
+
 /**
  * Resolve a model's cover image URL directly from its source, for models that
  * predate cover_url capture. Only sources with a clean single-model lookup are
