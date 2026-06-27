@@ -13,7 +13,7 @@ require_once __DIR__ . '/auth.php';
 if (!auth_check()) { http_response_code(401); exit; }
 header('Content-Type: application/json');
 
-$rows = db()->query('SELECT name, nickname, bed_x, bed_y, bed_z FROM printers WHERE enabled = 1')
+$rows = db()->query('SELECT name, nickname, brand, bed_x, bed_y, bed_z FROM printers WHERE enabled = 1')
             ->fetchAll(PDO::FETCH_ASSOC);
 
 $printers = [];
@@ -22,6 +22,7 @@ foreach ($rows as $r) {
     $printers[] = [
         'name'     => $r['name'],
         'nickname' => $r['nickname'] ?? '',
+        'brand'    => $r['brand'] ?? '',
         'x'        => (int) $r['bed_x'],
         'y'        => (int) $r['bed_y'],
         'z'        => (int) $r['bed_z'],

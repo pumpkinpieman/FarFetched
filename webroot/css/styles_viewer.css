@@ -61,3 +61,19 @@
   .delete-item input{width:auto;cursor:pointer;}
   .delete-item .dsize{margin-left:auto;font-size:12px;color:var(--muted);font-family:ui-monospace,monospace;}
   .modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:16px 20px;border-top:1px solid var(--line);}
+
+/* "View model on bed" controls — toggle + printer selector in the 3D viewer. */
+.bed-controls{
+  position:absolute; top:54px; left:14px; z-index:6;
+  display:flex; align-items:center; gap:10px;
+  background:rgba(28,27,26,.82); backdrop-filter:blur(6px);
+  border:0.5px solid rgba(255,255,255,.12); border-radius:8px;
+  padding:7px 11px; font-size:13px; color:#e8e3dc;
+}
+.bed-controls .bed-toggle{display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none;}
+.bed-controls .bed-toggle input{cursor:pointer; margin:0;}
+.bed-controls select{
+  background:#262422; color:#e8e3dc; border:0.5px solid rgba(255,255,255,.18);
+  border-radius:6px; padding:4px 8px; font-size:12px; max-width:220px;
+}
+.bed-controls select:disabled{opacity:.5;}

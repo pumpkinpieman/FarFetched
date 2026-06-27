@@ -626,7 +626,13 @@ $hex3dforumReady   = $hex3dforumSid !== '' || $hex3dforumU !== '';
 
 // Active tab
 $tab = (string) ($_GET['tab'] ?? $_POST['_tab'] ?? 'sources');
-if (!in_array($tab, ['sources', 'worker', 'activity', 'security', 'donate', 'custom'], true)) $tab = 'sources';
+if (!in_array($tab, ['sources', 'worker', 'activity', 'security', 'donate', 'custom', 'octoprint'], true)) $tab = 'sources';
+
+// Printers (with their OctoPrint settings) for the OctoPrint tab.
+$octoPrinters = db()->query(
+    'SELECT id, name, nickname, octoprint_url, octoprint_api_key, octoprint_enabled
+       FROM printers ORDER BY enabled DESC, name'
+)->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -672,6 +678,7 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'security', 'donate', 'cus
     <button class="tab-btn <?= $tab==='sources'?'active':'' ?>" onclick="switchTab('sources')">Sources</button>
     <button class="tab-btn <?= $tab==='custom'?'active':'' ?>" onclick="switchTab('custom')">Custom</button>
     <button class="tab-btn <?= $tab==='worker'?'active':'' ?>" onclick="switchTab('worker')">Worker</button>
+    <button class="tab-btn <?= $tab==='octoprint'?'active':'' ?>" onclick="switchTab('octoprint')">OctoPrint</button>
     <button class="tab-btn <?= $tab==='activity'?'active':'' ?>" onclick="switchTab('activity')">Activity</button>
     <button class="tab-btn <?= $tab==='security'?'active':'' ?>" onclick="switchTab('security')">Security</button>
     <button class="tab-btn <?= $tab==='donate'?'active':'' ?>" onclick="switchTab('donate')">Donate</button>
@@ -1108,6 +1115,50 @@ if (!in_array($tab, ['sources', 'worker', 'activity', 'security', 'donate', 'cus
     </div>
   </div>
 
+  <!-- ===================== OCTOPRINT TAB ===================== -->
+  <div class="tab-content <?= $tab==='octoprint'?'active':'' ?>" id="tab-octoprint">
+    <div class="panel">
+      <h2>OctoPrint</h2>
+      <p class="hint">Connect each printer to its own OctoPrint instance. Set the OctoPrint URL (e.g. <code>http://octopi.local</code> or <code>http://192.168.1.50</code>) and an API key from OctoPrint → Settings → API. Once connected, you can upload downloaded files to the printer and control prints. Note: OctoPrint prints <strong>gcode</strong> — STL/3MF files upload as models but must be sliced before printing.</p>
+
+      <?php if ($octoPrinters === []): ?>
+      <div class="status"><span class="dot off"></span>No printers yet. Add a printer first in <a href="printers.php">My Printers</a>.</div>
+      <?php else: ?>
+      <div class="op-list">
+        <?php foreach ($octoPrinters as $op): ?>
+        <div class="op-card" data-printer-id="<?= (int) $op['id'] ?>">
+          <div class="op-head">
+            <strong><?= e($op['nickname'] ?: $op['name']) ?></strong>
+            <span class="op-status" id="op-status-<?= (int) $op['id'] ?>">
+              <span class="dot <?= $op['octoprint_enabled'] ? 'on' : 'off' ?>"></span>
+              <?= $op['octoprint_enabled'] ? 'Enabled' : 'Disabled' ?>
+            </span>
+          </div>
+          <div class="op-fields">
+            <label>OctoPrint URL
+              <input type="text" class="op-url" value="<?= e($op['octoprint_url']) ?>" placeholder="http://octopi.local">
+            </label>
+            <label>API Key
+              <input type="password" class="op-key" value="<?= e($op['octoprint_api_key']) ?>" placeholder="OctoPrint API key" autocomplete="off">
+            </label>
+            <label class="op-enable">
+              <input type="checkbox" class="op-enabled" <?= $op['octoprint_enabled'] ? 'checked' : '' ?>> Enable OctoPrint for this printer
+            </label>
+          </div>
+          <div class="op-actions">
+            <button type="button" class="btn-primary btn-sm op-save">Save</button>
+            <button type="button" class="btn-sm op-test">Test connection</button>
+            <button type="button" class="btn-sm op-refresh">Refresh status</button>
+            <span class="op-msg" id="op-msg-<?= (int) $op['id'] ?>"></span>
+          </div>
+          <div class="op-live" id="op-live-<?= (int) $op['id'] ?>" hidden></div>
+        </div>
+        <?php endforeach; ?>
+      </div>
+      <?php endif; ?>
+    </div>
+  </div>
+
   <!-- ===================== ACTIVITY TAB ===================== -->
   <div class="tab-content <?= $tab==='activity'?'active':'' ?>" id="tab-activity">
     <?php if ($logRows === []): ?>
@@ -1376,6 +1427,102 @@ document.querySelectorAll('.modal-src form').forEach(function (form) {
       });
   });
 });
+
+/* ===================== OctoPrint tab ===================== */
+(function () {
+  const CSRF = <?= json_encode($csrf) ?>;
+  const fmtTime = s => {
+    if (s == null) return '–';
+    s = Math.round(s); const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+    return h ? (h + 'h ' + m + 'm') : (m + 'm');
+  };
+
+  async function opPost(payload) {
+    const res = await fetch('octoprint_action.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ csrf: CSRF }, payload)),
+    });
+    return res.json();
+  }
+
+  function msg(id, text, kind) {
+    const el = document.getElementById('op-msg-' + id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'op-msg ' + (kind || '');
+  }
+
+  function renderLive(id, s) {
+    const live = document.getElementById('op-live-' + id);
+    if (!live) return;
+    if (!s || !s.ok) { live.hidden = true; return; }
+    const t = s.temps || {};
+    const tool = t.tool0 || {}, bed = t.bed || {};
+    const job = s.job || null;
+    const flags = s.flags || {};
+    let html = '<div class="op-live-row"><span class="op-state">' + (s.state || 'Unknown') + '</span>';
+    if (tool.actual != null) html += '<span>Nozzle: ' + tool.actual + '°' + (tool.target ? ' / ' + tool.target + '°' : '') + '</span>';
+    if (bed.actual != null)  html += '<span>Bed: ' + bed.actual + '°' + (bed.target ? ' / ' + bed.target + '°' : '') + '</span>';
+    html += '</div>';
+    if (job && job.file) {
+      html += '<div class="op-live-row"><span>Job: ' + job.file + '</span>';
+      if (job.completion != null) html += '<span>' + job.completion + '%</span>';
+      if (job.printTimeLeft != null) html += '<span>ETA: ' + fmtTime(job.printTimeLeft) + '</span>';
+      html += '</div>';
+    }
+    // Control buttons based on state.
+    html += '<div class="op-controls">';
+    if (flags.printing) {
+      html += '<button type="button" class="btn-sm op-ctl" data-cmd="pause">Pause</button>';
+      html += '<button type="button" class="btn-sm op-ctl" data-cmd="cancel">Cancel</button>';
+    } else if (flags.paused) {
+      html += '<button type="button" class="btn-sm op-ctl" data-cmd="resume">Resume</button>';
+      html += '<button type="button" class="btn-sm op-ctl" data-cmd="cancel">Cancel</button>';
+    } else if (flags.operational) {
+      html += '<button type="button" class="btn-sm op-ctl" data-cmd="start">Start</button>';
+    }
+    html += '</div>';
+    live.innerHTML = html;
+    live.hidden = false;
+
+    live.querySelectorAll('.op-ctl').forEach(b => {
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        const r = await opPost({ action: 'control', id, cmd: b.dataset.cmd });
+        msg(id, r.ok ? ('Sent: ' + b.dataset.cmd) : ('Failed: ' + (r.error||'')), r.ok ? 'ok' : 'err');
+        setTimeout(() => refreshStatus(id), 1200);
+      });
+    });
+  }
+
+  async function refreshStatus(id) {
+    msg(id, 'Checking…', '');
+    try {
+      const r = await opPost({ action: 'status', id });
+      if (r.ok) { msg(id, r.online ? 'Online' : 'Reachable (printer offline)', 'ok'); renderLive(id, r); }
+      else { msg(id, r.error || 'Failed', 'err'); }
+    } catch (e) { msg(id, 'Network error', 'err'); }
+  }
+
+  document.querySelectorAll('.op-card').forEach(card => {
+    const id = parseInt(card.dataset.printerId, 10);
+    const url = card.querySelector('.op-url');
+    const key = card.querySelector('.op-key');
+    const en  = card.querySelector('.op-enabled');
+
+    card.querySelector('.op-save').addEventListener('click', async () => {
+      const r = await opPost({ action: 'save', id, url: url.value.trim(), api_key: key.value.trim(), enabled: en.checked ? 1 : 0 });
+      msg(id, r.ok ? 'Saved.' : ('Error: ' + (r.error||'')), r.ok ? 'ok' : 'err');
+    });
+    card.querySelector('.op-test').addEventListener('click', async () => {
+      msg(id, 'Testing…', '');
+      const r = await opPost({ action: 'test', id });
+      msg(id, r.ok ? ('Connected — OctoPrint ' + (r.version||'')) : ('Failed: ' + (r.error||'')), r.ok ? 'ok' : 'err');
+    });
+    card.querySelector('.op-refresh').addEventListener('click', () => refreshStatus(id));
+  });
+})();
 </script>
 <script>
   const toggleBtn = document.getElementById('theme-toggle');

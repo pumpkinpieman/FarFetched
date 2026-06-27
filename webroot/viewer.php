@@ -123,6 +123,12 @@ foreach ($sources as $s) {
     <div class="stage">
       <div id="canvas-wrap"></div>
       <div id="fitBanner" class="fit-banner" hidden></div>
+      <div id="bedControls" class="bed-controls" hidden>
+        <label class="bed-toggle">
+          <input type="checkbox" id="bedToggle"> View model on bed
+        </label>
+        <select id="bedPrinter" disabled></select>
+      </div>
       <div class="overlay" id="overlay">Select a file to render it here.</div>
     </div>
     <div class="meta" id="meta"></div>
@@ -239,6 +245,7 @@ foreach ($sources as $s) {
 
       // Seat the model ON the grid: centered on x/z, base resting at y = 0.
       obj.position.set(-center.x, -box.min.y, -center.z);
+      obj.userData.baseY = -box.min.y; // remember the at-grid base for bed offset
 
       // Fit the camera to the model's size, looking at its mid-height.
       const maxDim = Math.max(size.x, size.y, size.z) || 1;
@@ -250,6 +257,7 @@ foreach ($sources as $s) {
       controls.target.set(0, size.y / 2, 0);
       controls.update();
       checkFit(size.x, size.y, size.z);
+      if (typeof refreshBed === 'function') refreshBed();
     }
 
     function showOverlay(text, isErr) {
@@ -299,6 +307,189 @@ foreach ($sources as $s) {
       }
       fitBanner.hidden = false;
     }
+
+    // ===== "View model on bed" — printer build-volume visualization =====
+    // The model is Y-up and seated at y=0 (see frameObject), so the bed lies on
+    // the X-Z plane (bed_x × bed_y) and build height runs up +Y to bed_z.
+    let bedGroup = null;          // THREE.Group holding plate + grid + volume box
+    let bedEnabled = false;       // toggle state
+    let bedPrinterIdx = 0;        // index into enabledPrinters
+    const bedControls = document.getElementById('bedControls');
+    const bedToggle   = document.getElementById('bedToggle');
+    const bedSelect   = document.getElementById('bedPrinter');
+
+    function disposeBed() {
+      if (!bedGroup) return;
+      scene.remove(bedGroup);
+      bedGroup.traverse(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
+      bedGroup = null;
+    }
+
+    // Brand → build-plate accent color. Falls back to a neutral PEI gray.
+    // Generate a PEI-style build-surface texture on a canvas (speckle + grid),
+    // tinted toward the brand accent. No external asset, no licensing concern.
+    // Cached per (accent,bx,by) so toggling/switching doesn't rebuild needlessly.
+    const _peiCache = {};
+    function makePeiTexture(accent, bx, by) {
+      const key = accent + ':' + bx + 'x' + by;
+      if (_peiCache[key]) return _peiCache[key];
+      const S = 512;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = S;
+      const ctx = cv.getContext('2d');
+
+      // Base fill from the brand accent (darkened a touch for a metallic PEI look).
+      const r = (accent >> 16) & 255, g = (accent >> 8) & 255, b = accent & 255;
+      const dim = v => Math.round(v * 0.55);
+      ctx.fillStyle = `rgb(${dim(r)},${dim(g)},${dim(b)})`;
+      ctx.fillRect(0, 0, S, S);
+
+      // PEI speckle — random light/dark flecks for the powder-coat texture.
+      // Two passes: dense fine grain + sparser coarser flecks for visible texture.
+      for (let i = 0; i < 26000; i++) {
+        const x = Math.random() * S, y = Math.random() * S;
+        const a = Math.random() * 0.30;
+        ctx.fillStyle = (Math.random() < 0.5)
+          ? `rgba(255,255,255,${a})`
+          : `rgba(0,0,0,${a})`;
+        ctx.fillRect(x, y, 1.6, 1.6);
+      }
+      for (let i = 0; i < 4000; i++) {
+        const x = Math.random() * S, y = Math.random() * S;
+        const a = Math.random() * 0.22;
+        const sz = 2 + Math.random() * 2;
+        ctx.fillStyle = (Math.random() < 0.5)
+          ? `rgba(255,255,255,${a})`
+          : `rgba(0,0,0,${a})`;
+        ctx.fillRect(x, y, sz, sz);
+      }
+
+      // 10mm grid lines, spaced proportional to bed size so cells read as 10mm.
+      const cells = Math.max(2, Math.round(Math.max(bx, by) / 10));
+      const step = S / cells;
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= cells; i++) {
+        const p = Math.round(i * step) + 0.5;
+        ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
+      }
+
+      const tex = new THREE.CanvasTexture(cv);
+      tex.anisotropy = 4;
+      tex.needsUpdate = true;
+      _peiCache[key] = tex;
+      return tex;
+    }
+
+    function brandColor(brand) {
+      const b = (brand || '').toLowerCase();
+      if (b.includes('bambu'))    return 0x3a7d3a; // Bambu green-ish plate
+      if (b.includes('creality')) return 0xc8742a; // Creality orange
+      if (b.includes('prusa'))    return 0xd35400; // Prusa orange
+      if (b.includes('anycubic')) return 0x1f8a70; // Anycubic teal
+      if (b.includes('qidi'))     return 0x2a6fc8; // Qidi blue
+      if (b.includes('elegoo'))   return 0x202a3a; // Elegoo dark
+      return 0x6a6a6a;                              // generic PEI gray
+    }
+
+    const PLATE_THICKNESS = 3;   // textured print surface (mm)
+    const SLAB_THICKNESS  = 6;   // heatbed slab beneath the plate (mm)
+    let bedTopY = 0;             // world-Y of the plate top (where the model sits)
+
+    function buildBed(p) {
+      // p = {name, nickname, brand, x, y, z} in millimetres.
+      disposeBed();
+      if (!p || !p.x || !p.y || !p.z) return;
+      const g = new THREE.Group();
+      const bx = p.x, by = p.y, bz = p.z;
+      const accent = brandColor(p.brand);
+
+      // Heatbed slab (thicker, slightly larger footprint, dark) sits lowest, its
+      // TOP at y=0 so the build plate stacks on top and the plate top is +PLATE.
+      const slabGeo = new THREE.BoxGeometry(bx + 14, SLAB_THICKNESS, by + 14);
+      const slabMat = new THREE.MeshStandardMaterial({ color: 0x161514, metalness: 0.3, roughness: 0.7 });
+      const slab = new THREE.Mesh(slabGeo, slabMat);
+      slab.position.y = -(SLAB_THICKNESS / 2); // top face at y=0
+      g.add(slab);
+
+      // Build plate (brand-tinted PEI-textured print surface) on top of the slab.
+      const plateGeo = new THREE.BoxGeometry(bx, PLATE_THICKNESS, by);
+      const peiTex = makePeiTexture(accent, bx, by);
+      const plainMat = new THREE.MeshStandardMaterial({ color: accent, metalness: 0.15, roughness: 0.85 });
+      const topMat   = new THREE.MeshStandardMaterial({ map: peiTex, metalness: 0.2, roughness: 0.8 });
+      // BoxGeometry material order: +X,-X,+Y,-Y,+Z,-Z. Texture only the top (+Y).
+      const plate = new THREE.Mesh(plateGeo, [plainMat, plainMat, topMat, plainMat, plainMat, plainMat]);
+      plate.position.y = PLATE_THICKNESS / 2; // base at y=0, top at +PLATE_THICKNESS
+      g.add(plate);
+
+      scene.add(g);
+      bedGroup = g;
+      bedTopY = PLATE_THICKNESS;
+
+      // Lift the model so it rests on the plate top. Set absolutely (not +=) so
+      // repeated rebuilds (toggle/printer switch) don't compound the offset.
+      if (current && current.userData.baseY !== undefined) {
+        current.position.y = current.userData.baseY + bedTopY;
+      }
+    }
+
+    function refreshBed() {
+      if (!bedEnabled) {
+        disposeBed();
+        grid.visible = true;
+        // Drop the model back to the grid (undo any bed lift).
+        if (current && current.userData.baseY !== undefined) {
+          current.position.y = current.userData.baseY;
+        }
+        return;
+      }
+      const printers = enabledPrinters || [];
+      const p = printers[bedPrinterIdx] || printers[0];
+      if (!p) { disposeBed(); return; }
+      grid.visible = false;       // hide the default infinite grid when bed is on
+      buildBed(p);
+    }
+
+    function populateBedSelect() {
+      const printers = enabledPrinters || [];
+      if (!bedSelect) return;
+      bedSelect.innerHTML = '';
+      printers.forEach((p, i) => {
+        const o = document.createElement('option');
+        o.value = String(i);
+        o.textContent = p.nickname ? (p.nickname + ' (' + p.name + ')') : p.name;
+        bedSelect.appendChild(o);
+      });
+      bedSelect.disabled = !bedEnabled || printers.length === 0;
+    }
+
+    // Reveal the controls once we know the user has at least one enabled printer.
+    async function initBedControls() {
+      const printers = await ensurePrinters();
+      if (!bedControls) return;
+      if (printers.length) {
+        populateBedSelect();
+        bedControls.hidden = false;
+      } else {
+        bedControls.hidden = true; // no printers -> nothing to show
+      }
+    }
+
+    if (bedToggle) {
+      bedToggle.addEventListener('change', () => {
+        bedEnabled = bedToggle.checked;
+        if (bedSelect) bedSelect.disabled = !bedEnabled || !(enabledPrinters || []).length;
+        refreshBed();
+      });
+    }
+    if (bedSelect) {
+      bedSelect.addEventListener('change', () => {
+        bedPrinterIdx = parseInt(bedSelect.value, 10) || 0;
+        refreshBed();
+      });
+    }
+    initBedControls();
 
     function loadFile(url, ext, label) {      showOverlay('<div><div class="spinner"></div>Loading ' + label + '…</div>', false);
       const onErr = (e) => { showOverlay('Could not load this file.<br>' + (e?.message || ''), true); };

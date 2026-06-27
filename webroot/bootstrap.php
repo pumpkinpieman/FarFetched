@@ -2178,8 +2178,80 @@ function db(): PDO
             db_write_unlock($lk);
         }
     }
+
+    // Run column migrations UNCONDITIONALLY (once per process). These must run on
+    // existing DBs too — init_schema() above only runs on fresh/incomplete DBs,
+    // so any ALTER-based migration placed only there would never reach upgrading
+    // users. run_migrations() is idempotent (checks each column, ALTERs only if
+    // missing) and cheap, so running it on connect is safe.
+    if (empty($GLOBALS['__ff_migrated'])) {
+        $GLOBALS['__ff_migrated'] = true;
+        try {
+            run_migrations($pdo);
+        } catch (\Throwable $e) {
+            $GLOBALS['__ff_migrated'] = false; // allow a later retry
+            if (function_exists('logln')) { @logln('migration error: ' . $e->getMessage()); }
+        }
+    }
+
     $GLOBALS['__ff_pdo'] = $pdo;
     return $pdo;
+}
+
+/**
+ * Idempotent column migrations for existing installs. Safe to call on every
+ * connection: each block checks for the column and ALTERs only when missing.
+ * New schema changes for upgrading users go HERE (not only in init_schema),
+ * so they reach databases that already have the core tables.
+ */
+function run_migrations(PDO $pdo): void
+{
+    $hasCol = function (string $table, string $col) use ($pdo): bool {
+        try {
+            $cols = $pdo->query("PRAGMA table_info($table)")->fetchAll(PDO::FETCH_COLUMN, 1);
+            return in_array($col, (array) $cols, true);
+        } catch (\Throwable $e) {
+            return true; // table missing/unknown — let init_schema handle it
+        }
+    };
+    $exec = function (string $sql) use ($pdo): void {
+        $lk = db_write_lock();
+        try { $pdo->exec($sql); }
+        catch (\Throwable $e) { /* non-fatal: may have been added concurrently */ }
+        finally { db_write_unlock($lk); }
+    };
+
+    // ── Declarative column migrations ───────────────────────────────────────
+    // To add a new column for upgrading users, append one row here:
+    //   [table, column, full ALTER ... ADD COLUMN definition]
+    // The self-check adds it only when missing, so it's safe on every boot and
+    // reaches databases that already have the core tables.
+    $columns = [
+        ['download_jobs', 'cover_url',         "ALTER TABLE download_jobs ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''"],
+        ['download_jobs', 'source',            "ALTER TABLE download_jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'printables'"],
+        ['printers',      'nickname',          "ALTER TABLE printers ADD COLUMN nickname TEXT NOT NULL DEFAULT ''"],
+        ['printers',      'octoprint_url',     "ALTER TABLE printers ADD COLUMN octoprint_url TEXT NOT NULL DEFAULT ''"],
+        ['printers',      'octoprint_api_key', "ALTER TABLE printers ADD COLUMN octoprint_api_key TEXT NOT NULL DEFAULT ''"],
+        ['printers',      'octoprint_enabled', "ALTER TABLE printers ADD COLUMN octoprint_enabled INTEGER NOT NULL DEFAULT 0"],
+    ];
+    $added = [];
+    foreach ($columns as [$table, $col, $sql]) {
+        if (!$hasCol($table, $col)) {
+            $exec($sql);
+            $added[] = "$table.$col";
+        }
+    }
+
+    // ── Follow-up steps that depend on a column existing ────────────────────
+    // (e.g. indexes that reference a freshly-added column). Guarded so they run
+    // only the first time their column appears.
+    if (in_array('download_jobs.source', $added, true)) {
+        $exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_src_unique ON download_jobs(source, model_id, file_type)");
+    }
+
+    if ($added && function_exists('logln')) {
+        @logln('DB migrated — added column(s): ' . implode(', ', $added));
+    }
 }
 
 /**
@@ -2330,6 +2402,9 @@ function init_schema(PDO $pdo): void
             image      TEXT    NOT NULL DEFAULT '',
             enabled    INTEGER NOT NULL DEFAULT 1,
             is_custom  INTEGER NOT NULL DEFAULT 0,
+            octoprint_url     TEXT    NOT NULL DEFAULT '',
+            octoprint_api_key TEXT    NOT NULL DEFAULT '',
+            octoprint_enabled INTEGER NOT NULL DEFAULT 0,
             created_at TEXT    NOT NULL DEFAULT (datetime('now'))
         );
     SQL);
@@ -2338,6 +2413,18 @@ function init_schema(PDO $pdo): void
     $pcols = $pdo->query("PRAGMA table_info(printers)")->fetchAll(PDO::FETCH_COLUMN, 1);
     if ($pcols && !in_array('nickname', $pcols, true)) {
         $pdo->exec("ALTER TABLE printers ADD COLUMN nickname TEXT NOT NULL DEFAULT ''");
+    }
+
+    // Migration: OctoPrint per-printer connection (URL + API key + toggle).
+    $pcols = $pdo->query("PRAGMA table_info(printers)")->fetchAll(PDO::FETCH_COLUMN, 1);
+    if ($pcols && !in_array('octoprint_url', $pcols, true)) {
+        $pdo->exec("ALTER TABLE printers ADD COLUMN octoprint_url TEXT NOT NULL DEFAULT ''");
+    }
+    if ($pcols && !in_array('octoprint_api_key', $pcols, true)) {
+        $pdo->exec("ALTER TABLE printers ADD COLUMN octoprint_api_key TEXT NOT NULL DEFAULT ''");
+    }
+    if ($pcols && !in_array('octoprint_enabled', $pcols, true)) {
+        $pdo->exec("ALTER TABLE printers ADD COLUMN octoprint_enabled INTEGER NOT NULL DEFAULT 0");
     }
 
     // Migration: add `source` to pre-existing installs (CREATE TABLE won't alter).

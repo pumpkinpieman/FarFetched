@@ -382,3 +382,24 @@
 .theme-name{flex:1;}
 .theme-check{opacity:0;color:var(--clay);font-weight:700;flex:0 0 auto;}
 .theme-pop-row.active .theme-check{opacity:1;}
+
+/* ===== OctoPrint settings tab ===== */
+.op-list{display:flex;flex-direction:column;gap:14px;margin-top:12px;}
+.op-card{border:0.5px solid rgba(255,255,255,.12);border-radius:10px;padding:14px 16px;background:rgba(255,255,255,.02);}
+.op-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+.op-status{font-size:13px;opacity:.85;}
+.op-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;}
+.op-fields label{display:flex;flex-direction:column;gap:4px;font-size:13px;}
+.op-fields .op-enable{grid-column:1/-1;flex-direction:row;align-items:center;gap:8px;}
+.op-fields input[type=text],.op-fields input[type=password]{
+  background:#262422;color:#e8e3dc;border:0.5px solid rgba(255,255,255,.18);
+  border-radius:6px;padding:7px 9px;font-size:13px;
+}
+.op-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.op-msg{font-size:12px;margin-left:6px;}
+.op-msg.ok{color:#7ee0a8;} .op-msg.err{color:#ff8a8a;}
+.op-live{margin-top:12px;padding-top:10px;border-top:0.5px solid rgba(255,255,255,.1);}
+.op-live-row{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin-bottom:6px;opacity:.9;}
+.op-state{font-weight:600;}
+.op-controls{display:flex;gap:8px;margin-top:8px;}
+@media(max-width:560px){.op-fields{grid-template-columns:1fr;}}
