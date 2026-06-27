@@ -79,8 +79,23 @@ $stmt = $pdo->prepare(
 $queued = 0;
 $skipped = 0;
 
-$pdo->beginTransaction();
+// Serialize this transaction against the worker's writes via the same
+// cross-platform mutex the worker uses. The enqueue runs inside a transaction
+// (which holds a write lock for its duration); without the mutex it can collide
+// with an active worker status-write and fail with "database is locked" — the
+// exact "database error while queueing" seen when adding models while the queue
+// is running. Acquiring the mutex makes the UI insert wait for the worker's
+// write to finish instead of erroring. Retries cover the rare lock that slips
+// through (e.g. the mutex was briefly unavailable).
+$enqueueAttempts = 0;
+$enqueueMax = 8;
+enqueue_attempt:
+$enqueueAttempts++;
+$lock = db_write_lock();
 try {
+    $pdo->beginTransaction();
+    $queued = 0;
+    $skipped = 0;
     foreach ($models as $m) {
         $id = trim((string) ($m['id'] ?? ''));
         if ($id === '') {
@@ -106,10 +121,18 @@ try {
     }
     $pdo->commit();
 } catch (Throwable $ex) {
-    $pdo->rollBack();
+    if ($pdo->inTransaction()) { $pdo->rollBack(); }
+    db_write_unlock($lock);
+    $locked = stripos($ex->getMessage(), 'locked') !== false
+           || stripos($ex->getMessage(), 'busy') !== false;
+    if ($locked && $enqueueAttempts < $enqueueMax) {
+        usleep(150000 * $enqueueAttempts); // 0.15s, 0.3s… brief backoff
+        goto enqueue_attempt;
+    }
     error_log('[enqueue] ' . $ex->getMessage());
     fail('Database error while queueing.', 500);
 }
+db_write_unlock($lock);
 
 echo json_encode(['ok' => true, 'queued' => $queued, 'skipped' => $skipped]);
 
@@ -119,6 +142,11 @@ if ($queued > 0) {
     $worker = __DIR__ . '/worker.php';
     $log    = dirname(__DIR__) . '/private/worker.log';
     if (PHP_OS_FAMILY !== 'Windows' && is_file($worker)) {
-        @exec('php ' . escapeshellarg($worker) . ' >> ' . escapeshellarg($log) . ' 2>&1 &');
+        // Fully detached via setsid + nohup so exec() returns instantly and the
+        // HTTP response isn't held while the worker boots (loads services, checks
+        // tokens). stdin/stdout/stderr all redirected so no fd keeps the parent
+        // request alive.
+        @exec('setsid nohup php ' . escapeshellarg($worker)
+            . ' < /dev/null >> ' . escapeshellarg($log) . ' 2>&1 &');
     }
 }

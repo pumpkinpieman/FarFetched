@@ -491,7 +491,9 @@ $csrf = csrf_token();
       <?php foreach ($models as $m): ?>
         <div class="card"
              data-id="<?= e($m['id']) ?>" data-slug="<?= e($m['slug']) ?>"
-             data-name="<?= e($m['name']) ?>" data-creator="<?= e($m['creator']) ?>">
+             data-name="<?= e($m['name']) ?>" data-creator="<?= e($m['creator']) ?>"
+             data-thumb="<?= e($m['thumb'] ?? '') ?>">
+
           <input type="checkbox" class="pick" aria-label="Select model">
           <?php $isFav = isset($favSet[$source . ':' . $m['id']]); ?>
           <button type="button" class="fav-star <?= $isFav ? 'on' : '' ?>"
@@ -716,6 +718,7 @@ $csrf = csrf_token();
     card.className = 'card';
     card.dataset.id = m.id; card.dataset.slug = m.slug;
     card.dataset.name = m.name; card.dataset.creator = m.creator;
+    card.dataset.thumb = m.thumb || (Array.isArray(m.images) && m.images.length ? m.images[0] : '');
     // Restore selection highlight if already in the store.
     if (selHas(m.id)) card.classList.add('sel');
 
@@ -1304,7 +1307,7 @@ $csrf = csrf_token();
   if (grid) grid.addEventListener('change', e => {
     if (!e.target.classList.contains('pick')) return;
     const card = e.target.closest('.card');
-    if (e.target.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator});
+    if (e.target.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator,thumb:card.dataset.thumb||""});
     else selDel(card.dataset.id);
     card.classList.toggle('sel', e.target.checked);
     refresh();
@@ -1319,7 +1322,7 @@ $csrf = csrf_token();
     if (!card) return;
     const box = card.querySelector('.pick');
     box.checked = !box.checked;
-    if (box.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator});
+    if (box.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator,thumb:card.dataset.thumb||""});
     else selDel(card.dataset.id);
     card.classList.toggle('sel', box.checked);
     refresh();
@@ -1328,7 +1331,7 @@ $csrf = csrf_token();
     const cards = grid ? [...grid.querySelectorAll('.card')] : [];
     const on = cards.some(c => !selHas(c.dataset.id));
     cards.forEach(c => {
-      if (on) selSet(c.dataset.id, {id:c.dataset.id,slug:c.dataset.slug,name:c.dataset.name,creator:c.dataset.creator});
+      if (on) selSet(c.dataset.id, {id:c.dataset.id,slug:c.dataset.slug,name:c.dataset.name,creator:c.dataset.creator,thumb:c.dataset.thumb||""});
       else selDel(c.dataset.id);
       c.classList.toggle('sel', on);
       const box = c.querySelector('.pick');

@@ -298,6 +298,10 @@ function lib_badge(string $slug): string
       <button id="genAllBtn" class="lib-btn lib-btn-accent lib-btn-sm" type="button">
         📸 Generate all missing thumbnails
       </button>
+      <button id="grabSrcBtn" class="lib-btn lib-btn-sm" type="button">
+        🖼️ Grab thumbnails from source
+      </button>
+      <span id="grabSrcStatus" class="lib-muted" style="margin-left:8px;font-size:13px;"></span>
       <input type="search" id="libSearch" class="lib-search" placeholder="🔍 Search your library…" autocomplete="off">
     </div>
     <?php endif; ?>
@@ -667,6 +671,41 @@ function lib_badge(string $slug): string
   import { createViewer } from './js/viewer-core.js';
 
   const CSRF = JSON.parse(document.getElementById('lib-csrf').textContent || '""');
+
+  // "Grab thumbnails from source" — backfill source covers for all enabled
+  // sources, overwriting existing source.png (force). Reloads on completion so
+  // the new images show.
+  (function () {
+    const btn = document.getElementById('grabSrcBtn');
+    const st  = document.getElementById('grabSrcStatus');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      if (st) st.textContent = 'Fetching source images… (older models may take a minute)';
+      try {
+        const body = new URLSearchParams({ csrf: CSRF, force: '1' });
+        const res = await fetch('source_thumbs_backfill.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString()
+        });
+        const d = await res.json();
+        if (d && d.ok) {
+          if (st) st.textContent = 'Done — saved ' + (d.saved || 0) +
+            (d.resolved ? (' (' + d.resolved + ' looked up from source)') : '') +
+            ', skipped ' + (d.skipped || 0) +
+            ((d.failed) ? (', failed ' + d.failed) : '') + '. Reloading…';
+          setTimeout(() => location.reload(), 1200);
+        } else {
+          if (st) st.textContent = 'Failed: ' + ((d && d.error) || 'unknown error');
+          btn.disabled = false;
+        }
+      } catch (e) {
+        if (st) st.textContent = 'Failed: ' + e;
+        btn.disabled = false;
+      }
+    });
+  })();
 
   // ===== Print tracker =====
   let trackCurrent = { src: '', folder: '' };

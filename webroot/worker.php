@@ -262,7 +262,7 @@ while (true) {
     // Claim the next job atomically: select oldest queued, flip to working.
     // Only jobs whose source is configured/ready are eligible — others wait.
     $inHolders = implode(',', array_fill(0, count($readySources), '?'));
-    $claimStmt = $pdo->prepare(
+    $claimStmt = db()->prepare(
         "SELECT * FROM download_jobs
          WHERE status = 'queued' AND source IN ($inHolders)
          ORDER BY id ASC LIMIT 1"
@@ -298,7 +298,15 @@ while (true) {
             12
         );
     };
-    $upd = new class {
+    $jobCoverUrl = (string) ($job['cover_url'] ?? '');
+    $jobSlug     = (string) ($job['source'] ?? '');
+    $upd = new class($jobCoverUrl, $jobSlug) {
+        private string $coverUrl;
+        private string $slug;
+        public function __construct(string $coverUrl, string $slug) {
+            $this->coverUrl = $coverUrl;
+            $this->slug = $slug;
+        }
         public function execute(array $p): void {
             db_exec_retry(
                 "UPDATE download_jobs
@@ -314,11 +322,34 @@ while (true) {
                 ],
                 12
             );
+            // On successful completion, save the source cover as source.png so
+            // My Library shows the real image instead of a generated render —
+            // when the source has source-thumbnails enabled and we captured a
+            // cover URL at enqueue. Best-effort: never blocks or fails the job.
+            if (($p[':st'] ?? '') === 'done'
+                && $this->coverUrl !== ''
+                && $this->slug !== ''
+                && function_exists('source_thumbs_on')
+                && source_thumbs_on($this->slug)) {
+                $path = (string) ($p[':path'] ?? '');
+                // saved_path may be the model dir or a file inside it; resolve to dir.
+                $dir = is_dir($path) ? $path : dirname($path);
+                if ($dir !== '' && is_dir($dir)) {
+                    @save_source_thumb($dir, $this->coverUrl);
+                }
+            }
         }
     };
 
     // Mark working.
     db_exec_retry("UPDATE download_jobs SET status='working', updated_at=datetime('now') WHERE id = :id", [':id' => $jobId]);
+
+    // Release the DB connection for the duration of the download. Downloads can
+    // take many seconds; holding the SQLite handle open the whole time would
+    // block the UI's writes. Status writes below go through db_exec_retry(),
+    // which reconnects on demand — so the DB is only held for the brief writes,
+    // never across the network download itself.
+    db_disconnect();
 
     logln("Job #$jobId  model=$modelId  type=$fileTy  ($slug)");
 
@@ -1082,6 +1113,14 @@ logln('Worker exit.');
 // ---- helpers --------------------------------------------------------------
 function pace(?int $delay = null): void
 {
+    // Release the DB connection for the entire wait. The worker does no DB work
+    // while pacing (status heartbeats go to a JSON file, not the DB), so holding
+    // the SQLite handle open here would needlessly block the UI's writes
+    // (enqueue, printer saves) for the full delay. db() transparently reconnects
+    // on the next status write. This is the core fix for "database error while
+    // queueing" / hung "queueing…" while a download is in progress.
+    db_disconnect();
+
     $delay = $delay ?? DOWNLOAD_DELAY_SECONDS;
     // Randomize the wait around the configured delay (±10s) so the cadence
     // isn't a detectable fixed interval. e.g. a 55s setting waits 45–65s.

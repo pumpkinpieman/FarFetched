@@ -47,7 +47,7 @@ try {
         $cur = $row->fetchColumn();
         if ($cur === false) pa_fail('Printer not found.');
         $new = $cur ? 0 : 1;
-        $db->prepare('UPDATE printers SET enabled = :e WHERE id = :id')->execute([':e' => $new, ':id' => $id]);
+        db_exec_retry('UPDATE printers SET enabled = :e WHERE id = :id', [':e' => $new, ':id' => $id], 8);
         pa_out(['ok' => true, 'enabled' => (bool) $new]);
 
     } elseif ($action === 'add_from_catalog') {
@@ -58,12 +58,13 @@ try {
             if (strcasecmp($p['name'], $name) === 0) { $cat = $p; break; }
         }
         if ($cat === null) pa_fail('Not in catalog.');
-        $stmt = $db->prepare(
+        db_exec_retry(
             'INSERT INTO printers (name, nickname, brand, bed_x, bed_y, bed_z, enabled, is_custom)
-             VALUES (:n, :nk, :b, :x, :y, :z, 1, 0)'
+             VALUES (:n, :nk, :b, :x, :y, :z, 1, 0)',
+            [':n' => $cat['name'], ':nk' => $nickname, ':b' => $cat['brand'],
+             ':x' => $cat['x'], ':y' => $cat['y'], ':z' => $cat['z']],
+            8
         );
-        $stmt->execute([':n' => $cat['name'], ':nk' => $nickname, ':b' => $cat['brand'],
-                        ':x' => $cat['x'], ':y' => $cat['y'], ':z' => $cat['z']]);
         pa_out(['ok' => true, 'id' => (int) $db->lastInsertId()]);
 
     } elseif ($action === 'add_custom') {
@@ -72,22 +73,23 @@ try {
         $x = (int) ($in['x'] ?? 0); $y = (int) ($in['y'] ?? 0); $z = (int) ($in['z'] ?? 0);
         $brand = trim((string) ($in['brand'] ?? 'Custom'));
         if ($name === '' || $x <= 0 || $y <= 0 || $z <= 0) pa_fail('Name and positive X/Y/Z required.');
-        $stmt = $db->prepare(
+        db_exec_retry(
             'INSERT INTO printers (name, nickname, brand, bed_x, bed_y, bed_z, enabled, is_custom)
-             VALUES (:n, :nk, :b, :x, :y, :z, 1, 1)'
+             VALUES (:n, :nk, :b, :x, :y, :z, 1, 1)',
+            [':n' => $name, ':nk' => $nickname, ':b' => $brand, ':x' => $x, ':y' => $y, ':z' => $z],
+            8
         );
-        $stmt->execute([':n' => $name, ':nk' => $nickname, ':b' => $brand, ':x' => $x, ':y' => $y, ':z' => $z]);
         pa_out(['ok' => true, 'id' => (int) $db->lastInsertId()]);
 
     } elseif ($action === 'rename') {
         $id = (int) ($in['id'] ?? 0);
         $nickname = trim((string) ($in['nickname'] ?? ''));
-        $db->prepare('UPDATE printers SET nickname = :nk WHERE id = :id')->execute([':nk' => $nickname, ':id' => $id]);
+        db_exec_retry('UPDATE printers SET nickname = :nk WHERE id = :id', [':nk' => $nickname, ':id' => $id], 8);
         pa_out(['ok' => true]);
 
     } elseif ($action === 'remove') {
         $id = (int) ($in['id'] ?? 0);
-        $db->prepare('DELETE FROM printers WHERE id = :id')->execute([':id' => $id]);
+        db_exec_retry('DELETE FROM printers WHERE id = :id', [':id' => $id], 8);
         pa_out(['ok' => true]);
 
     } else {

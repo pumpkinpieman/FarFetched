@@ -2047,13 +2047,23 @@ function db_write_unlock($fh): void
     if (is_resource($fh)) { @flock($fh, LOCK_UN); @fclose($fh); }
 }
 
+/**
+ * Release the shared PDO connection so SQLite's file handle is closed. The
+ * worker calls this during downloads and pacing sleeps so it never holds the
+ * database open across long operations — which is what blocks the UI (enqueue,
+ * printer saves) from writing. The next db() call transparently reconnects.
+ */
+function db_disconnect(): void
+{
+    $GLOBALS['__ff_pdo'] = null;
+}
+
 function db(): PDO
 {
-    static $pdo = null;
-    if ($pdo instanceof PDO) {
-        return $pdo;
+    if (isset($GLOBALS['__ff_pdo']) && $GLOBALS['__ff_pdo'] instanceof PDO) {
+        return $GLOBALS['__ff_pdo'];
     }
-
+    $GLOBALS['__ff_pdo'] = null;
     $fresh = !is_file(DB_PATH);
 
     $pdo = new PDO('sqlite:' . DB_PATH, null, null, [
@@ -2168,6 +2178,7 @@ function db(): PDO
             db_write_unlock($lk);
         }
     }
+    $GLOBALS['__ff_pdo'] = $pdo;
     return $pdo;
 }
 
@@ -2181,30 +2192,33 @@ function db(): PDO
 function db_exec_retry(string $sql, array $params = [], int $tries = 5): \PDOStatement
 {
     $pdo = db();
-    // Serialize this write against other processes via the tmpfs mutex, so
-    // concurrent writers queue instead of colliding at the (possibly FUSE) DB
-    // layer. The lock is held only for the single execute, then released.
-    $lock = db_write_lock();
-    try {
-        for ($attempt = 1; ; $attempt++) {
-            try {
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute($params);
-                return $stmt;
-            } catch (\PDOException $e) {
-                $locked = stripos($e->getMessage(), 'locked') !== false
-                       || stripos($e->getMessage(), 'busy') !== false;
-                if (!$locked || $attempt >= $tries) {
-                    throw $e;
-                }
-                if (function_exists('logln')) {
-                    logln('  DB locked, retrying write (' . $attempt . '/' . $tries . ')…');
-                }
-                usleep(500000 * $attempt); // 0.5s, 1s, 1.5s… backoff
+    // Serialize writers via the tmpfs mutex. Each attempt acquires the lock,
+    // does ONE execute, and releases — we never sleep while holding the lock
+    // (that would block every other writer, including the UI enqueue, for the
+    // whole backoff and manifest as a hung "queueing…" request). The mutex makes
+    // contention rare; busy_timeout (30s) absorbs any brief residual wait inside
+    // the execute itself. On the rare lock error we release, back off, then
+    // re-acquire fresh so other writers get a turn between our attempts.
+    for ($attempt = 1; ; $attempt++) {
+        $lock = db_write_lock();
+        try {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt;
+        } catch (\PDOException $e) {
+            $locked = stripos($e->getMessage(), 'locked') !== false
+                   || stripos($e->getMessage(), 'busy') !== false;
+            if (!$locked || $attempt >= $tries) {
+                throw $e;
             }
+            if (function_exists('logln')) {
+                logln('  DB locked, retrying write (' . $attempt . '/' . $tries . ')…');
+            }
+        } finally {
+            db_write_unlock($lock); // ALWAYS release before sleeping/returning
         }
-    } finally {
-        db_write_unlock($lock);
+        // Backoff happens with the lock RELEASED so other writers can proceed.
+        usleep(300000 * $attempt + random_int(0, 100000));
     }
 }
 
