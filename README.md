@@ -6,6 +6,8 @@ FarFetched browses, searches, and downloads models from **Printables, MakerWorld
 
 Built by [BTCB Design](https://www.btcbdesign.com).
 
+![FarFetched — browse models from multiple sources](docs/screenshots/BrowseCategories.png)
+
 ---
 
 ## ⚠️ Download Delay Warnings
@@ -46,6 +48,54 @@ Bulk-downloading from model sites either means clicking one file at a time forev
 - **Six visual themes** — Dark, Light, Midnight, Forest, Nord, and Mono, switchable from any page.
 - **Optional password lock** — protect your instance with a single bcrypt-hashed password if it's reachable beyond your LAN.
 - **Insights dashboard** — at-a-glance stats on your library: counts per source, recent activity, and download trends.
+
+---
+
+## Screenshots
+
+### Your library, your way
+
+| My Library | 3D Viewer |
+|:----------:|:---------:|
+| ![My Library](docs/screenshots/MyLibrary.png) | ![3D Viewer](docs/screenshots/3DModelViewer.png) |
+
+A clean, searchable library of everything you've downloaded — with a built-in STL/3MF viewer that shows your model sitting on a printer bed.
+
+### Organize & track
+
+| Collections | Favorites |
+|:-----------:|:---------:|
+| ![Collections](docs/screenshots/Collections.png) | ![Favorites](docs/screenshots/Favorites.png) |
+
+| Library Insights | Local Custom Folders |
+|:----------------:|:--------------------:|
+| ![Insights](docs/screenshots/LibraryInsights.png) | ![Local Folders](docs/screenshots/LocalCustomFolders.png) |
+
+Group models into collections, star your favorites, track library stats, and index folders you already have on disk — no copying required.
+
+### Printer management & OctoPrint
+
+| My Printers | OctoPrint Integration |
+|:-----------:|:---------------------:|
+| ![My Printers](docs/screenshots/MyPrinters.png) | ![OctoPrint](docs/screenshots/OctoPrint.png) |
+
+Manage your printers with real bed dimensions, and connect each one to its own OctoPrint instance for status, file upload, and print control.
+
+### Download pipeline
+
+| Download Queue | Worker Pacing |
+|:--------------:|:-------------:|
+| ![Queue](docs/screenshots/DownloadQueue.png) | ![Worker](docs/screenshots/WorkerPacing.png) |
+
+Queue everything at once; a patient background worker pulls it down one file at a time at a polite, configurable pace.
+
+### Configurable & secure
+
+| Source Settings | Security |
+|:---------------:|:--------:|
+| ![Sources](docs/screenshots/SourceSettings.png) | ![Security](docs/screenshots/Security.png) |
+
+Per-source settings and pacing, with an optional password lock for instances reachable beyond your LAN.
 
 ---
 
