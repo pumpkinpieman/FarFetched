@@ -544,15 +544,44 @@ while (true) {
             $total  = count($files);
             $okCount = 0;
             logln('  Thingiverse: downloading ' . $total . ' file(s) for this model.');
+            $baseDelay = 3;          // seconds between files (Thingiverse throttles)
+            $rateLimited = false;
             foreach ($files as $i => $f) {
                 $fname = safe_segment($f['name']);
                 $dest  = $destDir . '/' . $fname;
                 if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $okCount++; continue; }
-                $ok = $tv->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
+
+                // Attempt with 429-aware backoff: on HTTP 429 (Too Many Requests),
+                // pause progressively and retry the SAME file before giving up.
+                $ok = false;
+                $backoffs = [30, 60, 120]; // seconds
+                $attempt = 0;
+                while (true) {
+                    $ok = $tv->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
+                    if ($ok) break;
+                    $is429 = (strpos($tv->lastError, '429') !== false);
+                    if ($is429 && $attempt < count($backoffs)) {
+                        $wait = $backoffs[$attempt];
+                        $attempt++;
+                        logln("  Rate limited (429) — backing off {$wait}s then retrying: $fname");
+                        write_worker_status(['state' => 'rate-limited', 'detail' => "429 backoff {$wait}s", 'job' => $jobId]);
+                        @db_disconnect();
+                        sleep($wait);
+                        continue;
+                    }
+                    break; // non-429 failure, or retries exhausted
+                }
+
                 if ($ok) { logln('  Saved (' . ($i + 1) . '/' . $total . '): ' . $fname); $okCount++; }
-                else { logln('  Failed: ' . $fname . ' — ' . $tv->lastError); }
-                // Light delay between files of the SAME model (not full pacing).
-                if ($i < $total - 1) { sleep(2); }
+                else {
+                    logln('  Failed: ' . $fname . ' — ' . $tv->lastError);
+                    if (strpos($tv->lastError, '429') !== false) { $rateLimited = true; }
+                }
+                // Delay between files of the SAME model (full pacing is between models).
+                if ($i < $total - 1) { sleep($baseDelay); }
+            }
+            if ($rateLimited) {
+                logerr('warn', '  Thingiverse rate-limited this model; some files may be missing. Re-queue later to fill gaps.');
             }
 
             if ($okCount === 0) {
