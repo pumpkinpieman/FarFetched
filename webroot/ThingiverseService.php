@@ -25,6 +25,8 @@ final class ThingiverseService
     private const CDN = 'cdn.thingiverse.com';
 
     public string $lastError     = '';
+    public int $lastStatus       = 0;
+    public int $lastRetryAfter   = 0; // seconds from a 429 Retry-After header, if any
     public int    $lastTotal     = 0;
 
     private string $token;
@@ -85,6 +87,40 @@ final class ThingiverseService
         }
 
         return $this->normalize($results, $showNsfw);
+    }
+
+    /**
+     * List a user's designs by username: GET /users/{username}/things.
+     * Real author search (not a keyword match on the name). Paged.
+     * @return array<int,array<string,mixed>>
+     */
+    public function searchByAuthor(string $username, int $limit = 20, int $page = 1, bool $showNsfw = false): array
+    {
+        $this->lastError = '';
+        $this->lastTotal = 0;
+        if (!$this->isAuthed()) {
+            $this->lastError = 'Thingiverse token not set.';
+            return [];
+        }
+        $username = trim($username);
+        if ($username === '') { return []; }
+
+        $params = [
+            'per_page' => max(1, min(30, $limit)),
+            'page'     => max(1, $page),
+        ];
+        $url  = self::API . '/users/' . rawurlencode($username) . '/things?' . http_build_query($params);
+        $json = $this->apiGet($url);
+        if ($json === null) {
+            if ($this->lastError === '') { $this->lastError = 'Thingiverse user not found: ' . $username; }
+            return [];
+        }
+        $items = is_array($json) && isset($json[0]) ? $json : ($json['results'] ?? $json ?? []);
+        if (!is_array($items)) {
+            $this->lastError = 'Unexpected author response from Thingiverse.';
+            return [];
+        }
+        return $this->normalize($items, $showNsfw);
     }
 
     /**
@@ -244,6 +280,9 @@ final class ThingiverseService
     public function downloadToFile(string $url, string $destPath, ?callable $onProgress = null): bool
     {
         $this->lastError = '';
+        $this->lastStatus = 0;
+        $this->lastRetryAfter = 0;
+        $retryAfter = 0;
         $dir = dirname($destPath);
         if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
             $this->lastError = 'Cannot create destination dir: ' . $dir;
@@ -257,7 +296,7 @@ final class ThingiverseService
         // in the query signature. Sending our Bearer header through that redirect
         // can cause a 401 (competing auth). So download with just a User-Agent;
         // if the *unredirected* URL actually needed auth, we retry with it below.
-        $buildCh = function (string $u, bool $withAuth) use ($fh, $onProgress) {
+        $buildCh = function (string $u, bool $withAuth) use ($fh, $onProgress, &$retryAfter) {
             $ch = curl_init($u);
             $headers = ['User-Agent: ' . self::UA, 'Accept: */*'];
             if ($withAuth) { $headers[] = 'Authorization: Bearer ' . $this->token; }
@@ -269,6 +308,19 @@ final class ThingiverseService
                 CURLOPT_CONNECTTIMEOUT => 20,
                 CURLOPT_FAILONERROR    => true,
                 CURLOPT_HTTPHEADER     => $headers,
+                CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$retryAfter) {
+                    if (stripos($line, 'Retry-After:') === 0) {
+                        $v = trim(substr($line, strlen('Retry-After:')));
+                        if (is_numeric($v)) {
+                            $retryAfter = (int) $v;
+                        } else {
+                            // HTTP-date form: convert to a delta in seconds.
+                            $ts = strtotime($v);
+                            if ($ts !== false) { $retryAfter = max(0, $ts - time()); }
+                        }
+                    }
+                    return strlen($line);
+                },
             ]);
             if ($onProgress !== null) {
                 curl_setopt($ch, CURLOPT_NOPROGRESS, false);
@@ -297,6 +349,9 @@ final class ThingiverseService
             curl_close($ch2);
         }
         fclose($fh);
+
+        $this->lastStatus = $status;
+        $this->lastRetryAfter = $retryAfter;
 
         if ($ok === false || $status >= 400) {
             @unlink($tmp);

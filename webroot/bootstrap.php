@@ -1539,6 +1539,7 @@ function cfg_defaults(): array
         'thingiverse_client_sec'     => '',
         'thingiverse_download_dir'   => '',
         'thingiverse_delay'          => 60,
+        'thingiverse_file_delay'     => 6,
         'cults3d_username'           => (string) (getenv('FETCHER_CULTS3D_USERNAME') ?: ''),
         'cults3d_token'              => (string) (getenv('FETCHER_CULTS3D_TOKEN') ?: ''),
         'cults3d_session'            => '',
@@ -1664,6 +1665,9 @@ function cfg_save(array $patch): bool
     }
     if (isset($patch['thingiverse_delay'])) {
         $current['thingiverse_delay'] = max(30, min(3600, (int) $patch['thingiverse_delay']));
+    }
+    if (isset($patch['thingiverse_file_delay'])) {
+        $current['thingiverse_file_delay'] = max(2, min(60, (int) $patch['thingiverse_file_delay']));
     }
     if (array_key_exists('cults3d_username', $patch)) {
         $current['cults3d_username'] = trim((string) $patch['cults3d_username']);

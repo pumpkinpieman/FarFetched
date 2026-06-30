@@ -25,6 +25,7 @@ require_once __DIR__ . '/Hex3DForumService.php';
 header('Content-Type: application/json');
 
 $q      = trim((string) ($_GET['q'] ?? ''));
+$author = trim((string) ($_GET['author'] ?? ''));
 $offset = max(0, (int) ($_GET['offset'] ?? 0));
 $page   = max(1, (int) ($offset / 20) + 1);
 $paid   = (string) ($_GET['paid'] ?? 'all');
@@ -38,6 +39,7 @@ $mwCat    = preg_replace('/[^0-9]/', '', (string) ($_GET['mwcat'] ?? '')) ?? '';
 $mwBrowse = ($_GET['browse'] ?? '') === '1';
 
 $allowEmptyQ = ($source === 'makerworld' && ($mwBrowse || $mwCat !== ''))
+    || ($author !== '')
     || $source === 'thingiverse'
     || $source === 'cults3d'
     || $source === 'stlflix'
@@ -54,7 +56,14 @@ if ($q === '' && !$allowEmptyQ) {
 if ($source === 'makerworld') {
     $mw     = new MakerWorldService();
     $limit  = 20;
-    $models = $mw->searchByKeyword($q, $limit, $offset, $showNsfw, $mwCat);
+    // Real author search when the card handed us a numeric MakerWorld creator id
+    // (designCreator.uid). A bare name (e.g. from a library link) can't resolve to
+    // a uid via MakerWorld's API, so fall back to a keyword search on the name.
+    if ($author !== '' && ctype_digit($author)) {
+        $models = $mw->searchByAuthor($author, $limit, $offset, $showNsfw);
+    } else {
+        $models = $mw->searchByKeyword(($author !== '' ? $author : $q), $limit, $offset, $showNsfw, $mwCat);
+    }
     if ($mw->lastError !== '') { echo json_encode(['ok' => false, 'error' => $mw->lastError]); exit; }
     $total       = $mw->lastTotalCount;
     $gotFullPage = ($mw->lastPageHitCount >= $limit);
@@ -69,7 +78,11 @@ if ($source === 'thingiverse') {
     $tv     = new ThingiverseService();
     $tvCat  = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($_GET['tvcat'] ?? ''))) ?: null;
     $limit  = 20;
-    $models = $tv->search($q, $limit, $page, $showNsfw, $tvCat);
+    if ($author !== '') {
+        $models = $tv->searchByAuthor($author, $limit, $page, $showNsfw);
+    } else {
+        $models = $tv->search($q, $limit, $page, $showNsfw, $tvCat);
+    }
     if ($tv->lastError !== '') { echo json_encode(['ok' => false, 'error' => $tv->lastError]); exit; }
     $total      = $tv->lastTotal;
     $nextOffset = (count($models) >= $limit) ? $offset + $limit : null;
@@ -208,7 +221,9 @@ if (!$svc->isAuthed()) {
     exit;
 }
 $limit      = 36;
-$models     = $svc->searchByKeyword($q, $limit, $offset, $paid);
+$models     = ($author !== '')
+    ? $svc->searchByAuthor($author, $limit, $offset)
+    : $svc->searchByKeyword($q, $limit, $offset, $paid);
 if ($svc->lastError !== '') { echo json_encode(['ok' => false, 'error' => $svc->lastError]); exit; }
 $total      = $svc->lastTotalCount;
 $nextOffset = (count($models) === $limit && ($offset + $limit) < $total) ? $offset + $limit : null;

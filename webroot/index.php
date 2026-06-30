@@ -918,6 +918,7 @@ $csrf = csrf_token();
       ? 'search_more.php?q=' + encodeURIComponent(searchQuery) +
         '&offset=' + encodeURIComponent(searchNext) + '&paid=all' +
         '&src=' + encodeURIComponent(SOURCE) + '&nsfw=' + showNsfw() +
+        (window._authorMode ? '&author=' + encodeURIComponent(window._authorMode) : '') +
         (SOURCE === 'makerworld' && mwCatActive ? '&mwcat=' + encodeURIComponent(mwCatActive) : '') +
         (SOURCE === 'makerworld' && searchQuery === '' ? '&browse=1' : '') +
         (SOURCE === 'thingiverse' && (window._tvCatActive ?? TV_CAT) !== '' ? '&tvcat=' + encodeURIComponent(window._tvCatActive ?? TV_CAT) : '') +
@@ -1027,16 +1028,36 @@ $csrf = csrf_token();
     ev.preventDefault();
     const author = a.dataset.author || a.textContent || '';
     if (!author) return;
+    // Printables & Thingiverse support real author search; others fall back to a
+    // keyword search on the name.
+    const realAuthor = (SOURCE === 'printables' || SOURCE === 'thingiverse');
+    window._authorMode = realAuthor ? author : '';
     if (searchInput) {
-      searchInput.value = author;
-      runSearch();
+      searchInput.value = realAuthor ? '' : author;
+      searchQuery = realAuthor ? '' : author;
+      runAuthorOrSearch(author, realAuthor);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   });
 
+  // Run a search in author mode (real) or keyword mode (fallback).
+  function runAuthorOrSearch(author, realAuthor) {
+    mwCatActive = '';
+    mode = 'search';
+    searchQuery = realAuthor ? '' : author;
+    searchNext = 0;
+    nextCursor = null;
+    grid.innerHTML = '';
+    if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (pageTitle) pageTitle.textContent = (realAuthor ? 'Models by ' : 'Search: ') + author;
+    if (searchClear) searchClear.style.display = 'inline-block';
+    refresh();
+  }
+
   async function runSearch() {
     const q = (searchInput.value || '').trim();
     if (!q) { clearSearch(); return; }
+    window._authorMode = '';     // a manual keyword search is not an author search
     mwCatActive = '';            // a keyword search clears any category filter
     mode = 'search';
     searchQuery = q;
@@ -1083,8 +1104,10 @@ $csrf = csrf_token();
     const params = new URLSearchParams(window.location.search);
     const author = params.get('author');
     if (author && searchInput) {
-      searchInput.value = author;
-      runSearch();
+      const realAuthor = (SOURCE === 'printables' || SOURCE === 'thingiverse');
+      window._authorMode = realAuthor ? author : '';
+      searchInput.value = realAuthor ? '' : author;
+      runAuthorOrSearch(author, realAuthor);
     }
   })();
   // Re-run the current search when the NSFW filter is toggled.

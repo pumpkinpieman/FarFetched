@@ -544,44 +544,50 @@ while (true) {
             $total  = count($files);
             $okCount = 0;
             logln('  Thingiverse: downloading ' . $total . ' file(s) for this model.');
-            $baseDelay = 3;          // seconds between files (Thingiverse throttles)
+            $baseDelay = (int) (cfg('thingiverse_file_delay') ?: 6); // seconds between files
             $rateLimited = false;
             foreach ($files as $i => $f) {
                 $fname = safe_segment($f['name']);
                 $dest  = $destDir . '/' . $fname;
                 if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $okCount++; continue; }
 
-                // Attempt with 429-aware backoff: on HTTP 429 (Too Many Requests),
-                // pause progressively and retry the SAME file before giving up.
+                // 429-aware download. Prefer the server's Retry-After header for the
+                // wait; otherwise escalate 30/60/120s. Retry the SAME file up to 4x.
                 $ok = false;
-                $backoffs = [30, 60, 120]; // seconds
+                $maxRetries = 4;
+                $fallbacks = [30, 60, 120, 180];
                 $attempt = 0;
                 while (true) {
                     $ok = $tv->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
                     if ($ok) break;
-                    $is429 = (strpos($tv->lastError, '429') !== false);
-                    if ($is429 && $attempt < count($backoffs)) {
-                        $wait = $backoffs[$attempt];
+                    $is429 = ($tv->lastStatus === 429) || (strpos($tv->lastError, '429') !== false);
+                    if ($is429 && $attempt < $maxRetries) {
+                        // Honor Retry-After if the server sent one; clamp to a sane range.
+                        $wait = $tv->lastRetryAfter > 0
+                            ? min(600, max(5, $tv->lastRetryAfter + 2))
+                            : $fallbacks[min($attempt, count($fallbacks) - 1)];
                         $attempt++;
-                        logln("  Rate limited (429) — backing off {$wait}s then retrying: $fname");
-                        write_worker_status(['state' => 'rate-limited', 'detail' => "429 backoff {$wait}s", 'job' => $jobId]);
+                        logln("  Rate limited (429) — waiting {$wait}s (Retry-After" .
+                              ($tv->lastRetryAfter > 0 ? "={$tv->lastRetryAfter}" : "=none") .
+                              "), retry {$attempt}/{$maxRetries}: $fname");
+                        write_worker_status(['state' => 'rate-limited', 'detail' => "429 wait {$wait}s", 'job' => $jobId]);
                         @db_disconnect();
                         sleep($wait);
                         continue;
                     }
-                    break; // non-429 failure, or retries exhausted
+                    break; // non-429, or retries exhausted
                 }
 
                 if ($ok) { logln('  Saved (' . ($i + 1) . '/' . $total . '): ' . $fname); $okCount++; }
                 else {
                     logln('  Failed: ' . $fname . ' — ' . $tv->lastError);
-                    if (strpos($tv->lastError, '429') !== false) { $rateLimited = true; }
+                    if (($tv->lastStatus === 429) || (strpos($tv->lastError, '429') !== false)) { $rateLimited = true; }
                 }
                 // Delay between files of the SAME model (full pacing is between models).
                 if ($i < $total - 1) { sleep($baseDelay); }
             }
             if ($rateLimited) {
-                logerr('warn', '  Thingiverse rate-limited this model; some files may be missing. Re-queue later to fill gaps.');
+                logerr('warn', '  Thingiverse rate-limited this model; some files may be missing. Re-queue later — already-downloaded files are skipped, so it resumes.');
             }
 
             if ($okCount === 0) {

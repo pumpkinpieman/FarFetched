@@ -374,6 +374,177 @@ final class PrintablesService
     }
 
     /**
+     * Search models by AUTHOR (handle/publicUsername) rather than keyword.
+     *
+     * Verified against live Printables captures (2026-06-30):
+     *   - The GraphQL `user(id:)` and `userModels(userId:)` fields BOTH accept the
+     *     handle prefixed with '@' (e.g. "@fixumdude") — NOT the bare username and
+     *     NOT the numeric id. Passing the bare name returns "user not found".
+     *   - `userModels` is cursor-based: { cursor, items { ...Model } }. There is no
+     *     offset arg and no totalCount, so we translate the caller's offset->cursor
+     *     using a per-session cursor map (O(1) on "Load more"), with a bounded
+     *     page-walk fallback to rebuild a missing cursor.
+     *   - `paid: "free"` keeps paywalled/club models out of the queue entirely.
+     *
+     * Returns the same item shape as searchByKeyword(). The offset-based signature
+     * is preserved so search_more.php needs no changes.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function searchByAuthor(string $username, int $limit = 36, int $offset = 0): array
+    {
+        $this->lastError = '';
+        $this->lastTotalCount = 0;
+
+        $username = ltrim(trim($username), '@');
+        if (!$this->isAuthed()) { $this->lastError = 'No Printables token — set one in Settings.'; return []; }
+        if ($username === '') { return []; }
+
+        $limit  = max(1, min($limit, 100));
+        $offset = max(0, $offset);
+        $handle = '@' . $username;                 // userModels(userId:) wants the @-handle
+
+        // ---- offset -> cursor translation -------------------------------------
+        // Cursor map lives in the session, keyed by handle, mapping an absolute
+        // offset to the cursor that *starts* that page. Offset 0 always starts at
+        // null. On "Load more", the prior request stored the next page's cursor so
+        // this is a single GraphQL call; if the session was lost we walk forward
+        // from the nearest known cursor (bounded) to rebuild it.
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            @session_start();
+        }
+        $mapKey = 'pt_author_cursor';
+        if (!isset($_SESSION[$mapKey]) || !is_array($_SESSION[$mapKey])) {
+            $_SESSION[$mapKey] = [];
+        }
+        if (!isset($_SESSION[$mapKey][$handle]) || !is_array($_SESSION[$mapKey][$handle])) {
+            $_SESSION[$mapKey][$handle] = [0 => null];
+        }
+        $cmap = &$_SESSION[$mapKey][$handle];
+
+        // Find the closest known offset <= requested offset to resume from.
+        $startOffset = 0;
+        foreach (array_keys($cmap) as $known) {
+            if ($known <= $offset && $known >= $startOffset) {
+                $startOffset = $known;
+            }
+        }
+        $cursor = $cmap[$startOffset];
+
+        // Walk forward (bounded) until we reach the requested offset's page.
+        $page = null;
+        $walkGuard = 0;
+        for ($pos = $startOffset; $pos <= $offset; $pos += $limit) {
+            if (++$walkGuard > 60) {                // hard safety cap (~2160 models)
+                $this->lastError = 'Author paging walk exceeded safe bound.';
+                return [];
+            }
+            $page = $this->fetchUserModelsPage($handle, $limit, $cursor);
+            if ($page === null) {
+                // fetchUserModelsPage sets lastError; bail.
+                return [];
+            }
+            $nextCursor = $page['cursor'];
+            $cmap[$pos + $limit] = $nextCursor;     // remember where the NEXT page starts
+            $cursor = $nextCursor;
+
+            if ($pos < $offset && $nextCursor === null) {
+                // Ran out of pages before reaching the requested offset.
+                return [];
+            }
+            if ($pos < $offset) {
+                // Light pacing only while walking intermediate pages to avoid 429.
+                usleep(150000);
+            }
+        }
+
+        if ($page === null) { return []; }
+        $items = $page['items'];
+
+        // lastTotalCount drives search_more.php's "is there a next page?" check.
+        // userModels gives no total, so synthesize: if a forward cursor exists, the
+        // total is at least (offset + count + 1) so nextOffset advances; otherwise
+        // it equals (offset + count) so paging stops.
+        $count   = count($items);
+        $hasMore = ($page['cursor'] !== null) && ($count >= $limit);
+        $this->lastTotalCount = $offset + $count + ($hasMore ? $limit : 0);
+
+        return $items;
+    }
+
+    /**
+     * Fetch a single page of a user's free models via the verified userModels
+     * query. Returns ['cursor'=>?string, 'items'=>array<int,array>] or null on
+     * error (with $this->lastError set). Item shape matches searchByKeyword().
+     *
+     * @return array{cursor:?string, items:array<int,array<string,mixed>>}|null
+     */
+    private function fetchUserModelsPage(string $handle, int $limit, ?string $cursor): ?array
+    {
+        $query = 'query UserModels($id: ID!, $paid: PaidEnum, $limit: Int!, $cursor: String, $ordering: String, $search: String) {
+          userModels(userId: $id, paid: $paid, limit: $limit, cursor: $cursor, ordering: $ordering, query: $search) {
+            cursor
+            items {
+              id
+              name
+              slug
+              downloadCount
+              price
+              club: premium
+              image { filePath }
+              user { publicUsername handle }
+            }
+          }
+        }';
+        $vars = [
+            'id'       => $handle,        // '@handle' — verified accepted by userModels
+            'paid'     => 'free',         // PaidEnum — exclude paywalled/club models
+            'limit'    => $limit,
+            'cursor'   => $cursor,
+            'ordering' => '-first_publish',
+            'search'   => null,
+        ];
+
+        $data = $this->gql($query, $vars);
+        if ($data === null) {
+            if ($this->lastError === '') {
+                $this->lastError = 'Could not list this author\'s models.';
+            }
+            return null;
+        }
+
+        $node = $data['userModels'] ?? null;
+        if (!is_array($node) || !isset($node['items']) || !is_array($node['items'])) {
+            $this->lastError = 'Unexpected author-search response — verify userModels fields.';
+            return null;
+        }
+
+        $items = array_map(static function (array $it): array {
+            $thumb = $it['image']['filePath'] ?? '';
+            if ($thumb !== '' && !preg_match('#^https?://#', $thumb)) {
+                $thumb = 'https://media.printables.com/' . ltrim($thumb, '/');
+            }
+            $creator = (string) ($it['user']['publicUsername'] ?? ($it['user']['handle'] ?? 'unknown'));
+            return [
+                'id'      => (string) ($it['id'] ?? ''),
+                'slug'    => (string) ($it['slug'] ?? ''),
+                'name'    => (string) ($it['name'] ?? 'Untitled'),
+                'creator' => $creator,
+                'thumb'   => (string) $thumb,
+                'images'  => [$thumb],
+                'size'    => 0,                       // userModels carries no file sizes
+                'price'   => (float) ($it['price'] ?? 0),
+                'club'    => (bool) ($it['club'] ?? false),
+            ];
+        }, $node['items']);
+
+        return [
+            'cursor' => isset($node['cursor']) ? (string) $node['cursor'] : null,
+            'items'  => $items,
+        ];
+    }
+
+    /**
      * Resolve the downloadable files on a model, filtered to a type (STL/3MF).
      * [S4] verify the model-detail query + file field names + enum values.
      *

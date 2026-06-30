@@ -101,6 +101,76 @@ final class MakerWorldService
         // `total` (MakerWorld's popular/All-Models feed often returns total=0).
         $this->lastPageHitCount = count($hits);
 
+        return $this->normalizeHits($hits, $showNsfw);
+    }
+
+    /**
+     * Search a creator's PUBLISHED models by their MakerWorld numeric uid.
+     *
+     * Verified against live captures (2026-06-30):
+     *   GET /api/v1/design-service/published/{uid}/design?limit=&offset=
+     *   -> { total:int, hits:[ <same hit schema as keyword search> ] }
+     * The uid in the PATH is the filter; the site also tacks on ?handle=@name but
+     * that is cosmetic (hits carry an empty designCreator.handle), so we omit it.
+     * Offset-based with a real `total`, so it drives the same pagination as
+     * searchByKeyword(). Each normalized hit carries designCreator.uid as
+     * `creator_id`, which is exactly what the "More by author" button passes here.
+     *
+     * NOTE: $uid must be the numeric creator id. MakerWorld's API blanks the
+     * handle field, so there is no reliable name/handle -> uid path; callers that
+     * only have a display name should fall back to a keyword search instead.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function searchByAuthor(string $uid, int $limit = 20, int $offset = 0, bool $showNsfw = false): array
+    {
+        $this->lastError        = '';
+        $this->lastTotalCount   = 0;
+        $this->lastPageHitCount = 0;
+
+        $uid = trim($uid);
+        if ($uid === '' || !ctype_digit($uid)) {
+            $this->lastError = 'MakerWorld author search needs a numeric creator id.';
+            return [];
+        }
+
+        $params = [
+            'limit'  => max(1, $limit),
+            'offset' => max(0, $offset),
+            'ref_'   => 'def_MWUserDetail_Uploads',
+        ];
+        $url  = self::API . '/design-service/published/' . $uid . '/design?' . http_build_query($params);
+        $json = $this->apiGet($url);
+        if ($json === null) {
+            // lastError already set by apiGet
+            return [];
+        }
+
+        $this->lastTotalCount = (int) ($json['total'] ?? 0);
+        $hits = $json['hits'] ?? null;
+        if (!is_array($hits)) {
+            $this->lastError = 'Unexpected author response (no hits array).';
+            return [];
+        }
+        $this->lastPageHitCount = count($hits);
+
+        return $this->normalizeHits($hits, $showNsfw);
+    }
+
+    /**
+     * Normalize a list of MakerWorld design hits into the shared model-row shape
+     * used across the app. Shared by searchByKeyword() and searchByAuthor() so
+     * both produce byte-identical rows. NSFW hits are dropped unless $showNsfw.
+     *
+     * Row shape:
+     *   ['id','slug','name','creator','creator_id','thumb','images','size',
+     *    'nsfw','source'=>'makerworld']
+     *
+     * @param array<int,mixed> $hits
+     * @return array<int,array<string,mixed>>
+     */
+    private function normalizeHits(array $hits, bool $showNsfw): array
+    {
         $out = [];
         foreach ($hits as $hit) {
             if (!is_array($hit)) {
@@ -111,9 +181,15 @@ final class MakerWorldService
                 continue; // hide adult content unless explicitly allowed
             }
 
-            $creator = '';
+            $creator   = '';
+            $creatorId = '';
             if (isset($hit['designCreator']) && is_array($hit['designCreator'])) {
-                $creator = (string) ($hit['designCreator']['name'] ?? $hit['designCreator']['handle'] ?? '');
+                $creator   = (string) ($hit['designCreator']['name'] ?? $hit['designCreator']['handle'] ?? '');
+                $rawUid    = $hit['designCreator']['uid'] ?? '';
+                $creatorId = is_scalar($rawUid) ? (string) $rawUid : '';
+                if ($creatorId === '0') {
+                    $creatorId = '';
+                }
             }
 
             $size = 0;
@@ -152,15 +228,16 @@ final class MakerWorldService
             }
 
             $out[] = [
-                'id'      => (string) ($hit['id'] ?? ''),
-                'slug'    => (string) ($hit['slug'] ?? ''),
-                'name'    => (string) ($hit['title'] ?? ''),
-                'creator' => $creator,
-                'thumb'   => $thumb,
-                'images'  => $images,
-                'size'    => $size,
-                'nsfw'    => $nsfw,
-                'source'  => 'makerworld',
+                'id'         => (string) ($hit['id'] ?? ''),
+                'slug'       => (string) ($hit['slug'] ?? ''),
+                'name'       => (string) ($hit['title'] ?? ''),
+                'creator'    => $creator,
+                'creator_id' => $creatorId,
+                'thumb'      => $thumb,
+                'images'     => $images,
+                'size'       => $size,
+                'nsfw'       => $nsfw,
+                'source'     => 'makerworld',
             ];
         }
         return $out;
