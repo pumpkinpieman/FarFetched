@@ -187,6 +187,12 @@ This is the single most common point of confusion: entering a host path the cont
 
 3. **Register** in the app: **Settings → Custom → Browse…**, navigate into `/custom`, pick a folder, and **Add Folder**. Its models now show in My Library.
 
+4. ***OpenScad*** installation - This runs after the container starts, checks if OpenSCADis is missing, installs it if so. Survives recreate (the script persists in Unraid, not the container). ~1-2 min install on first boot after a recreate, instant otherwise.
+
+#!/bin/bash
+# Unraid User Scripts plugin → run "At Startup of Array" or on a schedule
+docker exec FarFetched sh -c 'command -v openscad >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends openscad xvfb xauth && rm -rf /var/lib/apt/lists/*)'
+
 ### Thumbnails
 
 Custom folders use an **existing preview image** in each model subfolder (`thumb.png`, `preview.jpg`, `cover.*`, or the first image found) — they are not rendered from the STL. Subfolders without any image show a "no preview" placeholder.

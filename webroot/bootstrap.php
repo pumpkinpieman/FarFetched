@@ -1335,6 +1335,34 @@ function custom_move_to_processed(string $root, string $zipPath, array &$summary
  * If a zip's entries all live under a single top-level folder, return that
  * folder name; otherwise null (the zip is "flat" or has multiple roots).
  */
+/**
+ * Bundle the files directly inside $dir into a single zip at $zipPath. Skips the
+ * zip file itself and any .farfetched metadata dir. Flat archive (no wrapping
+ * folder). Returns true on success. Best-effort: never throws.
+ */
+function zip_dir_contents(string $dir, string $zipPath): bool
+{
+    if (!is_dir($dir)) return false;
+    $za = new ZipArchive();
+    if ($za->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) return false;
+    $zipReal = @realpath($zipPath);
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::LEAVES_ONLY
+    );
+    foreach ($it as $file) {
+        if (!$file->isFile()) continue;
+        $path = $file->getPathname();
+        // Don't include the zip we're writing, or internal metadata.
+        if ($zipReal !== false && @realpath($path) === $zipReal) continue;
+        if (strpos(str_replace('\\', '/', $path), '/.farfetched/') !== false) continue;
+        $rel = ltrim(substr($path, strlen($dir)), '/\\');
+        if ($rel === '') continue;
+        $za->addFile($path, $rel);
+    }
+    return $za->close();
+}
+
 function zip_single_root_dir(string $zipPath): ?string
 {
     if (!is_file($zipPath)) return null;
@@ -1877,6 +1905,57 @@ function hex3dforum_configured(): bool
     return trim((string) cfg('hex3dforum_cookie')) !== '';
 }
 
+/**
+ * Parse a model page URL from any supported source into its source slug and
+ * model id. Returns ['source'=>slug, 'model_id'=>id, 'slug'=>urlSlug] or null
+ * if the URL doesn't match a known source. Used by CSV/bulk import.
+ */
+function parse_model_url(string $url): ?array
+{
+    $url = trim($url);
+    if ($url === '') return null;
+    $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+    $path = (string) parse_url($url, PHP_URL_PATH);
+
+    // Printables: /model/123456-some-slug  (also prusaprinters.org)
+    if (strpos($host, 'printables.com') !== false || strpos($host, 'prusaprinters.org') !== false) {
+        if (preg_match('~/model/(\d+)(?:-([^/?#]+))?~', $path, $m)) {
+            return ['source' => 'printables', 'model_id' => $m[1], 'slug' => $m[2] ?? ''];
+        }
+    }
+    // MakerWorld: /models/123456-some-slug
+    if (strpos($host, 'makerworld.com') !== false) {
+        if (preg_match('~/models/(\d+)(?:-([^/?#]+))?~', $path, $m)) {
+            return ['source' => 'makerworld', 'model_id' => $m[1], 'slug' => $m[2] ?? ''];
+        }
+    }
+    // Thingiverse: /thing:123456
+    if (strpos($host, 'thingiverse.com') !== false) {
+        if (preg_match('~/thing:(\d+)~', $path, $m)) {
+            return ['source' => 'thingiverse', 'model_id' => $m[1], 'slug' => ''];
+        }
+    }
+    // Cults3D: /en/3d-model/category/the-slug  (id is the slug)
+    if (strpos($host, 'cults3d.com') !== false) {
+        if (preg_match('~/3d-model/[^/]+/([^/?#]+)~', $path, $m)) {
+            return ['source' => 'cults3d', 'model_id' => $m[1], 'slug' => $m[1]];
+        }
+    }
+    // STLFlix: /model/123456 or /models/123456
+    if (strpos($host, 'stlflix.com') !== false) {
+        if (preg_match('~/models?/(\d+)~', $path, $m)) {
+            return ['source' => 'stlflix', 'model_id' => $m[1], 'slug' => ''];
+        }
+    }
+    // Creality Cloud: /model-detail/123456
+    if (strpos($host, 'crealitycloud.com') !== false || strpos($host, 'creality') !== false) {
+        if (preg_match('~/model-detail/(\w+)~', $path, $m)) {
+            return ['source' => 'creality', 'model_id' => $m[1], 'slug' => ''];
+        }
+    }
+    return null;
+}
+
 /** True if source-thumbnail preference is enabled for this source slug. */
 function source_thumbs_on(string $slug): bool
 {
@@ -1885,6 +1964,57 @@ function source_thumbs_on(string $slug): bool
     if (str_starts_with($slug, 'custom:')) return false;
     $st = cfg('source_thumbs');
     return is_array($st) && !empty($st[$slug]);
+}
+
+/**
+ * Build the author/creator page URL on the source site for a given source slug
+ * and author handle/username. Returns '' if the source has no author pages or
+ * the handle is empty. Used to make creators clickable (external link).
+ */
+function source_author_url(string $slug, string $author): string
+{
+    $a = trim($author);
+    if ($a === '' || strcasecmp($a, 'unknown') === 0) return '';
+    $enc = rawurlencode($a);
+    switch ($slug) {
+        case 'printables':   return 'https://www.printables.com/@' . $enc;
+        case 'makerworld':   return 'https://makerworld.com/en/@' . $enc;
+        case 'thingiverse':  return 'https://www.thingiverse.com/' . $enc . '/designs';
+        case 'cults3d':      return 'https://cults3d.com/en/users/' . $enc . '/creations';
+        case 'creality':     return 'https://www.crealitycloud.com/user/' . $enc;
+        case 'stlflix':      return ''; // no per-author pages
+        case 'nikko':        return '';
+        case 'hex3dforum':   return '';
+        default:             return '';
+    }
+}
+
+/**
+ * Build the model page URL on the source site. Used for "view on source" links
+ * in the queue and library. Falls back to '' for sources without a stable
+ * public per-model URL.
+ */
+function source_model_url(string $slug, string $modelId, string $modelSlug = ''): string
+{
+    $id = trim($modelId);
+    if ($id === '') return '';
+    $s = trim($modelSlug);
+    switch ($slug) {
+        case 'printables':
+            return 'https://www.printables.com/model/' . rawurlencode($id) . ($s !== '' ? '-' . rawurlencode($s) : '');
+        case 'makerworld':
+            return 'https://makerworld.com/en/models/' . rawurlencode($id) . ($s !== '' ? '-' . rawurlencode($s) : '');
+        case 'thingiverse':
+            return 'https://www.thingiverse.com/thing:' . rawurlencode($id);
+        case 'cults3d':
+            return 'https://cults3d.com/en/3d-model/' . ($s !== '' ? rawurlencode($s) : rawurlencode($id));
+        case 'creality':
+            return 'https://www.crealitycloud.com/model-detail/' . rawurlencode($id);
+        case 'stlflix':
+            return 'https://www.stlflix.com/model/' . rawurlencode($id);
+        default:
+            return '';
+    }
 }
 
 /** Absolute path to a model's saved source-cover image, if one exists. */
@@ -2229,6 +2359,7 @@ function run_migrations(PDO $pdo): void
     $columns = [
         ['download_jobs', 'cover_url',         "ALTER TABLE download_jobs ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''"],
         ['download_jobs', 'source',            "ALTER TABLE download_jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'printables'"],
+        ['download_jobs', 'collection_name',   "ALTER TABLE download_jobs ADD COLUMN collection_name TEXT NOT NULL DEFAULT ''"],
         ['printers',      'nickname',          "ALTER TABLE printers ADD COLUMN nickname TEXT NOT NULL DEFAULT ''"],
         ['printers',      'octoprint_url',     "ALTER TABLE printers ADD COLUMN octoprint_url TEXT NOT NULL DEFAULT ''"],
         ['printers',      'octoprint_api_key', "ALTER TABLE printers ADD COLUMN octoprint_api_key TEXT NOT NULL DEFAULT ''"],

@@ -176,6 +176,16 @@ foreach ($sources as $s) {
             }
         }
         $isCustomizable = $hasScript || $meshCount >= 2;
+        // Read persisted source metadata (creator, model id) if present.
+        $metaCreator = ''; $metaModelId = '';
+        $metaFile = $abs . '/.farfetched/meta.json';
+        if (is_file($metaFile)) {
+            $md = json_decode((string) @file_get_contents($metaFile), true);
+            if (is_array($md)) {
+                $metaCreator = (string) ($md['creator'] ?? '');
+                $metaModelId = (string) ($md['model_id'] ?? '');
+            }
+        }
         $models[] = [
             'slug'      => $slug,
             'folder'    => $m['name'],
@@ -189,6 +199,8 @@ foreach ($sources as $s) {
             'firstsize' => $firstSize,
             'thumb'     => $thumbRel,
             'customizable' => $isCustomizable,
+            'creator'   => $metaCreator,
+            'model_id'  => $metaModelId,
         ];
         $srcCounts[$slug] = ($srcCounts[$slug] ?? 0) + 1;
         $totalFiles += (int) $m['files'];
@@ -377,6 +389,9 @@ function lib_badge(string $slug): string
             </div>
             <div class="lib-meta">
               <div class="lib-name"><?= e($m['title']) ?></div>
+              <?php if (($m['creator'] ?? '') !== ''): ?>
+                <div class="lib-creator">by <a href="index.php?src=<?= e($m['slug']) ?>&author=<?= rawurlencode($m['creator']) ?>" title="Search this creator on <?= e(lib_badge($m['slug'])) ?>"><?= e($m['creator']) ?></a></div>
+              <?php endif; ?>
               <div class="lib-row">
                 <span class="lib-badge"><?= e(lib_badge($m['slug'])) ?></span>
                 <span class="lib-files"><?= (int) $m['files'] ?> file<?= (int) $m['files'] === 1 ? '' : 's' ?></span>

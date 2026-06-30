@@ -26,12 +26,13 @@
                 text-shadow:0 1px 3px rgba(0,0,0,.35);
                 display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 
-  .lib-meta{padding:9px 11px 11px;}
-  .lib-name{font-size:12.5px;font-weight:500;color:var(--ink);
-            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:6px;}
-  .lib-row{display:flex;align-items:center;justify-content:space-between;}
+  .lib-meta{padding:14px 16px 16px;min-height:64px;display:flex;flex-direction:column;}
+  .lib-name{font-size:14px;font-weight:500;color:var(--ink);
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:8px;}
+  .lib-row{display:flex;align-items:center;justify-content:space-between;margin-top:auto;
+           padding-top:11px;border-top:1px solid var(--line);}
   .lib-badge{font-size:9px;font-weight:700;color:#fff;background:var(--clay);
-             padding:2px 6px;border-radius:4px;letter-spacing:.02em;}
+             padding:3px 8px;border-radius:4px;letter-spacing:.02em;}
   .lib-files{font-size:11px;color:var(--muted);}
 
   .lib-empty{color:var(--muted);font-size:14px;padding:40px 0;text-align:center;}

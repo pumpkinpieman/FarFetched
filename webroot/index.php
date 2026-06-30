@@ -461,6 +461,7 @@ $csrf = csrf_token();
         <span class="selcount" id="selcount">0 selected</span>
         <button class="btn-ghost" id="rouletteBtn" title="Surprise me — 5 random models from this source">🎲 Random</button>
         <button class="btn-ghost" id="selectAll">Select all on page</button>
+        <button class="btn-ghost" id="deselectAll">Deselect all</button>
         <button class="btn-primary" id="download" disabled>Download Selected</button>
       </div>
     </div>
@@ -481,6 +482,12 @@ $csrf = csrf_token();
       <?php if ($source === 'makerworld'): ?>
       <label class="nsfwToggle" title="MakerWorld hosts adult content; off by default"><input type="checkbox" id="nsfwToggle"> Show NSFW</label>
       <?php endif; ?>
+    </div>
+
+    <div class="searchbar" style="margin-top:8px;">
+      <input type="text" id="pasteId" placeholder="Paste URL to download — e.g. https://www.printables.com/model/123456-… or a model ID" autocomplete="off" style="flex:1;">
+      <button class="btn-primary" id="pasteGo">Add to queue</button>
+      <span id="pasteStatus" style="font-size:13px;color:var(--muted);align-self:center;margin-left:8px;"></span>
     </div>
     </div><!-- /.sticky-header -->
 
@@ -520,8 +527,14 @@ $csrf = csrf_token();
           </div>
           <div class="meta">
             <div class="mname"><?= e($m['name']) ?></div>
-            <?php if (($m['creator'] ?? '') !== ''): ?><div class="mcreator">by <?= e($m['creator']) ?></div><?php endif; ?>
+            <?php if (($m['creator'] ?? '') !== ''): ?><div class="mcreator">by <a href="#" class="author-search" data-author="<?= e($m['creator']) ?>" title="Search this creator's models"><?= e($m['creator']) ?></a></div><?php endif; ?>
           </div>
+          <?php if (($m['creator'] ?? '') !== ''): $au = source_author_url($source, (string) $m['creator']); ?>
+          <div class="card-foot">
+            <a href="#" class="foot-btn author-search" data-author="<?= e($m['creator']) ?>" title="Search this creator's models">🔍 More by author</a>
+            <?php if ($au !== ''): ?><a href="<?= e($au) ?>" class="foot-btn" target="_blank" rel="noopener" title="View on source site">↗ Source</a><?php endif; ?>
+          </div>
+          <?php endif; ?>
         </div>
       <?php endforeach; ?>
     </div>
@@ -760,7 +773,29 @@ $csrf = csrf_token();
     }
     card.querySelector('.mname').textContent = m.name;
     if (m.creator && m.creator !== '') {
-      card.querySelector('.mcreator').textContent = 'by ' + m.creator;
+      const mc = card.querySelector('.mcreator');
+      mc.textContent = 'by ';
+      const a = document.createElement('a');
+      a.href = '#'; a.className = 'author-search'; a.textContent = m.creator;
+      a.dataset.author = m.creator; a.title = "Search this creator's models";
+      mc.appendChild(a);
+      // Extended footer: "Their models" (in-app search) + "Source" (external).
+      const foot = document.createElement('div');
+      foot.className = 'card-foot';
+      const search = document.createElement('a');
+      search.href = '#'; search.className = 'foot-btn author-search';
+      search.dataset.author = m.creator; search.title = "Search this creator's models";
+      search.textContent = '🔍 More by author';
+      foot.appendChild(search);
+      const extUrl = authorUrl(SOURCE, m.creator);
+      if (extUrl) {
+        const ext = document.createElement('a');
+        ext.href = extUrl; ext.className = 'foot-btn'; ext.target = '_blank';
+        ext.rel = 'noopener'; ext.title = 'View on source site';
+        ext.textContent = '↗ Source';
+        foot.appendChild(ext);
+      }
+      card.appendChild(foot);
     } else {
       const mc = card.querySelector('.mcreator');
       if (mc) mc.remove();
@@ -970,6 +1005,35 @@ $csrf = csrf_token();
   const searchClear = document.getElementById('searchClear');
   const pageTitle = document.getElementById('pageTitle');
 
+  // Author page URL per source (mirror of PHP source_author_url()).
+  function authorUrl(src, author) {
+    const a = (author || '').trim();
+    if (!a || a.toLowerCase() === 'unknown') return '';
+    const e = encodeURIComponent(a);
+    switch (src) {
+      case 'printables':  return 'https://www.printables.com/@' + e;
+      case 'makerworld':  return 'https://makerworld.com/en/@' + e;
+      case 'thingiverse': return 'https://www.thingiverse.com/' + e + '/designs';
+      case 'cults3d':     return 'https://cults3d.com/en/users/' + e + '/creations';
+      case 'creality':    return 'https://www.crealitycloud.com/user/' + e;
+      default:            return '';
+    }
+  }
+
+  // Delegated: clicking a creator name runs an in-app keyword search for them.
+  document.addEventListener('click', (ev) => {
+    const a = ev.target.closest && ev.target.closest('.author-search');
+    if (!a) return;
+    ev.preventDefault();
+    const author = a.dataset.author || a.textContent || '';
+    if (!author) return;
+    if (searchInput) {
+      searchInput.value = author;
+      runSearch();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  });
+
   async function runSearch() {
     const q = (searchInput.value || '').trim();
     if (!q) { clearSearch(); return; }
@@ -1013,6 +1077,16 @@ $csrf = csrf_token();
   if (searchGo) searchGo.addEventListener('click', runSearch);
   if (searchClear) searchClear.addEventListener('click', clearSearch);
   if (searchInput) searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+
+  // If arrived via a library "by author" link (?author=NAME), run that search.
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const author = params.get('author');
+    if (author && searchInput) {
+      searchInput.value = author;
+      runSearch();
+    }
+  })();
   // Re-run the current search when the NSFW filter is toggled.
   if (nsfwEl) nsfwEl.addEventListener('change', () => { if (searchQuery) runSearch(); });
 
@@ -1336,6 +1410,18 @@ $csrf = csrf_token();
       c.classList.toggle('sel', on);
       const box = c.querySelector('.pick');
       if (box) box.checked = on;
+    });
+    refresh();
+  });
+  // Deselect all — clears the ENTIRE selection (across pages), not just visible.
+  const deselAllBtn = document.getElementById('deselectAll');
+  if (deselAllBtn) deselAllBtn.addEventListener('click', () => {
+    selStore.clear();
+    if (typeof _selSave === 'function') _selSave();
+    if (grid) grid.querySelectorAll('.card').forEach(c => {
+      c.classList.remove('sel');
+      const box = c.querySelector('.pick');
+      if (box) box.checked = false;
     });
     refresh();
   });

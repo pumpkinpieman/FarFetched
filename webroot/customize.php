@@ -764,7 +764,11 @@ $csrf         = csrf_token();
     const orbit = new OrbitControls(camera, renderer.domElement);
     const tcontrols = new TransformControls(camera, renderer.domElement);
     tcontrols.addEventListener('dragging-changed', e => orbit.enabled = !e.value);
-    scene.add(tcontrols);
+    // three r160+: TransformControls is no longer an Object3D — its visual gizmo
+    // must be added to the scene via getHelper(). Using scene.add(tcontrols)
+    // (pre-r160 style) silently fails, so the gizmo never appears and parts
+    // can't be moved/selected. getHelper() restores the gizmo.
+    scene.add(typeof tcontrols.getHelper === 'function' ? tcontrols.getHelper() : tcontrols);
     const raycaster = new THREE.Raycaster(), mouse = new THREE.Vector2();
     const parts = [];
     const loader = new STLLoader();

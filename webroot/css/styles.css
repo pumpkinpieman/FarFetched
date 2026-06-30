@@ -403,3 +403,30 @@
 .op-state{font-weight:600;}
 .op-controls{display:flex;gap:8px;margin-top:8px;}
 @media(max-width:560px){.op-fields{grid-template-columns:1fr;}}
+
+/* Clickable creator names in browse/library cards. */
+.mcreator .author-search{color:inherit;text-decoration:none;border-bottom:1px dotted rgba(255,255,255,.35);cursor:pointer;}
+.mcreator .author-search:hover{color:#ff8a3d;border-bottom-color:#ff8a3d;}
+
+/* Extended card footer: author actions (Their models / Source). */
+.card .card-foot{display:flex;gap:8px;border-top:0.5px solid rgba(255,255,255,.12);margin-top:8px;padding-top:10px;}
+.card .card-foot .foot-btn{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:5px;font-size:12px;padding:6px 8px;border-radius:8px;border:0.5px solid rgba(255,255,255,.22);color:rgba(255,255,255,.78);text-decoration:none;white-space:nowrap;cursor:pointer;transition:all .12s;}
+.card .card-foot .foot-btn:hover{color:#ff8a3d;border-color:#ff8a3d;background:rgba(255,138,61,.08);}
+
+/* Clickable creator name (in-app author search). */
+.mcreator .author-search{color:inherit;text-decoration:none;border-bottom:1px dotted rgba(255,255,255,.35);cursor:pointer;}
+.mcreator .author-search:hover{color:#ff8a3d;border-bottom-color:#ff8a3d;}
+
+/* Extended card footer with author action buttons. */
+.card .card-foot{display:flex;gap:8px;border-top:0.5px solid rgba(255,255,255,.10);
+  margin-top:8px;padding:10px 12px 12px;}
+.card .card-foot .foot-btn{flex:1;display:inline-flex;align-items:center;justify-content:center;
+  gap:5px;font-size:12px;padding:6px 8px;border-radius:8px;border:0.5px solid rgba(255,255,255,.18);
+  color:rgba(255,255,255,.75);text-decoration:none;cursor:pointer;white-space:nowrap;
+  transition:background .12s,border-color .12s,color .12s;}
+.card .card-foot .foot-btn:hover{background:rgba(255,255,255,.06);border-color:#ff8a3d;color:#ff8a3d;}
+
+/* Clickable creator in My Library cards. */
+.lib-creator{font-size:12px;color:var(--muted);margin-top:3px;margin-bottom:1px;}
+.lib-creator a{color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--line);}
+.lib-creator a:hover{color:var(--clay);border-bottom-color:var(--clay);}

@@ -58,6 +58,28 @@ function logerr(string $level, string $m): void
     ff_log($level, $m);
 }
 
+/**
+ * Classify a failed/empty download into a specific status so the queue isn't a
+ * vague "skipped" pile. Returns one of:
+ *   'paywalled' — model is behind payment / requires purchase / free-order
+ *   'no_files'  — no downloadable STL/3MF/pack exists for the model
+ *   'error'     — anything else (corruption, transient, unexpected)
+ * The message is matched case-insensitively against known source phrasings.
+ */
+function classify_skip(string $msg): string
+{
+    $m = strtolower($msg);
+    // Paywalled / purchase-required.
+    foreach (['paid', 'purchase', 'free-order', 'behind a pay', 'payment', 'buy ', 'premium', 'subscriber', 'patreon'] as $p) {
+        if (strpos($m, $p) !== false) return 'paywalled';
+    }
+    // No files available (but not an error — just nothing to fetch).
+    foreach (['no files', 'no download', 'no stl', 'no 3mf', 'no printable', 'no downloadable', 'not available', 'no packs'] as $p) {
+        if (strpos($m, $p) !== false) return 'no_files';
+    }
+    return 'error';
+}
+
 /** Atomically write the worker's live status (read by jobs_status.php). */
 function write_worker_status(array $s): void
 {
@@ -300,12 +322,24 @@ while (true) {
     };
     $jobCoverUrl = (string) ($job['cover_url'] ?? '');
     $jobSlug     = (string) ($job['source'] ?? '');
-    $upd = new class($jobCoverUrl, $jobSlug) {
+    $jobCreator  = (string) ($job['creator'] ?? '');
+    $jobName     = (string) ($job['name'] ?? '');
+    $jobModelId  = (string) ($job['model_id'] ?? '');
+    $jobCollection = (string) ($job['collection_name'] ?? '');
+    $upd = new class($jobCoverUrl, $jobSlug, $jobCreator, $jobName, $jobModelId, $jobCollection) {
         private string $coverUrl;
         private string $slug;
-        public function __construct(string $coverUrl, string $slug) {
+        private string $creator;
+        private string $mname;
+        private string $modelId;
+        private string $collection;
+        public function __construct(string $coverUrl, string $slug, string $creator, string $mname, string $modelId, string $collection) {
             $this->coverUrl = $coverUrl;
             $this->slug = $slug;
+            $this->creator = $creator;
+            $this->mname = $mname;
+            $this->modelId = $modelId;
+            $this->collection = $collection;
         }
         public function execute(array $p): void {
             db_exec_retry(
@@ -326,16 +360,44 @@ while (true) {
             // My Library shows the real image instead of a generated render —
             // when the source has source-thumbnails enabled and we captured a
             // cover URL at enqueue. Best-effort: never blocks or fails the job.
-            if (($p[':st'] ?? '') === 'done'
-                && $this->coverUrl !== ''
-                && $this->slug !== ''
-                && function_exists('source_thumbs_on')
-                && source_thumbs_on($this->slug)) {
+            if (($p[':st'] ?? '') === 'done') {
                 $path = (string) ($p[':path'] ?? '');
-                // saved_path may be the model dir or a file inside it; resolve to dir.
                 $dir = is_dir($path) ? $path : dirname($path);
                 if ($dir !== '' && is_dir($dir)) {
-                    @save_source_thumb($dir, $this->coverUrl);
+                    if ($this->coverUrl !== '' && $this->slug !== ''
+                        && function_exists('source_thumbs_on') && source_thumbs_on($this->slug)) {
+                        @save_source_thumb($dir, $this->coverUrl);
+                    }
+                    // Persist model metadata (creator, source, id) so My Library
+                    // can show a clickable author. Best-effort.
+                    $meta = $dir . '/.farfetched';
+                    if (!is_dir($meta)) @mkdir($meta, 0777, true);
+                    if (is_dir($meta)) {
+                        @file_put_contents($meta . '/meta.json', json_encode([
+                            'source'   => $this->slug,
+                            'model_id' => $this->modelId,
+                            'creator'  => $this->creator,
+                            'name'     => $this->mname,
+                            'saved_at' => date('c'),
+                        ], JSON_UNESCAPED_SLASHES));
+                    }
+                    // Add to a collection if the import requested one (matched by
+                    // name to an existing collection id). Folder is known now.
+                    if ($this->collection !== '') {
+                        try {
+                            $cid = db()->prepare('SELECT id FROM collections WHERE name = :n LIMIT 1');
+                            $cid->execute([':n' => $this->collection]);
+                            $collectionId = (int) $cid->fetchColumn();
+                            if ($collectionId > 0) {
+                                $folder = basename($dir);
+                                db_exec_retry(
+                                    'INSERT OR IGNORE INTO collection_items (collection_id, source, folder) VALUES (:c, :s, :f)',
+                                    [':c' => $collectionId, ':s' => $this->slug, ':f' => $folder],
+                                    8
+                                );
+                            }
+                        } catch (\Throwable $e) { /* non-fatal */ }
+                    }
                 }
             }
         }
@@ -357,6 +419,18 @@ while (true) {
     if (($job['source'] ?? 'printables') === 'makerworld') {
         try {
             $link = $mw->getModelZipLink($modelId, $fileTy);
+            $privateNote = '';
+            // Parametric models whose SOURCE file is private return no combined
+            // pack. MakerWorld still serves the printable STL/3MF instances — fall
+            // back to those and warn, rather than skipping the whole model.
+            if ($link === '' && $mw->looksPrivateSource()) {
+                $link2 = $mw->getInstanceFileLink($modelId);
+                if ($link2 !== '') {
+                    $link = $link2;
+                    $privateNote = $mw->sourcePrivateNote;
+                    logerr('warn', '  MakerWorld: ' . $privateNote);
+                }
+            }
             if ($link === '') {
                 $msg = $mw->lastError !== '' ? $mw->lastError : 'No MakerWorld download available.';
                 // Auth-ish failures halt the run (so the user re-pastes the token);
@@ -367,7 +441,7 @@ while (true) {
                     logerr('error', '  MakerWorld auth issue — halting. Re-paste token in Settings.');
                     break;
                 }
-                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
                 logerr('warn', '  Skipped: ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(MAKERWORLD_DELAY_SECONDS);
@@ -446,58 +520,55 @@ while (true) {
         continue;
     }
 
-    // ---- Thingiverse: ZIP download -----------------------------------------
+    // ---- Thingiverse: fetch all files, then zip locally --------------------
+    // Thingiverse removed its server-side /things/{id}/zip endpoint (now returns
+    // HTTP 400). Its website downloads each file from the CDN individually and
+    // zips them client-side. We mirror that: fetch every file into the model
+    // folder with a light inter-file delay (these are one model — the full
+    // per-source pacing is for BETWEEN models, applied once at the end), then
+    // optionally bundle them into a single .zip for delivery parity.
     if (($job['source'] ?? '') === 'thingiverse') {
         try {
-            $zipUrl = $tv->getThingZipUrl($modelId);
-            if ($zipUrl === '') {
-                // Fall back to individual files
-                $files = $tv->getFiles($modelId);
-                if (empty($files)) {
-                    $msg = $tv->lastError !== '' ? $tv->lastError : 'No files found for this Thingiverse thing.';
-                    $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                    logerr('warn', '  Skipped: ' . $msg);
-                    $GLOBALS['ACTIVE_JOB_ID'] = null;
-                    pace(THINGIVERSE_DELAY_SECONDS);
-                    continue;
-                }
-                $destDir = rtrim(get_thingiverse_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
-                if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
-                $anyOk = false;
-                foreach ($files as $f) {
-                    $fname = safe_segment($f['name']);
-                    $dest  = $destDir . '/' . $fname;
-                    if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $anyOk = true; continue; }
-                    $ok = $tv->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
-                    if ($ok) { logln('  Saved: ' . $fname); $anyOk = true; }
-                    else { logln('  Failed: ' . $fname . ' — ' . $tv->lastError); }
-                    pace(THINGIVERSE_DELAY_SECONDS);
-                }
-                $upd->execute([':st' => $anyOk?'done':'error', ':inc' => 1, ':err' => $anyOk?'':$tv->lastError, ':path' => $anyOk?$destDir:'', ':id' => $jobId]);
+            $files = $tv->getFiles($modelId);
+            if (empty($files)) {
+                $msg = $tv->lastError !== '' ? $tv->lastError : 'No files found for this Thingiverse thing.';
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Skipped: ' . $msg);
+                $GLOBALS['ACTIVE_JOB_ID'] = null;
+                pace(THINGIVERSE_DELAY_SECONDS);
+                continue;
+            }
+            $destDir = rtrim(get_thingiverse_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
+            if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
+
+            $total  = count($files);
+            $okCount = 0;
+            logln('  Thingiverse: downloading ' . $total . ' file(s) for this model.');
+            foreach ($files as $i => $f) {
+                $fname = safe_segment($f['name']);
+                $dest  = $destDir . '/' . $fname;
+                if (!cfg('overwrite') && is_file($dest)) { logln('  Exists, skip: ' . $fname); $okCount++; continue; }
+                $ok = $tv->downloadToFile($f['url'], $dest, progress_writer($jobId, $fname));
+                if ($ok) { logln('  Saved (' . ($i + 1) . '/' . $total . '): ' . $fname); $okCount++; }
+                else { logln('  Failed: ' . $fname . ' — ' . $tv->lastError); }
+                // Light delay between files of the SAME model (not full pacing).
+                if ($i < $total - 1) { sleep(2); }
+            }
+
+            if ($okCount === 0) {
+                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $tv->lastError ?: 'No files downloaded.', ':path' => '', ':id' => $jobId]);
             } else {
-                $destDir = rtrim(get_thingiverse_dir(), '/') . '/' . model_folder($modelId, $name, $slug);
-                if (!is_dir($destDir)) @mkdir($destDir, 0777, true);
-                $dest = $destDir . '/' . model_folder($modelId, $name, $slug) . '_thingiverse.zip';
-                if (!cfg('overwrite') && is_file($dest)) {
-                    logln('  Exists, skip: ' . basename($dest));
-                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $dest, ':id' => $jobId]);
-                } else {
-                    $ok = $tv->downloadToFile($zipUrl, $dest, progress_writer($jobId, basename($dest)));
-                    if ($ok) {
-                        logln('  Saved Thingiverse zip: ' . $dest);
-                        if (extract_zip_safe($dest, $destDir)) {
-                            logln('  Extracted into: ' . $destDir);
-                            if (cfg('keep_zip') !== true) { @unlink($dest); logln('  Removed zip.'); }
-                            $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
-                        } else {
-                            logerr('warn', '  Extraction failed — keeping ZIP at: ' . $dest);
-                            $upd->execute([':st' => 'error', ':inc' => 1, ':err' => 'Downloaded but could not extract (kept the .zip).', ':path' => $dest, ':id' => $jobId]);
-                        }
-                    } else {
-                        $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $tv->lastError, ':path' => '', ':id' => $jobId]);
-                        logln('  Thingiverse download failed: ' . $tv->lastError);
-                    }
+                // Bundle into a single .zip for delivery parity with other sources,
+                // unless the user prefers loose files (keep_zip=false leaves the
+                // extracted folder, which is our normal end-state). We keep the
+                // folder as the canonical result; create a zip only if keep_zip.
+                if (cfg('keep_zip') === true) {
+                    $zipPath = $destDir . '/' . model_folder($modelId, $name, $slug) . '_thingiverse.zip';
+                    @zip_dir_contents($destDir, $zipPath);
+                    if (is_file($zipPath)) { logln('  Bundled into: ' . basename($zipPath)); }
                 }
+                logln('  Thingiverse model complete: ' . $okCount . '/' . $total . ' file(s).');
+                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $destDir, ':id' => $jobId]);
             }
         } catch (Throwable $e) {
             $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
@@ -537,8 +608,8 @@ while (true) {
                     // Resolve/download failed. Distinguish paid (skip) from error.
                     $msg = $cults->lastError !== '' ? $cults->lastError : 'Cults3D download failed.';
                     $isPaid = stripos($msg, 'paid') !== false || stripos($msg, 'free-order') !== false;
-                    $upd->execute([':st' => $isPaid ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                    logerr('warn', '  Cults3D ' . ($isPaid ? 'skipped' : 'error') . ': ' . $msg);
+                    $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                    logerr('warn', '  Cults3D ' . (classify_skip($msg)) . ': ' . $msg);
                 }
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(CULTS3D_DELAY_SECONDS);
@@ -554,7 +625,7 @@ while (true) {
                 if (stripos($msg, 'no downloadable') !== false || stripos($msg, 'withheld') !== false) {
                     $msg .= ' Add a Cults3D download session (_session_id) in Settings to enable free downloads.';
                 }
-                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
                 logerr('warn', '  Skipped: ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(CULTS3D_DELAY_SECONDS);
@@ -603,8 +674,8 @@ while (true) {
                     break;
                 }
                 $isPaid = stripos($msg, 'paid') !== false || stripos($msg, 'region') !== false;
-                $upd->execute([':st' => $isPaid ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logerr('warn', '  Creality ' . ($isPaid ? 'skipped' : 'error') . ': ' . $msg);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Creality ' . (classify_skip($msg)) . ': ' . $msg);
             }
         } catch (\Throwable $e) {
             $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);
@@ -630,8 +701,8 @@ while (true) {
                 $msg = $stlfix->lastError !== '' ? $stlfix->lastError : 'Could not resolve STLFlix download URLs.';
                 // A product with no attached files is not a retryable error — skip it.
                 $isNoFiles = str_contains(strtolower($msg), 'no downloadable files');
-                $upd->execute([':st' => $isNoFiles ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logerr('warn', '  STLFlix ' . ($isNoFiles ? 'skipped' : 'error') . ': ' . $msg);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  STLFlix ' . (classify_skip($msg)) . ': ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(STLFLIX_DELAY_SECONDS);
                 continue;
@@ -712,8 +783,8 @@ while (true) {
                 $msg = $nikko->lastError !== '' ? $nikko->lastError : 'Could not resolve Nikko download URL.';
                 // A product page with no attached download is not retryable.
                 $isNoFiles = str_contains(strtolower($msg), 'no download link found');
-                $upd->execute([':st' => $isNoFiles ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logerr('warn', '  Nikko ' . ($isNoFiles ? 'skipped' : 'error') . ': ' . $msg);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Nikko ' . (classify_skip($msg)) . ': ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(NIKKO_DELAY_SECONDS);
                 continue;
@@ -790,8 +861,8 @@ while (true) {
             if (empty($links)) {
                 $msg = $hex3dforum->lastError !== '' ? $hex3dforum->lastError : 'Could not resolve Hex3D Forum attachment URLs.';
                 $isNoFiles = str_contains(strtolower($msg), 'no attachments found');
-                $upd->execute([':st' => $isNoFiles ? 'skipped' : 'error', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
-                logerr('warn', '  Hex3D Forum ' . ($isNoFiles ? 'skipped' : 'error') . ': ' . $msg);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                logerr('warn', '  Hex3D Forum ' . (classify_skip($msg)) . ': ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace(HEX3DFORUM_DELAY_SECONDS);
                 continue;
@@ -891,7 +962,7 @@ while (true) {
             }
             if ($link === '') {
                 $msg = $svc->lastError !== '' ? $svc->lastError : 'No pack available.';
-                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
                 logerr('warn', '  Skipped: ' . $msg);
                 $GLOBALS['ACTIVE_JOB_ID'] = null;
                 pace();
@@ -1026,7 +1097,7 @@ while (true) {
                     continue;
                 }
                 $msg = $svc->lastError !== '' ? $svc->lastError : 'No matching files on model.';
-                $upd->execute([':st' => 'skipped', ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
                 logerr('warn', '  Skipped: ' . $msg);
                 continue;
             }

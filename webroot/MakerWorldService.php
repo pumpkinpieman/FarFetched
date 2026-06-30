@@ -269,6 +269,58 @@ final class MakerWorldService
         ];
     }
 
+    /**
+     * Force the per-instance STL/3MF download route, bypassing the combined
+     * whole-model pack. Used when the combined pack is unavailable because the
+     * model's *source* file (e.g. a parametric .scad/.step) is marked private —
+     * MakerWorld still serves the printable STL/3MF instances. Returns a signed
+     * URL or '' (with lastError set). On success, sets $this->sourcePrivateNote
+     * so the caller can warn that only STL/3MF were fetched.
+     */
+    public string $sourcePrivateNote = '';
+
+    public function getInstanceFileLink(string $designId): string
+    {
+        $this->lastError = '';
+        $this->sourcePrivateNote = '';
+        $designId = preg_replace('/[^0-9]/', '', $designId);
+        if ($designId === '') { $this->lastError = 'Invalid MakerWorld design id.'; return ''; }
+        if (!$this->isAuthed()) { $this->lastError = 'MakerWorld token not set.'; return ''; }
+
+        $instanceId = $this->findInstanceId($designId);
+        if ($instanceId === '') {
+            $this->lastError = 'No printable instance found for this MakerWorld model.';
+            return '';
+        }
+        $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/f3mf?type=download');
+        if ($url !== '') {
+            $this->sourcePrivateNote = 'source file is not available - stl/3mf files downloaded';
+            return $url;
+        }
+        // last resort: per-instance STL bundle
+        $url = $this->mintFrom(self::API . '/design-service/instance/' . $instanceId . '/stl?type=download');
+        if ($url !== '') {
+            $this->sourcePrivateNote = 'source file is not available - stl/3mf files downloaded';
+            return $url;
+        }
+        if ($this->lastError === '') {
+            $this->lastError = 'No STL/3MF instance files available for this MakerWorld model.';
+        }
+        return '';
+    }
+
+    /** Heuristic: does a getModelZipLink failure look like a private/forbidden source file? */
+    public function looksPrivateSource(): bool
+    {
+        $e = strtolower($this->lastError);
+        return strpos($e, 'private') !== false
+            || strpos($e, 'permission') !== false
+            || strpos($e, 'forbidden') !== false
+            || strpos($e, '403') !== false
+            || strpos($e, 'not available') !== false
+            || strpos($e, 'no downloadable') !== false;
+    }
+
     public function getModelZipLink(string $designId, string $fileType = 'PACK'): string
     {
         $this->lastError = '';        $designId = preg_replace('/[^0-9]/', '', $designId);

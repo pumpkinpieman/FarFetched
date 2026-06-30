@@ -36,14 +36,14 @@ $total = array_sum($counts);
 $rows = $pdo->query(
     "SELECT * FROM download_jobs ORDER BY
        CASE status WHEN 'working' THEN 0 WHEN 'queued' THEN 1 WHEN 'failed' THEN 2
-                   WHEN 'skipped' THEN 3 ELSE 4 END, updated_at DESC
+                   WHEN 'skipped' THEN 3 WHEN 'paywalled' THEN 4 WHEN 'no_files' THEN 5 ELSE 6 END, updated_at DESC
      LIMIT 500"
 )->fetchAll();
 
 $csrf = csrf_token();
 $badge = static function (string $s): string {
     $map = ['done' => '#3F7D5B', 'working' => '#ff6b1a', 'queued' => '#6B6862',
-            'failed' => '#B23B3B', 'skipped' => '#C9912F'];
+            'failed' => '#B23B3B', 'skipped' => '#C9912F', 'paywalled' => '#9B59B6', 'no_files' => '#7F8C8D'];
     return $map[$s] ?? '#6B6862';
 };
 ?>
@@ -99,7 +99,7 @@ $badge = static function (string $s): string {
     </div>
 
     <div class="stats">
-      <?php foreach (['queued','working','done','failed','skipped'] as $s): ?>
+      <?php foreach (['queued','working','done','failed','skipped','paywalled','no_files'] as $s): ?>
         <div class="stat"><div class="n" id="stat-<?= $s ?>"><?= (int)($counts[$s] ?? 0) ?></div><div class="l"><?= ucfirst($s) ?></div></div>
       <?php endforeach; ?>
       <div class="stat"><div class="n" id="stat-total"><?= $total ?></div><div class="l">Total</div></div>
@@ -130,7 +130,15 @@ $badge = static function (string $s): string {
               $srcLabel = $srcLabels[$srcSlug] ?? ($srcSlug !== '' ? strtoupper(substr($srcSlug,0,3)) : '');
             ?>
             <td><?php if ($srcLabel !== ''): ?><span class="src-badge <?= e($srcSlug) ?>"><?= e($srcLabel) ?></span><?php else: ?><span class="muted">—</span><?php endif; ?></td>
-            <td><?= e($r['name'] !== '' ? $r['name'] : $r['model_id']) ?></td>
+            <td><?php
+              $srcUrl = source_model_url($srcSlug, (string) $r['model_id'], (string) ($r['slug'] ?? ''));
+              $label = e($r['name'] !== '' ? $r['name'] : $r['model_id']);
+              if ($srcUrl !== '') {
+                  echo '<a href="' . e($srcUrl) . '" target="_blank" rel="noopener" title="View on source site" style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--line);">' . $label . ' ↗</a>';
+              } else {
+                  echo $label;
+              }
+            ?></td>
             <td class="muted"><?= e($r['model_id']) ?></td>
             <td class="muted"><?= e($r['creator']) ?></td>
             <td><?= e($r['file_type']) ?></td>
@@ -154,12 +162,64 @@ $badge = static function (string $s): string {
       </div>
       <pre id="cp-log" style="margin:0;padding:12px 16px;max-height:220px;overflow-y:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;color:var(--ink);white-space:pre-wrap;word-break:break-word;">Waiting for worker activity…</pre>
     </section>
+
+    <!-- Bulk CSV import. -->
+    <section id="csvimport" style="margin-top:22px;border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);">
+        <strong style="font-size:13px;letter-spacing:.02em;">Bulk import from CSV</strong>
+        <a href="csv_import.php?template=1" style="font-size:12px;color:var(--accent,#ff6b1a);text-decoration:none;">⬇ Download template</a>
+      </div>
+      <div style="padding:14px 16px;">
+        <p style="margin:0 0 10px;font-size:13px;color:var(--muted);">
+          Columns: <code>Model URL</code> (required), <code>Source Thumbnail</code> (y/n),
+          <code>Collection</code> (name of an existing collection), <code>Favorites</code> (y/n).
+          One model per row. Supported sources: Printables, MakerWorld, Thingiverse, Cults3D, STLFlix, Creality.
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <input type="file" id="csvFile" accept=".csv,text/csv" style="font-size:13px;">
+          <button type="button" id="csvImportBtn" class="btn-primary" style="padding:7px 14px;">Import CSV</button>
+          <span id="csvStatus" style="font-size:13px;color:var(--muted);"></span>
+        </div>
+        <pre id="csvErrors" style="display:none;margin:12px 0 0;padding:10px 12px;background:var(--panel);border-radius:8px;font-size:12px;line-height:1.5;color:var(--ink);white-space:pre-wrap;max-height:180px;overflow-y:auto;"></pre>
+      </div>
+    </section>
   </main>
 
   <script>
   (function () {
+    const CSRF_IMPORT = <?= json_encode($_SESSION['csrf'] ?? '') ?>;
+    const fileEl = document.getElementById('csvFile');
+    const btn = document.getElementById('csvImportBtn');
+    const status = document.getElementById('csvStatus');
+    const errBox = document.getElementById('csvErrors');
+    if (btn) btn.addEventListener('click', async () => {
+      if (!fileEl || !fileEl.files || !fileEl.files[0]) { status.textContent = 'Choose a CSV file first.'; return; }
+      btn.disabled = true; status.textContent = 'Importing…'; errBox.style.display = 'none';
+      const fd = new FormData();
+      fd.append('csrf', CSRF_IMPORT);
+      fd.append('file', fileEl.files[0]);
+      try {
+        const res = await fetch('csv_import.php', { method: 'POST', body: fd });
+        const d = await res.json();
+        if (d.ok) {
+          status.textContent = `Queued ${d.queued}, skipped ${d.skipped}, favorites ${d.favorites}` +
+            (d.errors && d.errors.length ? `, ${d.errors.length} issue(s)` : '') + '.';
+          if (d.errors && d.errors.length) { errBox.textContent = d.errors.join('\n'); errBox.style.display = 'block'; }
+          fileEl.value = '';
+        } else {
+          status.textContent = 'Failed: ' + (d.error || 'unknown error');
+        }
+      } catch (e) {
+        status.textContent = 'Network error.';
+      } finally { btn.disabled = false; }
+    });
+  })();
+  </script>
+
+  <script>
+  (function () {
     const CSRF = <?= json_encode($csrf) ?>;
-    const BADGE = { done:'#3F7D5B', working:'#ff6b1a', queued:'#6B6862', failed:'#B23B3B', skipped:'#C9912F', error:'#B23B3B' };
+    const BADGE = { done:'#3F7D5B', working:'#ff6b1a', queued:'#6B6862', failed:'#B23B3B', skipped:'#C9912F', paywalled:'#9B59B6', no_files:'#7F8C8D', error:'#B23B3B' };
     const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     const fmtBytes = b => { if (!b) return ''; const u=['B','KB','MB','GB']; let i=0,n=b; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+' '+u[i]; };
     const fmtClock = s => { s=Math.max(0,s|0); const m=(s/60)|0, ss=s%60; return m+':'+String(ss).padStart(2,'0'); };
