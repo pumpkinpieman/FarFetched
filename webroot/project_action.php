@@ -96,6 +96,10 @@ switch ($action) {
         }
         pj_out(['ok' => true, 'folder' => basename($final), 'file' => $name . '.stl']);
 
+    case 'rename':
+        project_rename((int) ($in['id'] ?? 0), (string) ($in['name'] ?? ''));
+        pj_out(['ok' => true]);
+
     case 'delete':
         project_delete((int) ($in['id'] ?? 0));
         pj_out(['ok' => true]);

@@ -52,6 +52,7 @@ foreach (list_sources() as $s) {
             'folder' => $m['name'],
             'title'  => clean_model_name($m['name']),
             'mode'   => $c['mode'], // variants | parametric | none (hint only)
+            'types'  => array_values(array_unique(array_map('strtolower', $types))),
         ];
     }
 }
@@ -114,6 +115,10 @@ $csrf         = csrf_token();
                cursor:pointer;font-size:13px;opacity:0;transition:opacity .12s;}
   .cz-proj:hover .cz-proj-del{opacity:1;}
   .cz-proj-del:hover{color:var(--err);}
+  .cz-proj-edit{position:absolute;top:9px;right:34px;background:none;border:none;color:var(--muted);
+                cursor:pointer;font-size:13px;opacity:0;transition:opacity .14s,color .14s;}
+  .cz-proj:hover .cz-proj-edit{opacity:1;}
+  .cz-proj-edit:hover{color:var(--clay);}
   .cz-new{padding:12px 14px;border:1px dashed var(--line);border-radius:11px;background:transparent;
           color:var(--clay);cursor:pointer;font-size:13px;font-weight:500;text-align:center;transition:all .15s;}
   .cz-new:hover{border-color:var(--clay);background:var(--card);}
@@ -191,7 +196,7 @@ $csrf         = csrf_token();
   /* Create modal */
   .cz-modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;}
   .cz-modal[hidden]{display:none;}
-  .cz-modal-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;width:100%;max-width:460px;max-height:84vh;overflow-y:auto;}
+  .cz-modal-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:24px;width:100%;max-width:760px;max-height:84vh;overflow-y:auto;}
   .cz-modal-card h2{margin:0 0 4px;font-size:18px;}
   .cz-modal-sub{font-size:12.5px;color:var(--muted);margin-bottom:16px;}
   .cz-src-list{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;margin:12px 0;}
@@ -206,6 +211,17 @@ $csrf         = csrf_token();
               color:var(--muted);font-size:12px;cursor:pointer;transition:all .14s;}
   .cz-srcpill:hover{border-color:var(--clay);color:var(--ink);}
   .cz-srcpill.active{background:var(--clay);border-color:var(--clay);color:#fff;}
+  /* Type facet pills — smaller, secondary accent so they read as a sub-filter */
+  .cz-typepill{padding:4px 11px;border-radius:999px;border:1px solid var(--line);background:transparent;
+               color:var(--muted);font-size:11.5px;cursor:pointer;transition:all .14s;}
+  .cz-typepill:hover{border-color:var(--clay);color:var(--ink);}
+  .cz-typepill.active{background:rgba(255,107,26,.16);border-color:var(--clay);color:var(--clay);}
+  /* Design-mode example previews */
+  .cz-egs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0 4px;}
+  .cz-eg{border:1px solid var(--line);border-radius:12px;padding:10px;background:var(--card);text-align:center;}
+  .cz-eg svg{width:100%;height:84px;display:block;}
+  .cz-eg-t{font-size:12px;color:var(--ink);margin-top:8px;font-weight:600;}
+  .cz-eg-d{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.35;}
   .cz-src-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .cz-src-right{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;}
   .cz-src-from{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;}
@@ -252,6 +268,7 @@ $csrf         = csrf_token();
             <div class="cz-proj" data-id="<?= (int) $p['id'] ?>"
                  data-mode="<?= e($p['mode']) ?>" data-name="<?= e($p['name']) ?>" data-design="<?= e($pDesign) ?>">
               <button class="cz-proj-del" data-id="<?= (int) $p['id'] ?>" title="Delete project">🗑</button>
+              <button class="cz-proj-edit" data-id="<?= (int) $p['id'] ?>" data-name="<?= e($p['name']) ?>" title="Rename project">✏</button>
               <div class="cz-proj-name"><?= e($p['name']) ?></div>
               <div class="cz-proj-meta">
                 <?php if ($pDesign !== ''): ?>
@@ -409,6 +426,45 @@ $csrf         = csrf_token();
           <button class="cz-srcpill" data-dmode="nodes" type="button">🔗 Nodes</button>
         </div>
         <p class="cz-proj-meta" id="czDesignHint" style="margin:8px 2px 0;">Start from a parametric template and drive it with sliders.</p>
+
+        <!-- Static, dependency-free previews of what each authoring mode feels like -->
+        <div class="cz-egs" aria-hidden="true">
+          <div class="cz-eg">
+            <svg viewBox="0 0 120 84" xmlns="http://www.w3.org/2000/svg">
+              <rect x="14" y="18" width="92" height="6" rx="3" fill="var(--line)"/>
+              <circle cx="46" cy="21" r="7" fill="var(--clay)"/>
+              <rect x="14" y="38" width="92" height="6" rx="3" fill="var(--line)"/>
+              <circle cx="78" cy="41" r="7" fill="var(--clay)"/>
+              <rect x="14" y="58" width="92" height="6" rx="3" fill="var(--line)"/>
+              <circle cx="60" cy="61" r="7" fill="var(--clay)"/>
+            </svg>
+            <div class="cz-eg-t">Sliders</div>
+            <div class="cz-eg-d">Drag parameters on a ready-made template.</div>
+          </div>
+          <div class="cz-eg">
+            <svg viewBox="0 0 120 84" xmlns="http://www.w3.org/2000/svg">
+              <rect x="10" y="10" width="100" height="64" rx="6" fill="var(--card)" stroke="var(--line)"/>
+              <rect x="18" y="20" width="34" height="5" rx="2" fill="var(--clay)"/>
+              <rect x="18" y="31" width="60" height="5" rx="2" fill="var(--line)"/>
+              <rect x="26" y="42" width="52" height="5" rx="2" fill="var(--line)"/>
+              <rect x="26" y="53" width="40" height="5" rx="2" fill="var(--line)"/>
+              <rect x="18" y="64" width="24" height="5" rx="2" fill="var(--clay)"/>
+            </svg>
+            <div class="cz-eg-t">Code</div>
+            <div class="cz-eg-d">Write OpenSCAD directly for full control.</div>
+          </div>
+          <div class="cz-eg">
+            <svg viewBox="0 0 120 84" xmlns="http://www.w3.org/2000/svg">
+              <line x1="40" y1="24" x2="74" y2="24" stroke="var(--line)" stroke-width="2"/>
+              <line x1="40" y1="24" x2="74" y2="58" stroke="var(--line)" stroke-width="2"/>
+              <rect x="16" y="16" width="24" height="16" rx="4" fill="var(--clay)"/>
+              <rect x="74" y="16" width="30" height="16" rx="4" fill="var(--card)" stroke="var(--line)"/>
+              <rect x="74" y="50" width="30" height="16" rx="4" fill="var(--card)" stroke="var(--line)"/>
+            </svg>
+            <div class="cz-eg-t">Nodes</div>
+            <div class="cz-eg-d">Build a CSG tree from visual blocks.</div>
+          </div>
+        </div>
       </div>
 
       <!-- Import: source picker -->
@@ -422,12 +478,30 @@ $csrf         = csrf_token();
         <?php endforeach; ?>
       </div>
 
+      <!-- File-type facet (independent of source; AND-combined with it) -->
+      <div class="cz-src-pills" id="czTypePills" style="margin-top:6px;">
+        <button class="cz-typepill active" data-type="">Any type</button>
+        <button class="cz-typepill" data-type="stl">STL</button>
+        <button class="cz-typepill" data-type="3mf">3MF</button>
+        <button class="cz-typepill" data-type="scad">SCAD</button>
+        <button class="cz-typepill" data-type="step">STEP</button>
+        <button class="cz-typepill" data-type="obj">OBJ</button>
+        <button class="cz-typepill" data-type="parametric">Parametric</button>
+      </div>
+
       <div class="cz-src-list" id="czSrcList">
         <?php if ($allModels === []): ?>
           <p style="font-size:12.5px;color:var(--muted);">No models in your library yet. Download something first.</p>
         <?php else: ?>
           <?php foreach ($allModels as $im): ?>
+            <?php
+              // Type tokens used by the facet filter: raw file extensions plus a
+              // synthetic "parametric" token when the model is script-driven.
+              $typeTokens = $im['types'];
+              if ($im['mode'] === 'parametric') { $typeTokens[] = 'parametric'; }
+            ?>
             <div class="cz-src" data-src="<?= e($im['src']) ?>" data-folder="<?= e($im['folder']) ?>"
+                 data-types="<?= e(implode(' ', $typeTokens)) ?>"
                  data-search="<?= e(strtolower($im['title'] . ' ' . $im['src'])) ?>">
               <span class="cz-src-name"><?= e($im['title']) ?></span>
               <span class="cz-src-right">
@@ -720,7 +794,14 @@ $csrf         = csrf_token();
   // --- Node mode: a CSG tree that serializes to OpenSCAD ---
   // Leaf primitives (3D + 2D) and container operators. Everything serializes to
   // a CSG tree: leaves emit a solid; ops emit `op(){ children }`.
-  const NODE_PRIMS = ['cube', 'sphere', 'cylinder', 'cone', 'torus', 'roundedcube', 'text3d', 'circle', 'square', 'text2d'];
+  const BOSL2_OK = <?= bosl2_available() ? 'true' : 'false' ?>;
+  const NODE_FONTS = <?= json_encode(openscad_fonts(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '[]' ?>;
+  // BOSL2-backed leaves (only offered when the library is installed) + a
+  // dependency-free knurl that works on any OpenSCAD.
+  const NODE_BOSL2 = ['cuboid_round', 'cuboid_chamfer', 'threaded_rod', 'spur_gear'];
+  const NODE_PRIMS = ['cube', 'sphere', 'cylinder', 'cone', 'torus', 'roundedcube', 'text3d',
+                      'knurled', ...(BOSL2_OK ? NODE_BOSL2 : []),
+                      'circle', 'square', 'text2d'];
   const NODE_OPS = ['union', 'difference', 'intersection',
                     'translate', 'rotate', 'scale', 'mirror', 'resize', 'color',
                     'linear_extrude', 'rotate_extrude', 'offset2d',
@@ -734,7 +815,8 @@ $csrf         = csrf_token();
     ['Boolean', ['union', 'difference', 'intersection']],
     ['Transform', ['translate', 'rotate', 'scale', 'mirror', 'resize', 'color']],
     ['Combine', ['hull', 'minkowski']],
-    ['Pattern', ['linear_pattern', 'circular_pattern', 'mirror_copy']]
+    ['Pattern', ['linear_pattern', 'circular_pattern', 'mirror_copy']],
+    ['Mechanical', ['knurled', ...(BOSL2_OK ? NODE_BOSL2 : [])]]
   ];
   const NODE_DEFAULTS = {
     cube: { x:20, y:20, z:20, center:true },
@@ -743,10 +825,15 @@ $csrf         = csrf_token();
     cone: { h:20, r1:10, r2:2, center:true, fn:48 },
     torus: { R:20, r:5, fn:64 },
     roundedcube: { x:24, y:24, z:24, rad:3, fn:32 },
-    text3d: { str:'Text', size:10, h:3, fn:24 },
+    text3d: { str:'Text', size:10, h:3, fn:24, font:'' },
     circle: { r:10, fn:48 },
     square: { x:20, y:20, center:true },
-    text2d: { str:'Text', size:10 },
+    text2d: { str:'Text', size:10, font:'' },
+    knurled: { h:20, r:10, teeth:30, depth:1.2, fn:64 },
+    cuboid_round: { x:24, y:24, z:24, rad:3, fn:24 },
+    cuboid_chamfer: { x:24, y:24, z:24, cham:2 },
+    threaded_rod: { d:10, l:30, pitch:2, fn:48 },
+    spur_gear: { mod:2, teeth:20, th:6 },
     translate: { x:0, y:0, z:0 }, rotate: { x:0, y:0, z:0 }, scale: { x:1, y:1, z:1 },
     mirror: { x:1, y:0, z:0 }, resize: { x:20, y:20, z:20 }, color: { r:1, g:0.5, b:0.2 },
     linear_extrude: { h:10, twist:0, scale:1, center:false, fn:48 },
@@ -756,7 +843,7 @@ $csrf         = csrf_token();
     circular_pattern: { n:6, rad:30 },
     mirror_copy: { x:1, y:0, z:0 }
   };
-  // Field kinds: default = number, 'b' = bool checkbox, 't' = text.
+  // Field kinds: default = number, 'b' = bool checkbox, 't' = text, 'f' = font.
   const NODE_FIELDS = {
     cube: [['x','X'],['y','Y'],['z','Z'],['center','Center','b']],
     sphere: [['r','R'],['fn','$fn']],
@@ -764,10 +851,15 @@ $csrf         = csrf_token();
     cone: [['h','H'],['r1','R1'],['r2','R2'],['fn','$fn'],['center','Center','b']],
     torus: [['R','Ring R'],['r','Tube r'],['fn','$fn']],
     roundedcube: [['x','X'],['y','Y'],['z','Z'],['rad','Radius'],['fn','$fn']],
-    text3d: [['str','Text','t'],['size','Size'],['h','Height'],['fn','$fn']],
+    text3d: [['str','Text','t'],['size','Size'],['h','Height'],['font','Font','f'],['fn','$fn']],
     circle: [['r','R'],['fn','$fn']],
     square: [['x','X'],['y','Y'],['center','Center','b']],
-    text2d: [['str','Text','t'],['size','Size']],
+    text2d: [['str','Text','t'],['size','Size'],['font','Font','f']],
+    knurled: [['h','H'],['r','R'],['teeth','Teeth'],['depth','Depth'],['fn','$fn']],
+    cuboid_round: [['x','X'],['y','Y'],['z','Z'],['rad','Rounding'],['fn','$fn']],
+    cuboid_chamfer: [['x','X'],['y','Y'],['z','Z'],['cham','Chamfer']],
+    threaded_rod: [['d','Dia'],['l','Length'],['pitch','Pitch'],['fn','$fn']],
+    spur_gear: [['mod','Module'],['teeth','Teeth'],['th','Thick']],
     translate: [['x','X'],['y','Y'],['z','Z']],
     rotate: [['x','X°'],['y','Y°'],['z','Z°']],
     scale: [['x','X'],['y','Y'],['z','Z']],
@@ -856,6 +948,19 @@ $csrf         = csrf_token();
         inp.style.cssText = 'width:110px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;padding:2px 5px;font-size:11px;';
         inp.addEventListener('input', () => { n.params[key] = inp.value; });
         w.append(lbl, inp);
+      } else if (kind === 'f') {
+        // Font picker, populated from fonts installed in the container.
+        const sel = document.createElement('select');
+        sel.style.cssText = 'max-width:150px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;padding:2px 4px;font-size:11px;';
+        const def = document.createElement('option'); def.value = ''; def.textContent = '(default)';
+        sel.appendChild(def);
+        NODE_FONTS.forEach(f => {
+          const o = document.createElement('option'); o.value = f; o.textContent = f;
+          if (n.params[key] === f) o.selected = true;
+          sel.appendChild(o);
+        });
+        sel.addEventListener('change', () => { n.params[key] = sel.value; });
+        w.append(lbl, sel);
       } else {
         const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any';
         inp.value = n.params[key]; inp.style.cssText = 'width:56px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;padding:2px 4px;font-size:11px;';
@@ -899,11 +1004,24 @@ $csrf         = csrf_token();
         const rad = nn(P.rad,3), x = Math.max(0, nn(P.x,24)-2*rad), y = Math.max(0, nn(P.y,24)-2*rad), z = Math.max(0, nn(P.z,24)-2*rad);
         return `${pad}minkowski() {\n${pad}  cube([${x}, ${y}, ${z}], center=true);\n${pad}  sphere(r=${rad}, $fn=${ni(P.fn,32)});\n${pad}}`;
       }
-      case 'text3d': return `${pad}linear_extrude(height=${nn(P.h,3)}) text(${sstr(P.str)}, size=${nn(P.size,10)}, halign="center", valign="center", $fn=${ni(P.fn,24)});`;
+      case 'text3d': { const fp = P.font ? `, font=${sstr(P.font)}` : ''; return `${pad}linear_extrude(height=${nn(P.h,3)}) text(${sstr(P.str)}, size=${nn(P.size,10)}${fp}, halign="center", valign="center", $fn=${ni(P.fn,24)});`; }
       // --- 2D leaves ---
       case 'circle': return `${pad}circle(r=${nn(P.r,5)}, $fn=${ni(P.fn,48)});`;
       case 'square': return `${pad}square([${nn(P.x,20)}, ${nn(P.y,20)}], center=${P.center?'true':'false'});`;
-      case 'text2d': return `${pad}text(${sstr(P.str)}, size=${nn(P.size,10)}, halign="center", valign="center");`;
+      case 'text2d': { const fp = P.font ? `, font=${sstr(P.font)}` : ''; return `${pad}text(${sstr(P.str)}, size=${nn(P.size,10)}${fp}, halign="center", valign="center");`; }
+
+      // --- Mechanical: dependency-free knurl + BOSL2-backed parts ---
+      case 'knurled': {
+        // Straight-spline knurl: subtract diamond-oriented prisms around the rim.
+        const h = nn(P.h,20), r = nn(P.r,10), teeth = ni(P.teeth,30), depth = nn(P.depth,1.2);
+        const g = (depth * 1.4142).toFixed(4);
+        return `${pad}difference() {\n${pad}  cylinder(h=${h}, r=${r}, center=true, $fn=${ni(P.fn,64)});\n`
+             + `${pad}  for (i = [0 : ${teeth - 1}]) rotate([0, 0, i*${(360 / teeth).toFixed(4)}]) translate([${r}, 0, 0]) rotate([0, 0, 45]) cube([${g}, ${g}, ${h + 1}], center=true);\n${pad}}`;
+      }
+      case 'cuboid_round':   return `${pad}cuboid([${nn(P.x,24)}, ${nn(P.y,24)}, ${nn(P.z,24)}], rounding=${nn(P.rad,3)}, $fn=${ni(P.fn,24)});`;
+      case 'cuboid_chamfer': return `${pad}cuboid([${nn(P.x,24)}, ${nn(P.y,24)}, ${nn(P.z,24)}], chamfer=${nn(P.cham,2)});`;
+      case 'threaded_rod':   return `${pad}threaded_rod(d=${nn(P.d,10)}, l=${nn(P.l,30)}, pitch=${nn(P.pitch,2)}, $fn=${ni(P.fn,48)});`;
+      case 'spur_gear':      return `${pad}spur_gear(mod=${nn(P.mod,2)}, teeth=${ni(P.teeth,20)}, thickness=${nn(P.th,6)});`;
       // --- booleans / combine ---
       case 'union': case 'difference': case 'intersection': case 'hull': case 'minkowski':
         return block(`${pad}${n.type}()`);
@@ -935,9 +1053,32 @@ $csrf         = csrf_token();
     if (!kids.length) return '  '.repeat(ind) + '// (empty)';
     return kids.map(c => emitNode(c, ind)).join('\n');
   }
+  // Which BOSL2 sub-libraries a given node type needs (std is always pulled in).
+  const BOSL2_INCLUDES = {
+    cuboid_round:   ['std'],
+    cuboid_chamfer: ['std'],
+    threaded_rod:   ['std', 'threading'],
+    spur_gear:      ['std', 'gears'],
+  };
+  function collectBosl2Libs(nodes, set) {
+    for (const n of nodes) {
+      (BOSL2_INCLUDES[n.type] || []).forEach(l => set.add(l));
+      if (n.children && n.children.length) collectBosl2Libs(n.children, set);
+    }
+    return set;
+  }
   function treeToScad() {
     if (!nodeTree.length) return '$fn = 48;\n// empty design\n';
-    return '$fn = 48;\n' + nodeTree.map(n => emitNode(n, 0)).join('\n') + '\n';
+    // Prepend BOSL2 includes only when a BOSL2-backed node is actually used, so
+    // simple designs stay dependency-free and render even without the library.
+    const libs = collectBosl2Libs(nodeTree, new Set());
+    let header = '$fn = 48;\n';
+    if (libs.size) {
+      if (libs.has('std'))       header += 'include <BOSL2/std.scad>\n';
+      if (libs.has('threading')) header += 'include <BOSL2/threading.scad>\n';
+      if (libs.has('gears'))     header += 'include <BOSL2/gears.scad>\n';
+    }
+    return header + nodeTree.map(n => emitNode(n, 0)).join('\n') + '\n';
   }
   document.getElementById('czNodeApply').addEventListener('click', async () => {
     if (!activeProject) return;
@@ -962,6 +1103,16 @@ $csrf         = csrf_token();
       if (!confirm('Delete this project? (Exports already in your library stay.)')) return;
       const d = await post({ action:'delete', id:+del.dataset.id });
       if (d.ok) location.reload();
+      return;
+    }
+    const edit = e.target.closest('.cz-proj-edit');
+    if (edit) {
+      e.stopPropagation();
+      const next = (prompt('Rename project:', edit.dataset.name || '') || '').trim();
+      if (!next || next === edit.dataset.name) return;
+      const d = await post({ action:'rename', id:+edit.dataset.id, name: next });
+      if (d.ok) location.reload();
+      else alert('Rename failed: ' + (d.error || 'unknown'));
       return;
     }
     const proj = e.target.closest('.cz-proj');
@@ -1035,23 +1186,34 @@ $csrf         = csrf_token();
     refreshCreateEnabled();
   });
 
-  // Search + source-pill filtering of the import list.
+  // Search + source-pill + type-facet filtering of the import list (AND-combined).
   let czFilterSrc = '';
+  let czFilterType = '';
   function applyImportFilter() {
     const q = (document.getElementById('czSrcSearch').value || '').toLowerCase().trim();
     document.querySelectorAll('#czSrcList .cz-src').forEach(row => {
       const matchSrc = !czFilterSrc || row.dataset.src === czFilterSrc;
       const matchQ = !q || (row.dataset.search || '').includes(q);
-      row.style.display = (matchSrc && matchQ) ? '' : 'none';
+      const types = (row.dataset.types || '').split(' ');
+      const matchType = !czFilterType || types.indexOf(czFilterType) !== -1;
+      row.style.display = (matchSrc && matchQ && matchType) ? '' : 'none';
     });
   }
   document.getElementById('czSrcSearch').addEventListener('input', applyImportFilter);
   document.getElementById('czSrcPills').addEventListener('click', (e) => {
     const pill = e.target.closest('.cz-srcpill');
     if (!pill) return;
-    document.querySelectorAll('.cz-srcpill').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('#czSrcPills .cz-srcpill').forEach(p => p.classList.remove('active'));
     pill.classList.add('active');
     czFilterSrc = pill.dataset.src || '';
+    applyImportFilter();
+  });
+  document.getElementById('czTypePills').addEventListener('click', (e) => {
+    const pill = e.target.closest('.cz-typepill');
+    if (!pill) return;
+    document.querySelectorAll('#czTypePills .cz-typepill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    czFilterType = pill.dataset.type || '';
     applyImportFilter();
   });
 

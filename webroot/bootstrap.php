@@ -605,6 +605,76 @@ function openscad_available(): bool
 }
 
 /**
+ * Directory placed on OPENSCADPATH so bundled libraries (BOSL2) resolve via
+ * `use <BOSL2/std.scad>`. Config override first, then the container default.
+ * Returns '' when nothing is available (BOSL2 nodes then simply won't render).
+ */
+function openscad_lib_path(): string
+{
+    static $cached = false;
+    static $val = '';
+    if ($cached) {
+        return $val;
+    }
+    $cached = true;
+    $cfg = function_exists('cfg') ? trim((string) cfg('openscad_lib_path')) : '';
+    if ($cfg !== '' && @is_dir($cfg)) {
+        return $val = $cfg;
+    }
+    foreach (['/opt/openscad-libs', '/usr/share/openscad/libraries'] as $c) {
+        if (@is_dir($c . '/BOSL2')) {
+            return $val = $c;
+        }
+    }
+    return $val = '';
+}
+
+/** True when the BOSL2 library is installed and resolvable. */
+function bosl2_available(): bool
+{
+    $p = openscad_lib_path();
+    return $p !== '' && @is_dir($p . '/BOSL2');
+}
+
+/**
+ * Enumerate installed font families (via fontconfig) for the text-node picker.
+ * Deduplicated, sorted, capped. Returns [] when fc-list is unavailable.
+ * @return list<string>
+ */
+function openscad_fonts(): array
+{
+    static $cached = null;
+    if ($cached !== null) {
+        return $cached;
+    }
+    $cached = [];
+    $bin = trim((string) @shell_exec('command -v fc-list 2>/dev/null'));
+    if ($bin === '') {
+        return $cached;
+    }
+    // Emit only the family field; take the first family alias per line.
+    $raw = (string) @shell_exec('fc-list : family 2>/dev/null');
+    if ($raw === '') {
+        return $cached;
+    }
+    $set = [];
+    foreach (explode("\n", $raw) as $line) {
+        $line = trim($line);
+        if ($line === '') {
+            continue;
+        }
+        $fam = trim(explode(',', $line)[0]);
+        if ($fam !== '' && preg_match('/^[\w .\-]{1,64}$/u', $fam)) {
+            $set[$fam] = true;
+        }
+    }
+    $families = array_keys($set);
+    sort($families, SORT_NATURAL | SORT_FLAG_CASE);
+    $cached = array_slice($families, 0, 300);
+    return $cached;
+}
+
+/**
  * Parse OpenSCAD Customizer parameters from a .scad file. Reads top-level
  * variable assignments and their preceding `// [..]` annotation, returning
  * control descriptors for the UI.
@@ -741,6 +811,12 @@ function scad_render(string $scadPath, array $values, string $outPath): array
         . ' -o ' . escapeshellarg($outPath) . ' '
         . implode(' ', $args) . ' '
         . escapeshellarg($scadPath) . ' 2>&1';
+
+    // Make bundled libraries (BOSL2) resolvable via `use <BOSL2/std.scad>`.
+    $libPath = openscad_lib_path();
+    if ($libPath !== '') {
+        $cmd = 'OPENSCADPATH=' . escapeshellarg($libPath) . ' ' . $cmd;
+    }
 
     if (openscad_has_xvfb()) {
         $cmd = 'xvfb-run -a ' . $cmd;
@@ -1008,6 +1084,19 @@ function project_delete(int $id): void
         ff_rrmdir($p['work_dir']);
     }
     db()->prepare('DELETE FROM projects WHERE id = :id')->execute([':id' => $id]);
+}
+
+/** Rename a project. Trims, caps at 120 chars, no-ops on empty input. */
+function project_rename(int $id, string $name): void
+{
+    projects_init();
+    $name = trim($name);
+    if ($id <= 0 || $name === '') {
+        return;
+    }
+    $name = mb_substr($name, 0, 120);
+    db()->prepare('UPDATE projects SET name = :n, updated_at = datetime(\'now\') WHERE id = :id')
+        ->execute([':n' => $name, ':id' => $id]);
 }
 
 /** Recursively remove a directory (used for project cleanup). */

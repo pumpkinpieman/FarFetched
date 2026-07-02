@@ -19,7 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!csrf_ok()) {
         $notice = 'Session expired — reload.';
     } elseif (($_POST['action'] ?? '') === 'retry_failed') {
-        $n = $pdo->exec("UPDATE download_jobs SET status='queued', attempts=0, last_error='' WHERE status='failed'");
+        $n = $pdo->exec("UPDATE download_jobs SET status='queued', attempts=0, last_error='' WHERE status IN ('failed','error')");
         $notice = ($n ?: 0) . ' failed job(s) re-queued.';
     } elseif (($_POST['action'] ?? '') === 'clear_done') {
         $n = $pdo->exec("DELETE FROM download_jobs WHERE status='done'");
@@ -31,6 +31,9 @@ $counts = [];
 foreach ($pdo->query("SELECT status, COUNT(*) c FROM download_jobs GROUP BY status") as $r) {
     $counts[$r['status']] = (int) $r['c'];
 }
+// 'error' is a failed download under a different name — count it under Failed.
+$counts['failed'] = ($counts['failed'] ?? 0) + ($counts['error'] ?? 0);
+unset($counts['error']);
 $total = array_sum($counts);
 
 $rows = $pdo->query(
@@ -289,7 +292,7 @@ $badge = static function (string $s): string {
       ovFill.style.width = (total > 0 ? Math.floor(done / total * 100) : 0) + '%';
       // Update stat cards
       const by = data.counts.by || {};
-      ['queued','working','done','failed','skipped'].forEach(s => {
+      ['queued','working','done','failed','skipped','paywalled','no_files'].forEach(s => {
         const el = document.getElementById('stat-' + s);
         if (el) el.textContent = by[s] ?? 0;
       });

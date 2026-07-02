@@ -25,6 +25,10 @@ foreach ($pdo->query("SELECT status, COUNT(*) c FROM download_jobs GROUP BY stat
     $total += (int) $r['c'];
 }
 $done = (int) ($by['done'] ?? 0);
+// 'error' is a failed download under a different name — surface it under Failed
+// so the tiles match the per-row status pills.
+$by['failed'] = ($by['failed'] ?? 0) + ($by['error'] ?? 0);
+unset($by['error']);
 
 // Job rows (same ordering as the page; capped).
 $jobs = [];
