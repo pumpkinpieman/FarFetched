@@ -374,6 +374,29 @@ function list_models(string $sourcePath): array
     return $rows;
 }
 
+/**
+ * Folder names only (one shallow scandir, no per-folder deep stat). Cheap
+ * enumeration for cached callers like the library index, which decide per folder
+ * whether a deep walk is even needed. Natural, case-insensitive sort to match
+ * list_models()'s ordering.
+ *
+ * @return array<int,string>
+ */
+function list_model_dirs(string $sourcePath): array
+{
+    $dirs = [];
+    foreach (scandir($sourcePath) ?: [] as $name) {
+        if ($name === '.' || $name === '..') {
+            continue;
+        }
+        if (is_dir($sourcePath . '/' . $name)) {
+            $dirs[] = $name;
+        }
+    }
+    usort($dirs, static fn($a, $b) => strcasecmp($a, $b));
+    return $dirs;
+}
+
 /** Recursively count printable files + total bytes in a model folder. */
 function dir_stats(string $dir): array
 {
@@ -870,6 +893,101 @@ function project_create(string $name, string $srcSlug, string $srcFolder): array
 
     $db->prepare('UPDATE projects SET work_dir = :w WHERE id = :id')->execute([':w' => $work, ':id' => $id]);
     return ['ok' => true, 'id' => $id, 'copied' => $copied, 'mode' => $mode];
+}
+
+/**
+ * Create a blank "design your own" project — no source model. Makes the work
+ * dir, seeds a starter .scad appropriate to the chosen authoring mode, and
+ * records the mode in state so the Customize UI shows the right editor.
+ * $designMode is one of: code | nodes | sliders.
+ * Returns [ok, id|error].
+ */
+function project_create_blank(string $name, string $designMode): array
+{
+    projects_init();
+    $name = trim($name);
+    if ($name === '') {
+        return ['ok' => false, 'error' => 'Project name required.'];
+    }
+    $designMode = in_array($designMode, ['code', 'nodes', 'sliders'], true) ? $designMode : 'code';
+
+    $db = db();
+    $db->prepare('INSERT INTO projects (name, src_slug, src_folder, mode, work_dir, state) VALUES (:n,:s,:f,:m,:w,:st)')
+       ->execute([
+           ':n' => $name, ':s' => '', ':f' => '', ':m' => 'parametric', ':w' => '',
+           ':st' => json_encode(['designMode' => $designMode, 'nodes' => []]),
+       ]);
+    $id = (int) $db->lastInsertId();
+
+    $work = projects_root() . '/' . $id;
+    if (!is_dir($work) && !@mkdir($work, 0775, true) && !is_dir($work)) {
+        $db->prepare('DELETE FROM projects WHERE id = :id')->execute([':id' => $id]);
+        return ['ok' => false, 'error' => 'Could not create project workspace (private dir not writable).'];
+    }
+
+    @file_put_contents($work . '/design.scad', design_starter_scad($designMode));
+    $db->prepare('UPDATE projects SET work_dir = :w WHERE id = :id')->execute([':w' => $work, ':id' => $id]);
+    return ['ok' => true, 'id' => $id, 'mode' => 'parametric', 'designMode' => $designMode];
+}
+
+/** Starter OpenSCAD for a new design project, per authoring mode. */
+function design_starter_scad(string $designMode): string
+{
+    if ($designMode === 'nodes') {
+        // The node tree owns the geometry; start with a visible placeholder so
+        // the first render isn't empty before any nodes are added.
+        return "// Generated from the node graph — edit via the node editor.\n\$fn = 48;\ncube([20, 20, 20], center = true);\n";
+    }
+    // code / sliders both start from an editable parametric cube-with-hole.
+    return <<<'SCAD'
+// Parametric design — adjust the sliders (or edit the code), then Render.
+/* [Body] */
+Width  = 30;  // [5:1:120]
+Depth  = 20;  // [5:1:120]
+Height = 12;  // [1:1:80]
+/* [Hole] */
+Hole_Diameter = 8;  // [0:0.5:60]
+$fn = 64;
+
+difference() {
+    cube([Width, Depth, Height], center = true);
+    if (Hole_Diameter > 0)
+        cylinder(h = Height + 1, d = Hole_Diameter, center = true);
+}
+SCAD;
+}
+
+/** Absolute path to a project's primary .scad (the one the renderer uses), or null. */
+function project_scad_path(array $p): ?string
+{
+    $work = realpath((string) ($p['work_dir'] ?? ''));
+    if ($work === false || !is_dir($work)) {
+        return null;
+    }
+    $cust = model_customization($work);
+    if ($cust['mode'] === 'parametric' && $cust['engine'] === 'openscad' && $cust['script']) {
+        return $work . '/' . $cust['script'];
+    }
+    // No .scad yet (fresh project) → default location.
+    return $work . '/design.scad';
+}
+
+/** Overwrite a design project's .scad with new source. Returns true on success. */
+function project_write_scad(int $id, string $code): bool
+{
+    $p = project_get($id);
+    if (!$p) {
+        return false;
+    }
+    $path = project_scad_path($p);
+    if ($path === null) {
+        return false;
+    }
+    if (@file_put_contents($path, $code) === false) {
+        return false;
+    }
+    db()->prepare('UPDATE projects SET updated_at = datetime(\'now\') WHERE id = :id')->execute([':id' => $id]);
+    return true;
 }
 
 /** Update a project's saved pose/param state (JSON). */
@@ -1951,9 +2069,16 @@ function parse_model_url(string $url): ?array
             return ['source' => 'stlflix', 'model_id' => $m[1], 'slug' => ''];
         }
     }
-    // Creality Cloud: /model-detail/123456
+    // Creality Cloud: /model-detail/{slug|id}?...&profileId=<24-hex groupId>.
+    // The downloadable id is the hex modelGroupId carried in profileId; the path
+    // segment is a display slug (and may contain hyphens). Prefer profileId.
     if (strpos($host, 'crealitycloud.com') !== false || strpos($host, 'creality') !== false) {
-        if (preg_match('~/model-detail/(\w+)~', $path, $m)) {
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        $pid = (string) ($q['profileId'] ?? '');
+        if (preg_match('/^[a-f0-9]{24}$/i', $pid)) {
+            return ['source' => 'creality', 'model_id' => $pid, 'slug' => ''];
+        }
+        if (preg_match('~/model-detail/([\w-]+)~', $path, $m)) {
             return ['source' => 'creality', 'model_id' => $m[1], 'slug' => ''];
         }
     }
@@ -2364,6 +2489,7 @@ function run_migrations(PDO $pdo): void
         ['download_jobs', 'cover_url',         "ALTER TABLE download_jobs ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''"],
         ['download_jobs', 'source',            "ALTER TABLE download_jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'printables'"],
         ['download_jobs', 'collection_name',   "ALTER TABLE download_jobs ADD COLUMN collection_name TEXT NOT NULL DEFAULT ''"],
+        ['download_jobs', 'creator_uid',       "ALTER TABLE download_jobs ADD COLUMN creator_uid TEXT NOT NULL DEFAULT ''"],
         ['printers',      'nickname',          "ALTER TABLE printers ADD COLUMN nickname TEXT NOT NULL DEFAULT ''"],
         ['printers',      'octoprint_url',     "ALTER TABLE printers ADD COLUMN octoprint_url TEXT NOT NULL DEFAULT ''"],
         ['printers',      'octoprint_api_key', "ALTER TABLE printers ADD COLUMN octoprint_api_key TEXT NOT NULL DEFAULT ''"],
@@ -2383,6 +2509,18 @@ function run_migrations(PDO $pdo): void
     if (in_array('download_jobs.source', $added, true)) {
         $exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_src_unique ON download_jobs(source, model_id, file_type)");
     }
+
+    // Library card-index cache table (idempotent; reaches DBs created before the
+    // cache existed). See init_schema() for the canonical definition.
+    $exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS library_index (
+            slug    TEXT NOT NULL,
+            folder  TEXT NOT NULL,
+            sig     TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (slug, folder)
+        )
+    SQL);
 
     if ($added && function_exists('logln')) {
         @logln('DB migrated — added column(s): ' . implode(', ', $added));
@@ -2443,6 +2581,7 @@ function init_schema(PDO $pdo): void
             slug         TEXT    NOT NULL DEFAULT '',
             name         TEXT    NOT NULL DEFAULT '',
             creator      TEXT    NOT NULL DEFAULT '',
+            creator_uid  TEXT    NOT NULL DEFAULT '',
             file_type    TEXT    NOT NULL DEFAULT 'STL',
             status       TEXT    NOT NULL DEFAULT 'queued',
             attempts     INTEGER NOT NULL DEFAULT 0,
@@ -2609,6 +2748,20 @@ function init_schema(PDO $pdo): void
         );
     SQL);
     $pdo->exec("INSERT OR IGNORE INTO hex3d_crawl_state (id, status) VALUES (1, 'idle')");
+
+    // Library card-index cache — one row per model folder. Avoids re-walking every
+    // folder's file tree on every library load. `sig` is a cheap validity stamp
+    // (folder + .farfetched mtimes); `payload` is the JSON of the expensive scan
+    // fields. Stale rows are pruned by library.php as folders come and go.
+    $pdo->exec(<<<'SQL'
+        CREATE TABLE IF NOT EXISTS library_index (
+            slug    TEXT NOT NULL,
+            folder  TEXT NOT NULL,
+            sig     TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (slug, folder)
+        );
+    SQL);
 }
 
 // ---- View helpers ---------------------------------------------------------
@@ -2733,7 +2886,65 @@ function csrf_ok(): bool
         && hash_equals((string) $_SESSION['csrf'], (string) $_POST['csrf']);
 }
 
-// ---- Event log (errors/warnings the user can see) -------------------------
+// ---- MakerWorld .scad recovery token --------------------------------------
+// The recovery bookmarklet runs on makerworld.com (past Cloudflare + logged in)
+// and POSTs scadContent back here. That POST is cross-site, so it can't rely on
+// the session cookie (SameSite) — it authenticates with this long-lived secret
+// instead. Generated once, stored 0600 in PRIVATE_DIR. Rotate by deleting it.
+define('MW_RECOVER_TOKEN_FILE', PRIVATE_DIR . '/mw_recover.tok');
+
+function mw_recover_token(): string
+{
+    if (is_file(MW_RECOVER_TOKEN_FILE)) {
+        $t = trim((string) @file_get_contents(MW_RECOVER_TOKEN_FILE));
+        if ($t !== '') {
+            return $t;
+        }
+    }
+    $t = bin2hex(random_bytes(24));
+    @file_put_contents(MW_RECOVER_TOKEN_FILE, $t, LOCK_EX);
+    @chmod(MW_RECOVER_TOKEN_FILE, 0600);
+    return $t;
+}
+
+/**
+ * Resolve a MakerWorld library folder from a designId by matching meta.json's
+ * model_id, with a folder-name-prefix fallback. Returns the absolute path or ''.
+ */
+function mw_folder_for_design(string $designId): string
+{
+    $designId = preg_replace('/[^0-9]/', '', $designId);
+    if ($designId === '') {
+        return '';
+    }
+    $base = get_makerworld_dir();
+    if (!is_dir($base)) {
+        return '';
+    }
+    $prefixMatch = '';
+    foreach (scandir($base) ?: [] as $name) {
+        if ($name === '.' || $name === '..' || ($name !== '' && $name[0] === '.')) {
+            continue;
+        }
+        $abs = $base . '/' . $name;
+        if (!is_dir($abs)) {
+            continue;
+        }
+        $meta = $abs . '/.farfetched/meta.json';
+        if (is_file($meta)) {
+            $md = json_decode((string) @file_get_contents($meta), true);
+            if (is_array($md) && (string) ($md['model_id'] ?? '') === $designId) {
+                return $abs; // exact meta match wins
+            }
+        }
+        // Fallback: folders are named "{id} - {title}" or "{id}-{slug}".
+        if ($prefixMatch === '' && (str_starts_with($name, $designId . ' ') || str_starts_with($name, $designId . '-'))) {
+            $prefixMatch = $abs;
+        }
+    }
+    return $prefixMatch;
+}
+
 // A curated, human-readable log of the things that actually matter — auth
 // failures, refused links, skips — so a silent stall becomes a visible line.
 // Separate from worker.log (which is raw stdout). Rotates at ~512 KB.

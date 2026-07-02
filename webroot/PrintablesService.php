@@ -234,7 +234,7 @@ final class PrintablesService
               }
             }";
         };
-        $baseFields = 'id slug name user { publicUsername } image { filePath }';
+        $baseFields = 'id slug name user { publicUsername handle } image { filePath }';
         $sizeFields = $baseFields . ' stls { fileSize } otherFiles { fileSize }';
 
         $vars = [
@@ -281,6 +281,7 @@ final class PrintablesService
                 'slug'    => (string) ($it['slug'] ?? ''),
                 'name'    => (string) ($it['name'] ?? 'Untitled'),
                 'creator' => (string) ($it['user']['publicUsername'] ?? 'unknown'),
+                'creator_id' => (string) ($it['user']['handle'] ?? ''),
                 'thumb'   => (string) $thumb,
                 'images'  => [$thumb],
                 'size'    => $size,
@@ -319,7 +320,7 @@ final class PrintablesService
               }
             }";
         };
-        $baseFields = 'id slug name image { filePath } user { publicUsername } price club: premium';
+        $baseFields = 'id slug name image { filePath } user { publicUsername handle } price club: premium';
         $sizeFields = $baseFields . ' stls { fileSize } otherFiles { fileSize }';
 
         $vars = [
@@ -364,6 +365,7 @@ final class PrintablesService
                 'slug'    => (string) ($it['slug'] ?? ''),
                 'name'    => (string) ($it['name'] ?? 'Untitled'),
                 'creator' => (string) ($it['user']['publicUsername'] ?? 'unknown'),
+                'creator_id' => (string) ($it['user']['handle'] ?? ''),
                 'thumb'   => (string) $thumb,
                 'images'  => [$thumb],
                 'size'    => $size,
@@ -678,6 +680,27 @@ final class PrintablesService
      *
      * @return array{name:string,slug:string}
      */
+    /**
+     * Resolve a model's author handle (the '@'-less slug that userModels accepts,
+     * e.g. "VC_Design") from its id — used by the author-key backfill.
+     * Returns '' if unavailable.
+     */
+    public function authorHandleForModel(string $modelId): string
+    {
+        $this->lastError = '';
+        $modelId = trim($modelId);
+        if ($modelId === '') {
+            return '';
+        }
+        $query = <<<'GQL'
+        query ModelAuthor($id: ID!) {
+          model: print(id: $id) { id user { handle } }
+        }
+        GQL;
+        $data = $this->gql($query, ['id' => $modelId]);
+        return (string) ($data['model']['user']['handle'] ?? '');
+    }
+
     public function getModelInfo(string $modelId): array
     {
         $this->lastError = '';

@@ -323,23 +323,26 @@ while (true) {
     $jobCoverUrl = (string) ($job['cover_url'] ?? '');
     $jobSlug     = (string) ($job['source'] ?? '');
     $jobCreator  = (string) ($job['creator'] ?? '');
+    $jobCreatorUid = (string) ($job['creator_uid'] ?? '');
     $jobName     = (string) ($job['name'] ?? '');
     $jobModelId  = (string) ($job['model_id'] ?? '');
     $jobCollection = (string) ($job['collection_name'] ?? '');
-    $upd = new class($jobCoverUrl, $jobSlug, $jobCreator, $jobName, $jobModelId, $jobCollection) {
+    $upd = new class($jobCoverUrl, $jobSlug, $jobCreator, $jobName, $jobModelId, $jobCollection, $jobCreatorUid) {
         private string $coverUrl;
         private string $slug;
         private string $creator;
         private string $mname;
         private string $modelId;
         private string $collection;
-        public function __construct(string $coverUrl, string $slug, string $creator, string $mname, string $modelId, string $collection) {
+        private string $creatorUid;
+        public function __construct(string $coverUrl, string $slug, string $creator, string $mname, string $modelId, string $collection, string $creatorUid) {
             $this->coverUrl = $coverUrl;
             $this->slug = $slug;
             $this->creator = $creator;
             $this->mname = $mname;
             $this->modelId = $modelId;
             $this->collection = $collection;
+            $this->creatorUid = $creatorUid;
         }
         public function execute(array $p): void {
             db_exec_retry(
@@ -377,6 +380,7 @@ while (true) {
                             'source'   => $this->slug,
                             'model_id' => $this->modelId,
                             'creator'  => $this->creator,
+                            'creator_uid' => $this->creatorUid,
                             'name'     => $this->mname,
                             'saved_at' => date('c'),
                         ], JSON_UNESCAPED_SLASHES));
@@ -500,16 +504,44 @@ while (true) {
                             @unlink($dest);
                             logln('  Removed zip (keep_zip off).');
                         }
-                        $finalPath = $destDir;
                     } else {
-                        logln('  Extract failed; zip kept at ' . $dest);
-                        $finalPath = $dest;
+                        // extract_zip_safe() returns false both for a real failure
+                        // AND for a valid-but-EMPTY archive. MakerWorld serves an
+                        // empty pack for protected/parametric models whose only real
+                        // source is the customizer .scad (recovered just below), so
+                        // distinguish the two: drop the useless empty stub, but keep
+                        // a genuinely broken zip for inspection.
+                        $entryCount = -1;
+                        $zc = new ZipArchive();
+                        if ($zc->open($dest) === true) { $entryCount = $zc->numFiles; $zc->close(); }
+                        if ($entryCount === 0) {
+                            @unlink($dest);
+                            logln('  MakerWorld pack was empty (protected/parametric — no packaged files).');
+                        } else {
+                            logln('  Extract failed; zip kept at ' . $dest);
+                        }
                     }
+                    $finalPath = $destDir;
                 }
-                $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $finalPath, ':id' => $jobId]);
-            } else {
-                $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $mw->lastError, ':path' => '', ':id' => $jobId]);
-                logln('  MakerWorld download failed: ' . $mw->lastError);
+                // (Parametric .scad is recovered browser-side via the Recover
+                // .scad bookmarklet — MakerWorld's customizer page is behind
+                // Cloudflare, so the server can't fetch it here.)
+
+                // Status by what actually landed: extracted files, a bare .3mf, or
+                // a recovered .scad all count. An empty pack with nothing recovered
+                // is a genuine skip, not a false "done".
+                $landed = false;
+                foreach (scandir($destDir) ?: [] as $f) {
+                    if ($f === '.' || $f === '..' || $f === '.farfetched') { continue; }
+                    if (is_file($destDir . '/' . $f) || is_dir($destDir . '/' . $f)) { $landed = true; break; }
+                }
+                if ($landed) {
+                    $upd->execute([':st' => 'done', ':inc' => 1, ':err' => '', ':path' => $finalPath, ':id' => $jobId]);
+                } else {
+                    $msg = 'MakerWorld provided no downloadable files (protected or parametric-only source).';
+                    $upd->execute([':st' => classify_skip($msg), ':inc' => 1, ':err' => $msg, ':path' => '', ':id' => $jobId]);
+                    logerr('warn', '  Skipped: ' . $msg);
+                }
             }
         } catch (Throwable $e) {
             $upd->execute([':st' => 'error', ':inc' => 1, ':err' => $e->getMessage(), ':path' => '', ':id' => $jobId]);

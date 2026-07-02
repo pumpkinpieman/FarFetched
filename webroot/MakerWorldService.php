@@ -28,6 +28,9 @@ final class MakerWorldService
     private const UA    = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FarFetched/1.0';
     private const CDN_RE = '~https://makerworld\.bblmw\.com/[^\s"\'\\\\]+~';
 
+    /** Max per-design cover lookups per author page (bounds request latency). */
+    private const MW_AUTHOR_COVER_BACKFILL_MAX = 24;
+
     public string $lastError      = '';
     public int    $lastTotalCount = 0;
     /** Raw hit count of the most recent search page (before NSFW filtering). */
@@ -154,7 +157,37 @@ final class MakerWorldService
         }
         $this->lastPageHitCount = count($hits);
 
-        return $this->normalizeHits($hits, $showNsfw);
+        $rows = $this->normalizeHits($hits, $showNsfw);
+
+        // The author endpoint (published/{uid}/design) returns hits WITHOUT any
+        // cover/gallery field, so normalizeHits yields empty thumbs. Backfill each
+        // missing cover from the per-design endpoint (verified coverUrl). Bounded
+        // (MW_AUTHOR_COVER_BACKFILL_MAX) so a full page can't fan out into dozens
+        // of sequential API calls and blow the request timeout; each call is
+        // isolated so one failure can't abort the whole result set.
+        $budget = self::MW_AUTHOR_COVER_BACKFILL_MAX;
+        foreach ($rows as &$row) {
+            if ($budget <= 0) {
+                break;
+            }
+            if (($row['thumb'] ?? '') !== '' || ($row['id'] ?? '') === '') {
+                continue;
+            }
+            $budget--;
+            try {
+                $cover = $this->coverForModel((string) $row['id']);
+                if ($cover !== '') {
+                    $cover = $this->thumbTransform($cover);
+                    $row['thumb']  = $cover;
+                    $row['images'] = [$cover];
+                }
+            } catch (\Throwable $e) {
+                // Non-fatal: leave this row's thumb empty and keep going.
+            }
+        }
+        unset($row);
+
+        return $rows;
     }
 
     /**
@@ -201,31 +234,12 @@ final class MakerWorldService
             // so the slider opens on the same image as the static thumb. Each URL is
             // forced through the OSS transform to a small webp — this also collapses
             // multi-MB animated GIFs to a light static frame, keeping the grid cheap.
-            $images = [];
-            $cover  = (string) ($hit['cover'] ?? '');
-            if (isset($hit['designExtension']['design_pictures']) && is_array($hit['designExtension']['design_pictures'])) {
-                foreach ($hit['designExtension']['design_pictures'] as $pic) {
-                    if (!is_array($pic)) {
-                        continue;
-                    }
-                    $u = (string) ($pic['url'] ?? '');
-                    if ($u === '') {
-                        continue;
-                    }
-                    $u = $this->thumbTransform($u);
-                    if (!in_array($u, $images, true)) {
-                        $images[] = $u;
-                    }
-                    if (count($images) >= 8) { // cap gallery size
-                        break;
-                    }
-                }
-            }
-            $thumb = $cover !== '' ? $this->thumbTransform($cover) : '';
-            if ($thumb !== '' && (empty($images) || $images[0] !== $thumb)) {
-                array_unshift($images, $thumb);
-                $images = array_slice(array_values(array_unique($images)), 0, 8);
-            }
+            //
+            // The keyword-search and author (/published/{uid}/design) endpoints nest
+            // the cover under different keys, so resolve defensively across the known
+            // shapes rather than assuming one field. mwCollectImages() returns
+            // [thumb, images[]] already transformed and de-duplicated.
+            [$thumb, $images] = $this->mwCollectImages($hit);
 
             $out[] = [
                 'id'         => (string) ($hit['id'] ?? ''),
@@ -279,6 +293,243 @@ final class MakerWorldService
             if ($u !== '') return $u;
         }
         return '';
+    }
+
+    /**
+     * Resolve a design's creator numeric uid. MakerWorld author search is keyed
+     * by this uid — the creator's name/handle are not valid search keys.
+     *
+     * Primary source: the public model page's embedded __NEXT_DATA__, verified to
+     * carry props.pageProps.design.designCreator = {uid,name,handle}. The JSON API
+     * detail endpoint (design-service/design/{id}) frequently omits designCreator
+     * (region/auth dependent), which is why it's only a fallback here.
+     *
+     * Returns '' when it can't be determined.
+     */
+    public function creatorUidForModel(string $designId): string
+    {
+        $designId = preg_replace('/[^0-9]/', '', $designId);
+        if ($designId === '') {
+            return '';
+        }
+
+        // --- Primary: model-page __NEXT_DATA__ -------------------------------
+        $uid = $this->uidFromModelPage($designId);
+        if ($uid !== '') {
+            return $uid;
+        }
+
+        // --- Fallback: JSON detail endpoint (best-effort) --------------------
+        $json = $this->apiGet(self::API . '/design-service/design/' . $designId);
+        if (!is_array($json)) {
+            return '';
+        }
+        $root = (isset($json['data']) && is_array($json['data'])) ? $json['data'] : $json;
+        if (isset($root['designCreator']['uid']) && $root['designCreator']['uid']) {
+            return (string) $root['designCreator']['uid'];
+        }
+        foreach (['createId', 'userId', 'creatorUid'] as $k) {
+            if (!empty($root[$k]) && is_scalar($root[$k])) {
+                return (string) $root[$k];
+            }
+        }
+        if (isset($root['instances'][0]) && is_array($root['instances'][0])) {
+            $u = $root['instances'][0]['designCreatorUid'] ?? '';
+            if ($u) {
+                return (string) $u;
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Pull the creator uid out of a model page's __NEXT_DATA__ blob.
+     * Verified path: props.pageProps.design.designCreator.uid. The model's own
+     * creator appears before any relateDesigns, so the first designCreator match
+     * is a safe regex fallback if the JSON shape ever shifts.
+     */
+    private function uidFromModelPage(string $designId): string
+    {
+        $html = $this->httpGetRaw('https://makerworld.com/en/models/' . $designId);
+        if ($html === '') {
+            return '';
+        }
+        if (preg_match('#<script id="__NEXT_DATA__"[^>]*>(.*?)</script>#s', $html, $m)) {
+            $j = json_decode($m[1], true);
+            if (is_array($j)) {
+                $uid = $j['props']['pageProps']['design']['designCreator']['uid'] ?? null;
+                if ($uid && is_scalar($uid)) {
+                    return (string) $uid;
+                }
+                // Some responses expose pageProps at the top level (data route shape)
+                $uid = $j['pageProps']['design']['designCreator']['uid'] ?? null;
+                if ($uid && is_scalar($uid)) {
+                    return (string) $uid;
+                }
+            }
+        }
+        if (preg_match('#"designCreator":\{"uid":(\d+)#', $html, $m)) {
+            return $m[1];
+        }
+        return '';
+    }
+
+    /**
+     * Plain GET returning the raw response body (HTML), following the id -> slug
+     * redirect. Used for scraping public pages that carry data the JSON API omits.
+     */
+    private function httpGetRaw(string $url): string
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 25,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_HTTPHEADER     => [
+                'User-Agent: ' . self::UA,
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: en-US,en;q=0.9',
+            ],
+        ]);
+        if ($this->token !== '') {
+            // Some pages (e.g. the makerlab customizer) render source only when
+            // authenticated; harmless on public pages.
+            curl_setopt($ch, CURLOPT_COOKIE, 'token=' . $this->token);
+        }
+        $body   = curl_exec($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($body === false || $status >= 400) {
+            return '';
+        }
+        return (string) $body;
+    }
+
+    /**
+     * Recover a parametric model's OpenSCAD source. MakerWorld omits the .scad
+     * from the normal download pack, but the customizer page embeds it verbatim
+     * at props.pageProps.scadContent (raw text, present even when isProtected).
+     *
+     * Returns ['filename' => string, 'code' => string], or null when the model
+     * isn't OpenSCAD-parametric (e.g. Fusion edits) or the source isn't exposed.
+     */
+    public function scadForModel(string $designId): ?array
+    {
+        $designId = preg_replace('/[^0-9]/', '', $designId);
+        if ($designId === '') {
+            return null;
+        }
+        $url  = 'https://makerworld.com/en/makerlab/parametricModelMaker?designId=' . $designId . '&modelName=model.scad';
+        $html = $this->httpGetRaw($url);
+        if ($html === '') {
+            return null;
+        }
+        if (!preg_match('#<script id="__NEXT_DATA__"[^>]*>(.*?)</script>#s', $html, $m)) {
+            return null;
+        }
+        $j = json_decode($m[1], true);
+        if (!is_array($j)) {
+            return null;
+        }
+        $pp = $j['props']['pageProps'] ?? ($j['pageProps'] ?? []);
+        if (!is_array($pp)) {
+            return null;
+        }
+        if (!empty($pp['isFusionEdit'])) {
+            return null; // Fusion parametric, not OpenSCAD — no .scad source
+        }
+        $code = (string) ($pp['scadContent'] ?? '');
+        if (trim($code) === '') {
+            return null;
+        }
+
+        // Sanitize the embedded filename to a safe basename ending in .scad.
+        $fname = (string) ($pp['modelName'] ?? '');
+        $fname = basename(str_replace('\\', '/', $fname));
+        $fname = preg_replace('/[^\w.\- ]+/u', '_', $fname) ?? '';
+        $fname = trim($fname);
+        if ($fname === '') {
+            $fname = 'model.scad';
+        }
+        if (!preg_match('/\.(scad|py)$/i', $fname)) {
+            $fname .= '.scad';
+        }
+
+        return ['filename' => $fname, 'code' => $code];
+    }
+
+    /**
+     * Diagnostic sibling of scadForModel(): performs the same customizer fetch
+     * but returns a full step-by-step report instead of null/data, so we can see
+     * exactly where recovery fails from the container (fetch vs parse vs empty).
+     *
+     * @return array<string,mixed>
+     */
+    public function probeScad(string $designId, bool $useToken = true): array
+    {
+        $designId = preg_replace('/[^0-9]/', '', $designId);
+        $url = 'https://makerworld.com/en/makerlab/parametricModelMaker?designId=' . $designId . '&modelName=model.scad';
+        $out = [
+            'designId'    => $designId,
+            'url'         => $url,
+            'token_set'   => $this->token !== '',
+            'use_token'   => $useToken && $this->token !== '',
+        ];
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 25,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_HTTPHEADER     => [
+                'User-Agent: ' . self::UA,
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: en-US,en;q=0.9',
+            ],
+        ]);
+        if ($useToken && $this->token !== '') {
+            curl_setopt($ch, CURLOPT_COOKIE, 'token=' . $this->token);
+        }
+        $body = curl_exec($ch);
+        $out['http_status']   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $out['effective_url'] = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
+        $out['redirect_count']= (int) curl_getinfo($ch, CURLINFO_REDIRECT_COUNT);
+        $out['curl_error']    = curl_error($ch);
+        curl_close($ch);
+
+        if ($body === false) {
+            $out['body_len'] = 0;
+            $out['note'] = 'curl failed (network/DNS/TLS).';
+            return $out;
+        }
+        $body = (string) $body;
+        $out['body_len']   = strlen($body);
+        $out['body_head']  = substr($body, 0, 200);
+        $out['has_next_data'] = (bool) preg_match('#<script id="__NEXT_DATA__"#', $body);
+
+        if (!$out['has_next_data']) {
+            $out['note'] = 'No __NEXT_DATA__ — likely a login wall, bot check, or non-model page.';
+            return $out;
+        }
+        preg_match('#<script id="__NEXT_DATA__"[^>]*>(.*?)</script>#s', $body, $m);
+        $j = json_decode($m[1] ?? '', true);
+        if (!is_array($j)) {
+            $out['note'] = '__NEXT_DATA__ present but not decodable.';
+            return $out;
+        }
+        $pp = $j['props']['pageProps'] ?? ($j['pageProps'] ?? []);
+        $out['modelName']    = $pp['modelName'] ?? null;
+        $out['isFusionEdit'] = $pp['isFusionEdit'] ?? null;
+        $out['isProtected']  = $pp['isProtected'] ?? null;
+        $out['scad_len']     = strlen((string) ($pp['scadContent'] ?? ''));
+        $out['note']         = $out['scad_len'] > 0 ? 'OK — scadContent present.' : 'Page loaded but scadContent empty.';
+        return $out;
     }
 
     public function getPrintStats(string $designId): array
@@ -610,9 +861,88 @@ final class MakerWorldService
     }
 
     /**
-     * Force a bblmw CDN image URL through the OSS resize/format transform so the
-     * grid loads small static webp thumbnails instead of full-size (and sometimes
-     * multi-MB animated GIF) originals. Any pre-existing query is replaced.
+     * Resolve [thumb, images[]] from a design hit across the differing shapes the
+     * keyword-search and author endpoints return. Order of preference:
+     *   1. designExtension.design_pictures[].url   (gallery — keyword endpoint)
+     *   2. common cover keys (cover, coverUrl, cover_url, coverPic, image, ...)
+     *   3. bounded recursive scan for the first plausible image URL (author endpoint)
+     * All URLs pass through thumbTransform; the result is de-duplicated and capped.
+     *
+     * @return array{0:string,1:array<int,string>}  [thumb, images]
+     */
+    private function mwCollectImages(array $hit): array
+    {
+        $images = [];
+        $push = function (string $u) use (&$images): void {
+            $u = trim($u);
+            if ($u === '' || !preg_match('~^https?://~i', $u)) {
+                return;
+            }
+            $u = $this->thumbTransform($u);
+            if (!in_array($u, $images, true) && count($images) < 8) {
+                $images[] = $u;
+            }
+        };
+
+        // 1) Explicit gallery (keyword endpoint).
+        $gallery = $hit['designExtension']['design_pictures'] ?? null;
+        if (is_array($gallery)) {
+            foreach ($gallery as $pic) {
+                if (is_array($pic)) {
+                    $push((string) ($pic['url'] ?? $pic['picUrl'] ?? $pic['src'] ?? ''));
+                } elseif (is_string($pic)) {
+                    $push($pic);
+                }
+            }
+        }
+
+        // 2) Known cover keys (author endpoint uses a bare cover string/url).
+        foreach (['cover', 'coverUrl', 'cover_url', 'coverPic', 'coverPicture', 'image', 'imageUrl', 'thumbnail'] as $k) {
+            $v = $hit[$k] ?? null;
+            if (is_string($v)) {
+                $push($v);
+            } elseif (is_array($v)) {
+                $push((string) ($v['url'] ?? $v['src'] ?? ''));
+            }
+        }
+
+        // 3) Last resort: bounded recursive scan for the first image-looking URL.
+        if (!$images) {
+            $found = $this->mwDeepFindImage($hit, 0);
+            if ($found !== '') {
+                $push($found);
+            }
+        }
+
+        $thumb = $images[0] ?? '';
+        return [$thumb, $images];
+    }
+
+    /** Depth-bounded scan for the first https image URL anywhere in a hit. */
+    private function mwDeepFindImage($node, int $depth): string
+    {
+        if ($depth > 4 || !is_array($node)) {
+            return '';
+        }
+        foreach ($node as $v) {
+            if (is_string($v) && preg_match('~^https?://[^\s"]+\.(?:png|jpe?g|webp|gif|avif)(?:[?#]|$)~i', $v)) {
+                return $v;
+            }
+        }
+        foreach ($node as $v) {
+            if (is_array($v)) {
+                $r = $this->mwDeepFindImage($v, $depth + 1);
+                if ($r !== '') {
+                    return $r;
+                }
+            }
+        }
+        return '';
+    }
+
+    /**
+     * Rewrite a MakerWorld CDN image URL to a resized, webp-encoded variant via
+     * the Alibaba OSS image pipeline. Non-CDN URLs are returned untouched.
      */
     private function thumbTransform(string $url, int $width = 800): string
     {

@@ -485,7 +485,18 @@ $csrf = csrf_token();
     </div>
 
     <div class="searchbar" style="margin-top:8px;">
-      <input type="text" id="pasteId" placeholder="Paste URL to download — e.g. https://www.printables.com/model/123456-… or a model ID" autocomplete="off" style="flex:1;">
+      <?php
+        $pasteExamples = [
+            'printables'  => 'https://www.printables.com/model/123456-…',
+            'makerworld'  => 'https://makerworld.com/models/123456-…',
+            'thingiverse' => 'https://www.thingiverse.com/thing:123456',
+            'cults3d'     => 'https://cults3d.com/en/3d-model/category/slug',
+            'stlflix'     => 'https://stlflix.com/model/123456',
+            'creality'    => 'https://www.crealitycloud.com/model-detail/slug?profileId=…',
+        ];
+        $pasteEg = $pasteExamples[$source] ?? 'a model URL';
+      ?>
+      <input type="text" id="pasteId" placeholder="Paste URL to download — e.g. <?= htmlspecialchars($pasteEg, ENT_QUOTES) ?> or a model ID" autocomplete="off" style="flex:1;">
       <button class="btn-primary" id="pasteGo">Add to queue</button>
       <span id="pasteStatus" style="font-size:13px;color:var(--muted);align-self:center;margin-left:8px;"></span>
     </div>
@@ -499,6 +510,7 @@ $csrf = csrf_token();
         <div class="card"
              data-id="<?= e($m['id']) ?>" data-slug="<?= e($m['slug']) ?>"
              data-name="<?= e($m['name']) ?>" data-creator="<?= e($m['creator']) ?>"
+             data-creator-id="<?= e((string) ($m['creator_id'] ?? '')) ?>"
              data-thumb="<?= e($m['thumb'] ?? '') ?>">
 
           <input type="checkbox" class="pick" aria-label="Select model">
@@ -527,11 +539,11 @@ $csrf = csrf_token();
           </div>
           <div class="meta">
             <div class="mname"><?= e($m['name']) ?></div>
-            <?php if (($m['creator'] ?? '') !== ''): ?><div class="mcreator">by <a href="#" class="author-search" data-author="<?= e($m['creator']) ?>" title="Search this creator's models"><?= e($m['creator']) ?></a></div><?php endif; ?>
+            <?php if (($m['creator'] ?? '') !== ''): $mCreatorId = (string) ($m['creator_id'] ?? ''); ?><div class="mcreator">by <a href="#" class="author-search" data-author="<?= e($m['creator']) ?>"<?= $mCreatorId !== '' ? ' data-author-id="' . e($mCreatorId) . '"' : '' ?> title="Search this creator's models"><?= e($m['creator']) ?></a></div><?php endif; ?>
           </div>
-          <?php if (($m['creator'] ?? '') !== ''): $au = source_author_url($source, (string) $m['creator']); ?>
+          <?php if (($m['creator'] ?? '') !== ''): $au = source_author_url($source, (string) $m['creator']); $mCreatorId = (string) ($m['creator_id'] ?? ''); ?>
           <div class="card-foot">
-            <a href="#" class="foot-btn author-search" data-author="<?= e($m['creator']) ?>" title="Search this creator's models">🔍 More by author</a>
+            <a href="#" class="foot-btn author-search" data-author="<?= e($m['creator']) ?>"<?= $mCreatorId !== '' ? ' data-author-id="' . e($mCreatorId) . '"' : '' ?> title="Search this creator's models">🔍 More by author</a>
             <?php if ($au !== ''): ?><a href="<?= e($au) ?>" class="foot-btn" target="_blank" rel="noopener" title="View on source site">↗ Source</a><?php endif; ?>
           </div>
           <?php endif; ?>
@@ -731,6 +743,7 @@ $csrf = csrf_token();
     card.className = 'card';
     card.dataset.id = m.id; card.dataset.slug = m.slug;
     card.dataset.name = m.name; card.dataset.creator = m.creator;
+    card.dataset.creatorId = m.creator_id || '';
     card.dataset.thumb = m.thumb || (Array.isArray(m.images) && m.images.length ? m.images[0] : '');
     // Restore selection highlight if already in the store.
     if (selHas(m.id)) card.classList.add('sel');
@@ -778,6 +791,7 @@ $csrf = csrf_token();
       const a = document.createElement('a');
       a.href = '#'; a.className = 'author-search'; a.textContent = m.creator;
       a.dataset.author = m.creator; a.title = "Search this creator's models";
+      if (m.creator_id) a.dataset.authorId = m.creator_id;
       mc.appendChild(a);
       // Extended footer: "Their models" (in-app search) + "Source" (external).
       const foot = document.createElement('div');
@@ -785,6 +799,7 @@ $csrf = csrf_token();
       const search = document.createElement('a');
       search.href = '#'; search.className = 'foot-btn author-search';
       search.dataset.author = m.creator; search.title = "Search this creator's models";
+      if (m.creator_id) search.dataset.authorId = m.creator_id;
       search.textContent = '🔍 More by author';
       foot.appendChild(search);
       const extUrl = authorUrl(SOURCE, m.creator);
@@ -1021,35 +1036,43 @@ $csrf = csrf_token();
     }
   }
 
-  // Delegated: clicking a creator name runs an in-app keyword search for them.
+  // Delegated: clicking a creator name runs an in-app author search.
   document.addEventListener('click', (ev) => {
     const a = ev.target.closest && ev.target.closest('.author-search');
     if (!a) return;
     ev.preventDefault();
-    const author = a.dataset.author || a.textContent || '';
-    if (!author) return;
-    // Printables & Thingiverse support real author search; others fall back to a
-    // keyword search on the name.
-    const realAuthor = (SOURCE === 'printables' || SOURCE === 'thingiverse');
-    window._authorMode = realAuthor ? author : '';
+    const label = a.dataset.author || a.textContent || '';   // display name
+    if (!label) return;
+    // Printables & Thingiverse search by the creator name. MakerWorld searches by
+    // the creator's numeric uid (carried on the card as data-author-id); its name
+    // is not a valid search key. Anything else falls back to a keyword search.
+    const aid = a.dataset.authorId || '';
+    let realAuthor, param = label;
+    if (aid) { realAuthor = true; param = aid; }
+    else if (SOURCE === 'printables' || SOURCE === 'thingiverse') { realAuthor = true; param = label; }
+    else { realAuthor = false; }
+    window._authorMode = realAuthor ? param : '';
     if (searchInput) {
-      searchInput.value = realAuthor ? '' : author;
-      searchQuery = realAuthor ? '' : author;
-      runAuthorOrSearch(author, realAuthor);
+      searchInput.value = realAuthor ? '' : label;
+      searchQuery = realAuthor ? '' : label;
+      runAuthorOrSearch(label, param, realAuthor);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   });
 
   // Run a search in author mode (real) or keyword mode (fallback).
-  function runAuthorOrSearch(author, realAuthor) {
+  //   label = human-readable name shown in the header
+  //   param = the actual search key (name for PT/TV, numeric uid for MakerWorld)
+  function runAuthorOrSearch(label, param, realAuthor) {
     mwCatActive = '';
     mode = 'search';
-    searchQuery = realAuthor ? '' : author;
+    window._authorMode = realAuthor ? param : '';
+    searchQuery = realAuthor ? '' : label;
     searchNext = 0;
     nextCursor = null;
     grid.innerHTML = '';
     if (loadMoreBtn) loadMoreBtn.style.display = 'none';
-    if (pageTitle) pageTitle.textContent = (realAuthor ? 'Models by ' : 'Search: ') + author;
+    if (pageTitle) pageTitle.textContent = (realAuthor ? 'Models by ' : 'Search: ') + label;
     if (searchClear) searchClear.style.display = 'inline-block';
     refresh();
   }
@@ -1099,15 +1122,26 @@ $csrf = csrf_token();
   if (searchClear) searchClear.addEventListener('click', clearSearch);
   if (searchInput) searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
 
-  // If arrived via a library "by author" link (?author=NAME), run that search.
+  // If arrived via a library "by author" link, run that search.
+  //   Printables/Thingiverse:  ?author=<name>
+  //   MakerWorld (uid known):  ?author=<uid>&authorname=<name>
+  //   MakerWorld (old, no uid): ?author=<name>  -> keyword fallback
   (function () {
     const params = new URLSearchParams(window.location.search);
     const author = params.get('author');
     if (author && searchInput) {
-      const realAuthor = (SOURCE === 'printables' || SOURCE === 'thingiverse');
-      window._authorMode = realAuthor ? author : '';
-      searchInput.value = realAuthor ? '' : author;
-      runAuthorOrSearch(author, realAuthor);
+      const nameParam = params.get('authorname') || '';
+      let realAuthor, param = author, label = author;
+      if (SOURCE === 'makerworld' || SOURCE === 'creality') {
+        // A numeric author param is a real user id; show the passed name if any.
+        realAuthor = /^\d+$/.test(author);
+        if (realAuthor && nameParam) label = nameParam;
+      } else {
+        realAuthor = (SOURCE === 'printables' || SOURCE === 'thingiverse');
+      }
+      window._authorMode = realAuthor ? param : '';
+      searchInput.value = realAuthor ? '' : label;
+      runAuthorOrSearch(label, param, realAuthor);
     }
   })();
   // Re-run the current search when the NSFW filter is toggled.
@@ -1404,7 +1438,7 @@ $csrf = csrf_token();
   if (grid) grid.addEventListener('change', e => {
     if (!e.target.classList.contains('pick')) return;
     const card = e.target.closest('.card');
-    if (e.target.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator,thumb:card.dataset.thumb||""});
+    if (e.target.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator,creator_id:card.dataset.creatorId||"",thumb:card.dataset.thumb||""});
     else selDel(card.dataset.id);
     card.classList.toggle('sel', e.target.checked);
     refresh();
@@ -1419,7 +1453,7 @@ $csrf = csrf_token();
     if (!card) return;
     const box = card.querySelector('.pick');
     box.checked = !box.checked;
-    if (box.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator,thumb:card.dataset.thumb||""});
+    if (box.checked) selSet(card.dataset.id, {id:card.dataset.id,slug:card.dataset.slug,name:card.dataset.name,creator:card.dataset.creator,creator_id:card.dataset.creatorId||"",thumb:card.dataset.thumb||""});
     else selDel(card.dataset.id);
     card.classList.toggle('sel', box.checked);
     refresh();
@@ -1428,7 +1462,7 @@ $csrf = csrf_token();
     const cards = grid ? [...grid.querySelectorAll('.card')] : [];
     const on = cards.some(c => !selHas(c.dataset.id));
     cards.forEach(c => {
-      if (on) selSet(c.dataset.id, {id:c.dataset.id,slug:c.dataset.slug,name:c.dataset.name,creator:c.dataset.creator,thumb:c.dataset.thumb||""});
+      if (on) selSet(c.dataset.id, {id:c.dataset.id,slug:c.dataset.slug,name:c.dataset.name,creator:c.dataset.creator,creator_id:c.dataset.creatorId||"",thumb:c.dataset.thumb||""});
       else selDel(c.dataset.id);
       c.classList.toggle('sel', on);
       const box = c.querySelector('.pick');
@@ -1504,21 +1538,28 @@ $csrf = csrf_token();
   }
 
   if (pasteGo) pasteGo.addEventListener('click', async () => {
-    const id = extractModelId(pasteInput.value);
-    if (!id) { pasteStatus.textContent = 'Could not find a model ID in that input.'; return; }
+    const raw = (pasteInput.value || '').trim();
+    const isUrl = /^https?:\/\//i.test(raw);
+    const id = extractModelId(raw);           // fallback for bare ids
+    if (!isUrl && !id) { pasteStatus.textContent = 'Could not find a model ID in that input.'; return; }
     pasteGo.disabled = true;
-    pasteStatus.textContent = 'Queueing model ' + id + '…';
+    pasteStatus.textContent = 'Queueing…';
     try {
       const res = await fetch('enqueue.php', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csrf: CSRF, fileType: 'PACK', models: [{ id: id, slug: '', name: '', creator: '' }] })
+        // Send the raw URL (enqueue resolves source+id from the host) and the
+        // current tab as the fallback source for bare numeric ids.
+        body: JSON.stringify({
+          csrf: CSRF, fileType: 'PACK', source: SOURCE,
+          models: [{ id: id, url: isUrl ? raw : '', slug: '', name: '', creator: '' }]
+        })
       });
       const data = await res.json();
       if (data.ok) {
         pasteStatus.textContent = data.queued > 0
-          ? ('Queued model ' + id + ' as ZIP. The worker will download it shortly.')
-          : ('Model ' + id + ' was already queued.');
+          ? ('Queued. The worker will download it shortly.')
+          : ('That model was already queued.');
         pasteInput.value = '';
       } else {
         pasteStatus.textContent = 'Queue failed: ' + (data.error || 'unknown');

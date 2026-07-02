@@ -20,6 +20,7 @@ require_auth();
 // Printable extensions that make a folder worth showing / viewable.
 const LIB_PRINT_EXT = ['stl', '3mf', 'obj', 'step', 'stp'];
 const LIB_VIEW_EXT  = ['stl', '3mf']; // what viewer.php can actually render
+const LIB_SOURCE_EXT = ['scad', 'py']; // parametric source — worth keeping even with no mesh
 
 /** Does this folder contain at least one NON-EMPTY printable 3D file? */
 function lib_has_printable(string $dir): bool
@@ -32,6 +33,34 @@ function lib_has_printable(string $dir): bool
             if ($f->isFile()
                 && $f->getSize() > 0
                 && in_array(strtolower($f->getExtension()), LIB_PRINT_EXT, true)) {
+                return true;
+            }
+        }
+    } catch (\Throwable $e) {
+        return false;
+    }
+    return false;
+}
+
+/**
+ * A folder is worth showing in the library if it has a printable mesh OR a
+ * parametric source file (.scad/.py). MakerWorld parametric models often ship
+ * only the recovered .scad — those should still appear (and be openable in the
+ * Customize workshop), not be treated as empty.
+ */
+function lib_has_content(string $dir): bool
+{
+    if (lib_has_printable($dir)) {
+        return true;
+    }
+    try {
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($it as $f) {
+            if ($f->isFile()
+                && $f->getSize() > 0
+                && in_array(strtolower($f->getExtension()), LIB_SOURCE_EXT, true)) {
                 return true;
             }
         }
@@ -134,6 +163,160 @@ function lib_thumb_rel(string $slug, string $folder): ?string
         . '&model=' . rawurlencode($folder) . '&thumb=1' : null;
 }
 
+// ---- Library card-index cache ----------------------------------------------
+// Per-folder card data is expensive to compute (several recursive directory
+// walks over a FUSE/shfs mount) and never changes once a model is downloaded.
+// We persist it in the `library_index` SQLite table keyed by (slug, folder),
+// validated by a cheap `sig` (top-level folder mtime + .farfetched mtime). On a
+// cache hit we do ZERO walks; only new/changed folders are scanned, so steady-
+// state library loads scale with folder COUNT, not total file count.
+
+/**
+ * Cheap validity signature for a model folder: the folder's own mtime plus its
+ * .farfetched dir mtime (which bumps when thumbnails/meta are (re)generated).
+ * Two stat() calls — no directory walk.
+ */
+function lib_card_sig(string $abs): string
+{
+    $a  = @filemtime($abs) ?: 0;
+    $ff = @filemtime($abs . '/.farfetched') ?: 0;
+    return $a . ':' . $ff;
+}
+
+/**
+ * Expensive scan of a single model folder. Runs ONLY on a cache miss. Returns
+ * the cacheable payload, or ['_skip' => true] when the folder has no printable
+ * files (so empties are remembered and never re-walked either).
+ *
+ * @return array<string,mixed>
+ */
+function lib_scan_folder(string $abs): array
+{
+    if (!lib_has_content($abs)) {
+        return ['_skip' => true];
+    }
+    [$files, $size] = dir_stats($abs);
+
+    $firstInfo = lib_first_viewable_info($abs);
+    $firstView = $firstInfo['rel'] ?? null;
+    $firstSize = $firstInfo['size'] ?? 0;
+    $typeList  = model_file_types($abs);
+
+    // Customizable hint: has a .scad/.py script, or ships multiple meshes.
+    $hasScript = in_array('SCAD', $typeList, true) || in_array('PY', $typeList, true);
+    $meshCount = 0;
+    if (!$hasScript) {
+        foreach (['stl', '3mf', 'obj'] as $ext) {
+            $meshCount += count(glob($abs . '/*.' . $ext) ?: []);
+            $meshCount += count(glob($abs . '/*.' . strtoupper($ext)) ?: []);
+        }
+    }
+    $isCustomizable = $hasScript || $meshCount >= 2;
+
+    $metaCreator = ''; $metaModelId = ''; $metaCreatorUid = '';
+    $metaFile = $abs . '/.farfetched/meta.json';
+    if (is_file($metaFile)) {
+        $md = json_decode((string) @file_get_contents($metaFile), true);
+        if (is_array($md)) {
+            $metaCreator = (string) ($md['creator'] ?? '');
+            $metaModelId = (string) ($md['model_id'] ?? '');
+            $metaCreatorUid = (string) ($md['creator_uid'] ?? '');
+        }
+    }
+
+    return [
+        'files'        => (int) $files,
+        'size'         => (int) $size,
+        'types'        => $typeList,
+        'mtime'        => lib_folder_mtime($abs),
+        'viewable'     => $firstView !== null,
+        'firstfile'    => $firstView,
+        'firstsize'    => (int) $firstSize,
+        'customizable' => $isCustomizable,
+        'creator'      => $metaCreator,
+        'creator_uid'  => $metaCreatorUid,
+        'model_id'     => $metaModelId,
+    ];
+}
+
+/**
+ * Load the whole cache for a source in one query.
+ * @return array<string,array{sig:string,payload:string}>
+ */
+function lib_index_load(string $slug): array
+{
+    try {
+        $st = db()->prepare('SELECT folder, sig, payload FROM library_index WHERE slug = ?');
+        $st->execute([$slug]);
+        $map = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $map[(string) $r['folder']] = ['sig' => (string) $r['sig'], 'payload' => (string) $r['payload']];
+        }
+        return $map;
+    } catch (\Throwable $e) {
+        return []; // cache unavailable → fall back to full scans this load
+    }
+}
+
+/**
+ * Upsert freshly-scanned rows in one transaction.
+ * @param array<int,array{0:string,1:string,2:string,3:string}> $rows  [slug, folder, sig, payloadJson]
+ */
+function lib_index_save(array $rows): void
+{
+    if ($rows === []) {
+        return;
+    }
+    $pdo = db();
+    $lk  = db_write_lock();
+    try {
+        $pdo->beginTransaction();
+        $ins = $pdo->prepare(
+            'INSERT OR REPLACE INTO library_index (slug, folder, sig, payload) VALUES (?, ?, ?, ?)'
+        );
+        foreach ($rows as $r) {
+            $ins->execute($r);
+        }
+        $pdo->commit();
+    } catch (\Throwable $e) {
+        if ($pdo->inTransaction()) {
+            try { $pdo->rollBack(); } catch (\Throwable $e2) { /* ignore */ }
+        }
+    } finally {
+        db_write_unlock($lk);
+    }
+}
+
+/**
+ * Drop cache rows for a source whose folders no longer exist on disk.
+ * @param array<int,string> $keepFolders
+ */
+function lib_index_prune(string $slug, array $keepFolders): void
+{
+    $keep = array_fill_keys($keepFolders, true);
+    $stale = [];
+    foreach (lib_index_load($slug) as $folder => $_row) {
+        if (!isset($keep[$folder])) {
+            $stale[] = $folder;
+        }
+    }
+    if ($stale === []) {
+        return;
+    }
+    $pdo = db();
+    $lk  = db_write_lock();
+    try {
+        $del = $pdo->prepare('DELETE FROM library_index WHERE slug = ? AND folder = ?');
+        foreach ($stale as $folder) {
+            $del->execute([$slug, $folder]);
+        }
+    } catch (\Throwable $e) {
+        /* non-fatal: stale rows are harmless, just untidy */
+    } finally {
+        db_write_unlock($lk);
+    }
+}
+
 // ---- Gather models (one or all sources) ------------------------------------
 $onlySrc = (string) ($_GET['src'] ?? '');
 if ($onlySrc !== '' && source_path($onlySrc) === null) {
@@ -153,59 +336,65 @@ $totalBytes = 0;
 
 foreach ($sources as $s) {
     $slug = $s['slug'];
-    foreach (list_models($s['path']) as $m) {
-        if ($m['kind'] !== 'folder') continue;            // skip loose zips
-        // Skip housekeeping folders (e.g. _processed from Organize) and dotdirs.
-        if ($m['name'] === '_processed' || $m['name'] === '_processing' || ($m['name'] !== '' && $m['name'][0] === '.')) continue;
-        $abs = $s['path'] . '/' . $m['name'];
-        if (!lib_has_printable($abs)) continue;           // skip empty / non-printable
+    $cache    = lib_index_load($slug);      // one query per source
+    $dirs     = list_model_dirs($s['path']); // cheap: names only, no deep stat
+    $toSave   = [];                          // [slug, folder, sig, payloadJson] for misses
+    $seen     = [];
 
-        $firstInfo = lib_first_viewable_info($abs);
-        $firstView = $firstInfo['rel'] ?? null;
-        $firstSize = $firstInfo['size'] ?? 0;
-        $thumbRel  = lib_thumb_rel($slug, $m['name']);
-        $typeList  = model_file_types($abs);
-        // Cheap customizable hint: has a .scad/.py script, or ships multiple meshes.
-        $hasScript = in_array('SCAD', $typeList, true) || in_array('PY', $typeList, true);
-        $meshCount = 0;
-        if (!$hasScript) {
-            // Only count when no script (variant detection). Cheap glob, no deep walk.
-            foreach (['stl', '3mf', 'obj'] as $ext) {
-                $meshCount += count(glob($abs . '/*.' . $ext) ?: []);
-                $meshCount += count(glob($abs . '/*.' . strtoupper($ext)) ?: []);
-            }
+    foreach ($dirs as $name) {
+        // Skip housekeeping folders (e.g. _processed from Organize) and dotdirs.
+        if ($name === '_processed' || $name === '_processing' || ($name !== '' && $name[0] === '.')) {
+            continue;
         }
-        $isCustomizable = $hasScript || $meshCount >= 2;
-        // Read persisted source metadata (creator, model id) if present.
-        $metaCreator = ''; $metaModelId = '';
-        $metaFile = $abs . '/.farfetched/meta.json';
-        if (is_file($metaFile)) {
-            $md = json_decode((string) @file_get_contents($metaFile), true);
-            if (is_array($md)) {
-                $metaCreator = (string) ($md['creator'] ?? '');
-                $metaModelId = (string) ($md['model_id'] ?? '');
+        $seen[] = $name;
+        $abs    = $s['path'] . '/' . $name;
+        $sig    = lib_card_sig($abs);        // two stat()s, no walk
+
+        if (isset($cache[$name]) && $cache[$name]['sig'] === $sig) {
+            // Cache hit — zero directory walks.
+            $payload = json_decode($cache[$name]['payload'], true);
+            if (!is_array($payload)) {
+                $payload = lib_scan_folder($abs);
+                $toSave[] = [$slug, $name, $sig, json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE)];
             }
+        } else {
+            // Miss or changed → scan once and remember it.
+            $payload  = lib_scan_folder($abs);
+            $toSave[] = [$slug, $name, $sig, json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE)];
         }
+
+        if (!empty($payload['_skip'])) {
+            continue; // no printable files — remembered, never re-walked
+        }
+
+        // Live (cheap) fields recomputed every load so they stay responsive:
+        //   thumb depends on the per-source "use source thumbnails" toggle and on
+        //   is_file() checks; title is pure string work.
         $models[] = [
             'slug'      => $slug,
-            'folder'    => $m['name'],
-            'title'     => clean_model_name($m['name']),
-            'files'     => (int) $m['files'],
-            'size'      => (int) $m['size'],
-            'types'     => $typeList,
-            'mtime'     => lib_folder_mtime($abs),
-            'viewable'  => $firstView !== null,
-            'firstfile' => $firstView,
-            'firstsize' => $firstSize,
-            'thumb'     => $thumbRel,
-            'customizable' => $isCustomizable,
-            'creator'   => $metaCreator,
-            'model_id'  => $metaModelId,
+            'folder'    => $name,
+            'title'     => clean_model_name($name),
+            'files'     => (int) ($payload['files'] ?? 0),
+            'size'      => (int) ($payload['size'] ?? 0),
+            'types'     => (array) ($payload['types'] ?? []),
+            'mtime'     => (int) ($payload['mtime'] ?? 0),
+            'viewable'  => (bool) ($payload['viewable'] ?? false),
+            'firstfile' => $payload['firstfile'] ?? null,
+            'firstsize' => (int) ($payload['firstsize'] ?? 0),
+            'thumb'     => lib_thumb_rel($slug, $name),
+            'customizable' => (bool) ($payload['customizable'] ?? false),
+            'creator'   => (string) ($payload['creator'] ?? ''),
+            'creator_uid' => (string) ($payload['creator_uid'] ?? ''),
+            'model_id'  => (string) ($payload['model_id'] ?? ''),
         ];
         $srcCounts[$slug] = ($srcCounts[$slug] ?? 0) + 1;
-        $totalFiles += (int) $m['files'];
-        $totalBytes += (int) $m['size'];
+        $totalFiles += (int) ($payload['files'] ?? 0);
+        $totalBytes += (int) ($payload['size'] ?? 0);
     }
+
+    // Persist newly-scanned rows and drop rows for folders that vanished.
+    lib_index_save($toSave);
+    lib_index_prune($slug, $seen);
 }
 
 // Newest first by default.
@@ -372,7 +561,6 @@ function lib_badge(string $slug): string
             <div class="lib-thumb" style="<?= $m['thumb'] ? '' : e(lib_tile_style($m['title'])) ?>">
               <?php $pc = $printCounts[$m['slug'] . '/' . $m['folder']] ?? 0; ?>
               <?php if ($pc > 0): ?><div class="lib-printed-badge">✓ <?= $pc ?></div><?php endif; ?>
-              <?php if (!empty($m['customizable'])): ?><div class="lib-custom-badge" title="Customizable / poseable">⚙</div><?php endif; ?>
               <?php
                 $mid   = lib_model_id($m['folder']);
                 $isFav = isset($favSet[$m['slug'] . ':' . $mid]);
@@ -390,11 +578,32 @@ function lib_badge(string $slug): string
             <div class="lib-meta">
               <div class="lib-name"><?= e($m['title']) ?></div>
               <?php if (($m['creator'] ?? '') !== ''): ?>
-                <div class="lib-creator">by <a href="index.php?src=<?= e($m['slug']) ?>&author=<?= rawurlencode($m['creator']) ?>" title="Search this creator on <?= e(lib_badge($m['slug'])) ?>"><?= e($m['creator']) ?></a></div>
+                <?php
+                  // Author search needs a per-source key, not the display name:
+                  // MakerWorld uses a numeric uid, Printables the handle slug
+                  // (e.g. "zx82net_107245"). Both are stored in creator_uid at
+                  // download. Link by it when valid; otherwise fall back to the
+                  // display name (older items lack the key — search may miss).
+                  $authKey = (string) ($m['creator_uid'] ?? '');
+                  $useKey  = (($m['slug'] === 'makerworld' || $m['slug'] === 'creality') && $authKey !== '' && ctype_digit($authKey))
+                          || ($m['slug'] === 'printables' && $authKey !== '');
+                  if ($useKey) {
+                      $authorHref = 'index.php?src=' . e($m['slug'])
+                                  . '&author=' . rawurlencode($authKey)
+                                  . '&authorname=' . rawurlencode($m['creator']);
+                  } else {
+                      $authorHref = 'index.php?src=' . e($m['slug'])
+                                  . '&author=' . rawurlencode($m['creator']);
+                  }
+                ?>
+                <div class="lib-creator">by <a href="<?= $authorHref ?>" title="Search this creator on <?= e(lib_badge($m['slug'])) ?>"><?= e($m['creator']) ?></a></div>
               <?php endif; ?>
               <div class="lib-row">
                 <span class="lib-badge"><?= e(lib_badge($m['slug'])) ?></span>
-                <span class="lib-files"><?= (int) $m['files'] ?> file<?= (int) $m['files'] === 1 ? '' : 's' ?></span>
+                <span class="lib-files-wrap">
+                  <span class="lib-files"><?= (int) $m['files'] ?> file<?= (int) $m['files'] === 1 ? '' : 's' ?></span>
+                  <?php if (!empty($m['customizable'])): ?><span class="lib-custom-badge" title="Customizable / poseable">⚙</span><?php endif; ?>
+                </span>
               </div>
             </div>
           </div>
@@ -646,9 +855,15 @@ function lib_badge(string $slug): string
       star.disabled = false;
       return;
     }
+    // Author link navigates to the source search — let it through without
+    // opening the modal (which would flash before the navigation lands).
+    if (e.target.closest('.lib-creator a')) {
+      return;
+    }
     const card = e.target.closest('.lib-card');
     if (card) openModal(card);
   });
+
   document.getElementById('mClose').addEventListener('click', closeModal);
   modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });

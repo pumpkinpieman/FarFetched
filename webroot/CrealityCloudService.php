@@ -53,6 +53,18 @@ final class CrealityCloudService
     }
 
     /**
+     * Creality model group ids are 24-char hex (Mongo ObjectId). Numeric ids seen
+     * in search results belong to mirrored/aggregated models that the standard
+     * 3mfList/memberDownload flow can't serve — the API returns "Invalid
+     * Parameter". Validate up front to fail fast with a clear message and avoid
+     * hammering the API with doomed retries.
+     */
+    private function isGroupId(string $id): bool
+    {
+        return (bool) preg_match('/^[a-f0-9]{24}$/i', $id);
+    }
+
+    /**
      * Fetch the category tree and flatten it to id => label.
      * Creality returns a nested tree; we surface top-level + one level of
      * children, prefixing children with their parent for clarity.
@@ -289,6 +301,36 @@ final class CrealityCloudService
      * Returns a list of ['fileName'=>, 'url'=>, 'size'=>, 'fileId'=>].
      * @return array<int,array<string,mixed>>
      */
+    /**
+     * Resolve a model's author numeric userId from its group id — used by the
+     * author-key backfill. Reuses the 3mfList endpoint, whose items embed
+     * userInfo.userId. Returns '' if unavailable.
+     */
+    public function authorIdForModel(string $modelId): string
+    {
+        $this->lastError = '';
+        $modelId = trim($modelId);
+        if ($modelId === '' || !$this->isAuthed() || !$this->isGroupId($modelId)) {
+            return '';
+        }
+        $resp = $this->apiPost('/api/cxy/v3/model/3mfList', [
+            'modelGroupId' => $modelId,
+            'page'         => 1,
+            'pageSize'     => 20,      // Creality rejects pageSize < a threshold ("Invalid Parameter")
+            'filterType'   => 11,
+        ]);
+        if ($resp === null) {
+            return '';
+        }
+        foreach (($resp['result']['list'] ?? []) as $row) {
+            $uid = $row['userInfo']['userId'] ?? ($row['userId'] ?? null);
+            if ($uid !== null && $uid !== '') {
+                return (string) $uid;
+            }
+        }
+        return '';
+    }
+
     public function resolveDownloadUrls(string $modelId): array
     {
         $this->lastError = '';
@@ -399,6 +441,12 @@ final class CrealityCloudService
         $this->lastError = '';
         if (!$this->isAuthed()) {
             $this->lastError = 'Creality Cloud credentials not set.';
+            return 0;
+        }
+        if (!$this->isGroupId($modelId)) {
+            $this->lastError = 'Model not available for download on Creality (id "' . $modelId
+                . '" is not a Creality group id — likely a mirrored/aggregated listing). '
+                . 'Download it from its original source instead.';
             return 0;
         }
         $files = $this->resolveDownloadUrls($modelId);
@@ -552,7 +600,7 @@ final class CrealityCloudService
             if (stripos($msg, 'login') !== false || stripos($msg, 'token') !== false || (int) $data['code'] === 401) {
                 $this->lastError = 'Creality auth failed — re-paste token in Settings.';
             } else {
-                $this->lastError = 'Creality error: ' . ($msg !== '' ? $msg : ('code ' . $data['code']));
+                $this->lastError = ($msg !== '' ? $msg : ('code ' . $data['code']));
             }
             return null;
         }
@@ -609,6 +657,64 @@ final class CrealityCloudService
      * @param array<int,mixed> $items
      * @return array<int,array<string,mixed>>
      */
+    /**
+     * List a creator's uploaded models by numeric userId.
+     * Endpoint (verified): POST /api/cxy/v3/folder/othersFolderList
+     *   body {userId:int, page, pageSize, nodeType:1}; models live under
+     *   result.list[].modelInfo (same shape normalize() consumes).
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function searchByAuthor(string $userId, int $limit = 20, int $page = 1): array
+    {
+        $this->lastError = '';
+        $this->lastTotal = 0;
+
+        if (!$this->isAuthed()) {
+            $this->lastError = 'Creality Cloud credentials not set (paste token + user ID in Settings).';
+            return [];
+        }
+        $userId = preg_replace('/[^0-9]/', '', $userId) ?? '';
+        if ($userId === '') {
+            $this->lastError = 'Creality author search requires a numeric user id.';
+            return [];
+        }
+
+        $resp = $this->apiPost('/api/cxy/v3/folder/othersFolderList', [
+            'userId'   => (int) $userId,          // typed int — never string-interpolated
+            'page'     => max(1, $page),
+            'pageSize' => max(1, min(30, $limit)),
+            'nodeType' => 1,
+        ]);
+        if ($resp === null) {
+            return [];
+        }
+
+        $list = $resp['result']['list'] ?? ($resp['result']['models'] ?? []);
+        if (!is_array($list)) {
+            $list = [];
+        }
+        // The folder endpoint may return either model-folder nodes that wrap the
+        // payload in `modelInfo`, or the model objects directly in the list.
+        // Handle both, and skip pure folder/collection nodes that carry neither.
+        $models = [];
+        foreach ($list as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if (isset($row['modelInfo']) && is_array($row['modelInfo'])) {
+                $models[] = $row['modelInfo'];
+            } elseif (isset($row['id']) || isset($row['groupName'])) {
+                $models[] = $row;
+            }
+        }
+        // Trust the count we actually extracted — never report a total the grid
+        // can't render (that mismatch showed "N results" over an empty page).
+        $normalized = $this->normalize($models);
+        $this->lastTotal = count($normalized);
+        return $normalized;
+    }
+
     private function normalize(array $items): array
     {
         $out = [];
@@ -636,21 +742,24 @@ final class CrealityCloudService
                 || !empty($it['isExclusive'])
                 || ((int) ($it['promoType'] ?? 0) > 0);
 
-            // Creality's list/search endpoints don't return author names (only a
-            // numeric userId, and there's no batch name lookup), so we leave the
-            // creator blank — the UI hides the author line when it's empty.
-            $creator = '';
+            // Author: search/list omit names, but folder/author results embed
+            // userInfo.nickName. Capture the numeric userId as creator_id so the
+            // "More by author" link and downloads can key off it.
+            $ui        = is_array($it['userInfo'] ?? null) ? $it['userInfo'] : [];
+            $creator   = (string) ($ui['nickName'] ?? '');
+            $creatorId = (string) ($it['userId'] ?? ($ui['userId'] ?? ''));
 
             $out[] = [
-                'id'      => $id,
-                'slug'    => $id,                      // Creality keys everything off the group id
-                'name'    => $name,
-                'creator' => $creator,
-                'thumb'   => $thumb,
-                'images'  => array_values(array_filter($images)),
-                'size'    => (int) ($it['totalFileSize'] ?? 0),
-                'price'   => $isPaid ? 1 : 0,          // 1 = paid (UI shows "Payment Required" badge)
-                'source'  => 'creality',
+                'id'         => $id,
+                'slug'       => $id,                      // Creality keys everything off the group id
+                'name'       => $name,
+                'creator'    => $creator,
+                'creator_id' => $creatorId,
+                'thumb'      => $thumb,
+                'images'     => array_values(array_filter($images)),
+                'size'       => (int) ($it['totalFileSize'] ?? 0),
+                'price'      => $isPaid ? 1 : 0,          // 1 = paid (UI shows "Payment Required" badge)
+                'source'     => 'creality',
             ];
         }
         return $out;

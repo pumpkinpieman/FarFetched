@@ -66,6 +66,13 @@ $srcSlugs = array_keys($srcSlugs);
 sort($srcSlugs);
 
 $projects     = projects_list();
+$designState  = [];
+foreach ($projects as $pp) {
+    $ss = json_decode((string) ($pp['state'] ?? '{}'), true) ?: [];
+    if (!empty($ss['designMode'])) {
+        $designState[(int) $pp['id']] = ['designMode' => $ss['designMode'], 'nodes' => $ss['nodes'] ?? []];
+    }
+}
 $posesOk      = poses_writable();
 $csrf         = csrf_token();
 ?>
@@ -87,6 +94,7 @@ $csrf         = csrf_token();
 }
 </script>
 <script type="application/json" id="cz-csrf"><?= json_encode($csrf) ?></script>
+<script type="application/json" id="cz-design-state"><?= json_encode($designState, JSON_UNESCAPED_SLASHES) ?></script>
 <style>
   .cz-eyebrow{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--clay);font-weight:600;margin-bottom:6px;}
   .cz-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:18px 0 8px;}
@@ -240,13 +248,18 @@ $csrf         = csrf_token();
         <div class="cz-projects" id="czProjects">
           <button class="cz-new" id="czNewBtn">+ New project</button>
           <?php foreach ($projects as $p): ?>
+            <?php $pstate = json_decode((string) ($p['state'] ?? '{}'), true) ?: []; $pDesign = (string) ($pstate['designMode'] ?? ''); ?>
             <div class="cz-proj" data-id="<?= (int) $p['id'] ?>"
-                 data-mode="<?= e($p['mode']) ?>" data-name="<?= e($p['name']) ?>">
+                 data-mode="<?= e($p['mode']) ?>" data-name="<?= e($p['name']) ?>" data-design="<?= e($pDesign) ?>">
               <button class="cz-proj-del" data-id="<?= (int) $p['id'] ?>" title="Delete project">🗑</button>
               <div class="cz-proj-name"><?= e($p['name']) ?></div>
               <div class="cz-proj-meta">
-                <?= $p['mode'] === 'parametric' ? '⚙ Parametric' : '🤸 Poses' ?>
-                · from <?= e($p['src_slug'] ?? '?') ?>
+                <?php if ($pDesign !== ''): ?>
+                  ✏️ Design · <?= e(ucfirst($pDesign)) ?>
+                <?php else: ?>
+                  <?= $p['mode'] === 'parametric' ? '⚙ Parametric' : '🤸 Poses' ?>
+                  · from <?= e($p['src_slug'] ?? '?') ?>
+                <?php endif; ?>
               </div>
             </div>
           <?php endforeach; ?>
@@ -322,10 +335,33 @@ $csrf         = csrf_token();
             <div class="cz-poses" id="czPoses"></div>
           </div>
 
+          <div id="czDesign" hidden>
+            <div id="czCode" hidden>
+              <strong style="font-size:13px;">OpenSCAD source</strong>
+              <textarea id="czCodeArea" spellcheck="false"
+                style="width:100%;box-sizing:border-box;min-height:220px;margin:8px 0;background:#0e1116;color:#e6e6e6;border:1px solid #333b45;border-radius:8px;padding:10px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;"></textarea>
+              <button class="lib-btn lib-btn-primary" id="czCodeApply" type="button">Apply &amp; Render</button>
+              <span class="cz-proj-meta" id="czCodeMsg" style="margin-left:6px;"></span>
+            </div>
+            <div id="czNodes" hidden>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <strong style="font-size:13px;">Node graph</strong>
+                <span class="cz-proj-meta">Build a CSG tree — it compiles to OpenSCAD.</span>
+              </div>
+              <div id="czNodePalette" style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;"></div>
+              <div id="czNodeTree" style="background:#0e1116;border:1px solid #333b45;border-radius:8px;padding:10px;min-height:120px;font-size:13px;"></div>
+              <button class="lib-btn lib-btn-primary" id="czNodeApply" type="button" style="margin-top:10px;">Apply &amp; Render</button>
+              <span class="cz-proj-meta" id="czNodeMsg" style="margin-left:6px;"></span>
+            </div>
+          </div>
+
           <div id="czParam" hidden>
             <div id="czParamControls"></div>
             <div class="cz-actions" style="margin-top:12px;">
               <button class="lib-btn lib-btn-primary" id="czRenderBtn" type="button">⚙ Render</button>
+              <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-left:8px;cursor:pointer;">
+                <input type="checkbox" id="czAutoRender"> Auto
+              </label>
               <span class="cz-proj-meta" id="czRenderMsg" style="margin-left:4px;"></span>
             </div>
           </div>
@@ -354,10 +390,29 @@ $csrf         = csrf_token();
   <div class="cz-modal" id="czModal" hidden>
     <div class="cz-modal-card">
       <h2>New project</h2>
-      <div class="cz-modal-sub">Import any model. It's copied into a private workspace — your source stays untouched.</div>
-      <label style="font-size:12px;color:var(--muted);">Project name</label>
-      <input class="cz-input" id="czNewName" placeholder="My posed skeleton" style="width:100%;box-sizing:border-box;margin:6px 0 14px;">
+      <div class="cz-modal-sub">Import a model to pose/customize, or design one from scratch. Everything lives in a private workspace.</div>
 
+      <div class="cz-mode-tabs" id="czModeTabs" style="display:flex;gap:8px;margin:4px 0 14px;">
+        <button class="cz-srcpill active" data-newmode="import" type="button">📥 Import a model</button>
+        <button class="cz-srcpill" data-newmode="design" type="button">✏️ Design your own</button>
+      </div>
+
+      <label style="font-size:12px;color:var(--muted);">Project name</label>
+      <input class="cz-input" id="czNewName" placeholder="My design" style="width:100%;box-sizing:border-box;margin:6px 0 14px;">
+
+      <!-- Design-your-own: authoring mode picker -->
+      <div id="czDesignPick" hidden>
+        <label style="font-size:12px;color:var(--muted);">How do you want to build it?</label>
+        <div class="cz-src-pills" id="czDesignModes" style="margin:6px 0 4px;">
+          <button class="cz-srcpill active" data-dmode="sliders" type="button">🎚 Sliders</button>
+          <button class="cz-srcpill" data-dmode="code" type="button">⌨ Code (OpenSCAD)</button>
+          <button class="cz-srcpill" data-dmode="nodes" type="button">🔗 Nodes</button>
+        </div>
+        <p class="cz-proj-meta" id="czDesignHint" style="margin:8px 2px 0;">Start from a parametric template and drive it with sliders.</p>
+      </div>
+
+      <!-- Import: source picker -->
+      <div id="czImportPick">
       <label style="font-size:12px;color:var(--muted);">Import from</label>
       <input class="cz-input" id="czSrcSearch" placeholder="Search models…" style="width:100%;box-sizing:border-box;margin:6px 0 10px;">
       <div class="cz-src-pills" id="czSrcPills">
@@ -387,6 +442,7 @@ $csrf         = csrf_token();
           <?php endforeach; ?>
         <?php endif; ?>
       </div>
+      </div><!-- /czImportPick -->
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px;">
         <button class="lib-btn lib-btn-ghost" id="czCancelBtn" type="button">Cancel</button>
         <button class="lib-btn lib-btn-primary" id="czCreateBtn" type="button" disabled>Create project</button>
@@ -427,13 +483,28 @@ $csrf         = csrf_token();
     return 'project_file.php?id=' + encodeURIComponent(id) + '&file=' + encodeURIComponent(file);
   }
 
-  async function openProject(id, mode, name) {
-    activeProject = { id, mode, name };
+  async function openProject(id, mode, name, design) {
+    activeProject = { id, mode, name, design: design || '' };
     editorEmpty.hidden = true; editor.hidden = false;
     document.querySelectorAll('.cz-proj').forEach(el => el.classList.toggle('active', +el.dataset.id === id));
     document.getElementById('czExportName').value = name || '';
     hint.style.display = ''; hint.textContent = 'Loading…';
     arr = null; selectedPart = null; document.getElementById('czCtxTools').hidden = true; // reset arrange state
+
+    // Design projects: show the authoring editor for their mode. All modes still
+    // render through the parametric param panel below (the .scad is the source).
+    const dz = document.getElementById('czDesign');
+    const cz = document.getElementById('czCode');
+    const nz = document.getElementById('czNodes');
+    if (activeProject.design) {
+      dz.hidden = false;
+      cz.hidden = (activeProject.design !== 'code');
+      nz.hidden = (activeProject.design !== 'nodes');
+      if (activeProject.design === 'code') loadScadIntoEditor(id);
+      if (activeProject.design === 'nodes') initNodeEditor(id);
+    } else {
+      dz.hidden = true; cz.hidden = true; nz.hidden = true;
+    }
 
     const meta = await fetch(projFileUrl(id, '') + '&list=1').then(r => r.json()).catch(() => null);
     if (!meta || !meta.ok) { hint.textContent = 'Could not load project.'; return; }
@@ -497,6 +568,7 @@ $csrf         = csrf_token();
     const label = document.createElement('label');
     label.textContent = p.name;
     row.appendChild(label);
+    const NUM_CSS = 'flex:0 0 auto;width:66px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:6px;padding:3px 6px;font-size:12px;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;';
     let input;
     if (p.type === 'select') {
       input = document.createElement('select');
@@ -506,20 +578,44 @@ $csrf         = csrf_token();
         if (String(o.value) === String(p.default)) opt.selected = true;
         input.appendChild(opt);
       });
+      input.addEventListener('change', scheduleAutoRender);
     } else if (p.type === 'bool') {
       input = document.createElement('input'); input.type = 'checkbox'; input.checked = !!p.default;
+      input.addEventListener('change', scheduleAutoRender);
     } else if (p.type === 'number' && p.min !== undefined) {
+      // Slider is the source of truth (carries data-name); the number box is a
+      // two-way-bound editable mirror so exact values can be typed — CAD-style.
       input = document.createElement('input'); input.type = 'range';
-      input.min = p.min; input.max = p.max; input.step = p.step || 1; input.value = p.default;
-      const out = document.createElement('span'); out.className = 'cz-pval'; out.textContent = p.default;
-      input.addEventListener('input', () => out.textContent = input.value);
+      const min = parseFloat(p.min), max = parseFloat(p.max), step = parseFloat(p.step) || 1;
+      input.min = min; input.max = max; input.step = step; input.value = p.default;
       input.dataset.name = p.name; input.dataset.kind = p.type;
-      row.appendChild(input); row.appendChild(out);
+
+      const num = document.createElement('input');
+      num.type = 'number'; num.min = min; num.max = max; num.step = step;
+      num.value = p.default; num.style.cssText = NUM_CSS;
+
+      const clamp = (v) => Math.min(max, Math.max(min, v));
+      input.addEventListener('input', () => { num.value = input.value; });
+      input.addEventListener('change', scheduleAutoRender);
+      num.addEventListener('input', () => {
+        const v = parseFloat(num.value);
+        if (isFinite(v)) input.value = clamp(v);   // keep slider synced while typing
+      });
+      num.addEventListener('change', () => {
+        let v = parseFloat(num.value);
+        if (!isFinite(v)) v = parseFloat(input.value);
+        v = clamp(v);
+        num.value = v; input.value = v;
+        scheduleAutoRender();
+      });
+      row.appendChild(input); row.appendChild(num);
       return row;
     } else if (p.type === 'string') {
       input = document.createElement('input'); input.type = 'text'; input.value = p.default;
+      input.addEventListener('change', scheduleAutoRender);
     } else {
-      input = document.createElement('input'); input.type = 'number'; input.value = p.default;
+      input = document.createElement('input'); input.type = 'number'; input.step = 'any'; input.value = p.default;
+      input.addEventListener('change', scheduleAutoRender);
     }
     input.dataset.name = p.name; input.dataset.kind = p.type;
     row.appendChild(input);
@@ -537,7 +633,15 @@ $csrf         = csrf_token();
     return vals;
   }
 
-  document.getElementById('czRenderBtn').addEventListener('click', async () => {
+  // Render is guarded against overlap: concurrent OpenSCAD calls waste CPU and
+  // race the viewer. If a render is requested while one is in flight, we mark it
+  // pending and fire once the current one settles (coalescing rapid edits).
+  let renderInFlight = false, renderPending = false, autoTimer = null;
+
+  async function renderNow() {
+    if (!activeProject) return;
+    if (renderInFlight) { renderPending = true; return; }
+    renderInFlight = true;
     const btn = document.getElementById('czRenderBtn');
     const msg = document.getElementById('czRenderMsg');
     btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Rendering…';
@@ -552,7 +656,21 @@ $csrf         = csrf_token();
       msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Render failed.';
     }
     btn.disabled = false;
-  });
+    renderInFlight = false;
+    if (renderPending) { renderPending = false; renderNow(); }   // flush coalesced edit
+  }
+
+  // Debounced live render — only when the Auto toggle is on. Coalesces bursts of
+  // slider/number edits into a single render ~400ms after the last change.
+  function scheduleAutoRender() {
+    const auto = document.getElementById('czAutoRender');
+    if (!auto || !auto.checked) return;
+    if (document.getElementById('czRenderBtn').disabled && !renderInFlight) return; // OpenSCAD unavailable
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(renderNow, 400);
+  }
+
+  document.getElementById('czRenderBtn').addEventListener('click', renderNow);
 
   function post2(url, payload) {
     return fetch(url, { method:'POST', headers:{'Content-Type':'application/json'},
@@ -567,6 +685,275 @@ $csrf         = csrf_token();
     ensureViewer().loadFile(projFileUrl(activeProject.id, file), ext);
   }
 
+  // ---------------- Design authoring (code + nodes) ----------------
+  const DESIGN_STATE = JSON.parse(document.getElementById('cz-design-state').textContent || '{}');
+
+  // Re-parse params from the current .scad and render immediately.
+  async function reloadAndRender(id) {
+    await loadParams(id);
+    const rb = document.getElementById('czRenderBtn');
+    if (rb && !rb.disabled) rb.click();
+  }
+
+  // --- Code mode ---
+  async function loadScadIntoEditor(id) {
+    const ta = document.getElementById('czCodeArea');
+    ta.value = 'Loading…';
+    try {
+      const txt = await fetch(projFileUrl(id, 'design.scad')).then(r => r.text());
+      ta.value = txt;
+    } catch (e) { ta.value = '// (could not load design.scad)\n'; }
+  }
+  document.getElementById('czCodeApply').addEventListener('click', async () => {
+    if (!activeProject) return;
+    const code = document.getElementById('czCodeArea').value;
+    const msg = document.getElementById('czCodeMsg');
+    const btn = document.getElementById('czCodeApply');
+    btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Saving…';
+    const d = await post({ action:'write_scad', id: activeProject.id, code });
+    if (!d.ok) { msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Failed.'; btn.disabled = false; return; }
+    msg.style.color = 'var(--ok)'; msg.textContent = '✓ Applied';
+    btn.disabled = false;
+    reloadAndRender(activeProject.id);
+  });
+
+  // --- Node mode: a CSG tree that serializes to OpenSCAD ---
+  // Leaf primitives (3D + 2D) and container operators. Everything serializes to
+  // a CSG tree: leaves emit a solid; ops emit `op(){ children }`.
+  const NODE_PRIMS = ['cube', 'sphere', 'cylinder', 'cone', 'torus', 'roundedcube', 'text3d', 'circle', 'square', 'text2d'];
+  const NODE_OPS = ['union', 'difference', 'intersection',
+                    'translate', 'rotate', 'scale', 'mirror', 'resize', 'color',
+                    'linear_extrude', 'rotate_extrude', 'offset2d',
+                    'hull', 'minkowski',
+                    'linear_pattern', 'circular_pattern', 'mirror_copy'];
+  // Palette grouping (label → types).
+  const NODE_CATS = [
+    ['3D', ['cube', 'sphere', 'cylinder', 'cone', 'torus', 'roundedcube', 'text3d']],
+    ['2D', ['circle', 'square', 'text2d']],
+    ['Extrude', ['linear_extrude', 'rotate_extrude', 'offset2d']],
+    ['Boolean', ['union', 'difference', 'intersection']],
+    ['Transform', ['translate', 'rotate', 'scale', 'mirror', 'resize', 'color']],
+    ['Combine', ['hull', 'minkowski']],
+    ['Pattern', ['linear_pattern', 'circular_pattern', 'mirror_copy']]
+  ];
+  const NODE_DEFAULTS = {
+    cube: { x:20, y:20, z:20, center:true },
+    sphere: { r:10, fn:48 },
+    cylinder: { h:20, r:8, center:true, fn:48 },
+    cone: { h:20, r1:10, r2:2, center:true, fn:48 },
+    torus: { R:20, r:5, fn:64 },
+    roundedcube: { x:24, y:24, z:24, rad:3, fn:32 },
+    text3d: { str:'Text', size:10, h:3, fn:24 },
+    circle: { r:10, fn:48 },
+    square: { x:20, y:20, center:true },
+    text2d: { str:'Text', size:10 },
+    translate: { x:0, y:0, z:0 }, rotate: { x:0, y:0, z:0 }, scale: { x:1, y:1, z:1 },
+    mirror: { x:1, y:0, z:0 }, resize: { x:20, y:20, z:20 }, color: { r:1, g:0.5, b:0.2 },
+    linear_extrude: { h:10, twist:0, scale:1, center:false, fn:48 },
+    rotate_extrude: { angle:360, fn:64 }, offset2d: { r:2 },
+    union: {}, difference: {}, intersection: {}, hull: {}, minkowski: {},
+    linear_pattern: { n:5, dx:15, dy:0, dz:0 },
+    circular_pattern: { n:6, rad:30 },
+    mirror_copy: { x:1, y:0, z:0 }
+  };
+  // Field kinds: default = number, 'b' = bool checkbox, 't' = text.
+  const NODE_FIELDS = {
+    cube: [['x','X'],['y','Y'],['z','Z'],['center','Center','b']],
+    sphere: [['r','R'],['fn','$fn']],
+    cylinder: [['h','H'],['r','R'],['fn','$fn'],['center','Center','b']],
+    cone: [['h','H'],['r1','R1'],['r2','R2'],['fn','$fn'],['center','Center','b']],
+    torus: [['R','Ring R'],['r','Tube r'],['fn','$fn']],
+    roundedcube: [['x','X'],['y','Y'],['z','Z'],['rad','Radius'],['fn','$fn']],
+    text3d: [['str','Text','t'],['size','Size'],['h','Height'],['fn','$fn']],
+    circle: [['r','R'],['fn','$fn']],
+    square: [['x','X'],['y','Y'],['center','Center','b']],
+    text2d: [['str','Text','t'],['size','Size']],
+    translate: [['x','X'],['y','Y'],['z','Z']],
+    rotate: [['x','X°'],['y','Y°'],['z','Z°']],
+    scale: [['x','X'],['y','Y'],['z','Z']],
+    mirror: [['x','X'],['y','Y'],['z','Z']],
+    resize: [['x','X'],['y','Y'],['z','Z']],
+    color: [['r','R'],['g','G'],['b','B']],
+    linear_extrude: [['h','Height'],['twist','Twist°'],['scale','Scale'],['center','Center','b'],['fn','$fn']],
+    rotate_extrude: [['angle','Angle°'],['fn','$fn']],
+    offset2d: [['r','Radius']],
+    linear_pattern: [['n','Count'],['dx','dX'],['dy','dY'],['dz','dZ']],
+    circular_pattern: [['n','Count'],['rad','Radius']],
+    mirror_copy: [['x','X'],['y','Y'],['z','Z']]
+  };
+  const isOp = t => NODE_OPS.includes(t);
+  let nodeTree = [];      // array of top-level nodes
+  let nodeSeq = 1;
+  const newNode = (type) => ({ id: nodeSeq++, type, params: Object.assign({}, NODE_DEFAULTS[type] || {}), children: isOp(type) ? [] : undefined });
+
+  function initNodeEditor(id) {
+    const saved = (DESIGN_STATE[id] && DESIGN_STATE[id].nodes) || [];
+    nodeTree = Array.isArray(saved) && saved.length ? normalizeTree(saved) : [];
+    // rebuild id sequence so new nodes don't collide
+    let maxId = 0; (function walk(a){ (a||[]).forEach(n => { maxId = Math.max(maxId, n.id||0); walk(n.children); }); })(nodeTree);
+    nodeSeq = maxId + 1;
+    buildPalette(); renderTree();
+  }
+  function normalizeTree(a) {
+    return (a || []).map(n => ({
+      id: n.id || nodeSeq++, type: n.type,
+      params: Object.assign({}, NODE_DEFAULTS[n.type] || {}, n.params || {}),
+      children: isOp(n.type) ? normalizeTree(n.children || []) : undefined
+    }));
+  }
+  function buildPalette() {
+    const pal = document.getElementById('czNodePalette');
+    pal.innerHTML = '';
+    pal.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin:8px 0;';
+    NODE_CATS.forEach(([label, types]) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:5px;flex-wrap:wrap;align-items:center;';
+      const lbl = document.createElement('span');
+      lbl.className = 'cz-proj-meta';
+      lbl.textContent = label; lbl.style.cssText = 'min-width:74px;font-weight:600;';
+      row.appendChild(lbl);
+      types.forEach(t => {
+        const b = document.createElement('button');
+        b.className = 'cz-srcpill'; b.type = 'button'; b.textContent = t;
+        b.addEventListener('click', () => { nodeTree.push(newNode(t)); renderTree(); });
+        row.appendChild(b);
+      });
+      pal.appendChild(row);
+    });
+  }
+  function childMenuHTML() {
+    return '<option value="">+ child…</option>' +
+      NODE_CATS.map(([label, types]) =>
+        '<optgroup label="' + label + '">' +
+        types.map(t => '<option>' + t + '</option>').join('') +
+        '</optgroup>').join('');
+  }
+  function renderTree() {
+    const host = document.getElementById('czNodeTree');
+    host.innerHTML = '';
+    if (!nodeTree.length) { host.innerHTML = '<span class="cz-proj-meta">Empty — add a primitive or operation above.</span>'; return; }
+    nodeTree.forEach((n, i) => host.appendChild(renderNodeRow(n, nodeTree, i, 0)));
+  }
+  function renderNodeRow(n, parentArr, idx, depth) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin:4px 0 4px ' + (depth * 16) + 'px;border-left:2px solid #2a313b;padding-left:8px;';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
+    const tag = document.createElement('strong');
+    tag.textContent = (isOp(n.type) ? '▸ ' : '') + n.type;
+    tag.style.cssText = 'color:' + (isOp(n.type) ? 'var(--clay)' : '#e6e6e6') + ';font-size:12.5px;';
+    head.appendChild(tag);
+    (NODE_FIELDS[n.type] || []).forEach(([key, lbl, kind]) => {
+      const w = document.createElement('label');
+      w.style.cssText = 'font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;';
+      if (kind === 'b' || key === 'center') {
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!n.params[key];
+        cb.addEventListener('change', () => { n.params[key] = cb.checked; });
+        w.append(lbl + ' ', cb);
+      } else if (kind === 't') {
+        const inp = document.createElement('input'); inp.type = 'text';
+        inp.value = n.params[key] != null ? n.params[key] : '';
+        inp.style.cssText = 'width:110px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;padding:2px 5px;font-size:11px;';
+        inp.addEventListener('input', () => { n.params[key] = inp.value; });
+        w.append(lbl, inp);
+      } else {
+        const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any';
+        inp.value = n.params[key]; inp.style.cssText = 'width:56px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;padding:2px 4px;font-size:11px;';
+        inp.addEventListener('input', () => { n.params[key] = parseFloat(inp.value); });
+        w.append(lbl, inp);
+      }
+      head.appendChild(w);
+    });
+    if (isOp(n.type)) {
+      const sel = document.createElement('select');
+      sel.style.cssText = 'font-size:11px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;';
+      sel.innerHTML = childMenuHTML();
+      sel.addEventListener('change', () => { if (sel.value) { n.children.push(newNode(sel.value)); sel.value = ''; renderTree(); } });
+      head.appendChild(sel);
+    }
+    const del = document.createElement('button');
+    del.className = 'cz-srcpill'; del.type = 'button'; del.textContent = '🗑';
+    del.style.cssText = 'padding:1px 7px;';
+    del.addEventListener('click', () => { parentArr.splice(idx, 1); renderTree(); });
+    head.appendChild(del);
+    wrap.appendChild(head);
+    if (isOp(n.type)) (n.children || []).forEach((c, ci) => wrap.appendChild(renderNodeRow(c, n.children, ci, depth + 1)));
+    return wrap;
+  }
+
+  // Recursive tree → OpenSCAD.
+  function nn(v, d) { const f = parseFloat(v); return isFinite(f) ? f : d; }
+  function ni(v, d) { return Math.max(1, Math.round(nn(v, d))); }        // positive integer (loop counts)
+  function sstr(v) { return '"' + String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"'; }
+  function emitNode(n, ind) {
+    const pad = '  '.repeat(ind), P = n.params || {};
+    const block = (inner) => `${inner} {\n${emitChildren(n, ind + 1)}\n${pad}}`;
+    switch (n.type) {
+      // --- 3D leaves ---
+      case 'cube': return `${pad}cube([${nn(P.x,10)}, ${nn(P.y,10)}, ${nn(P.z,10)}], center=${P.center?'true':'false'});`;
+      case 'sphere': return `${pad}sphere(r=${nn(P.r,5)}, $fn=${ni(P.fn,48)});`;
+      case 'cylinder': return `${pad}cylinder(h=${nn(P.h,10)}, r=${nn(P.r,5)}, center=${P.center?'true':'false'}, $fn=${ni(P.fn,48)});`;
+      case 'cone': return `${pad}cylinder(h=${nn(P.h,10)}, r1=${nn(P.r1,6)}, r2=${nn(P.r2,2)}, center=${P.center?'true':'false'}, $fn=${ni(P.fn,48)});`;
+      case 'torus': return `${pad}rotate_extrude($fn=${ni(P.fn,64)}) translate([${nn(P.R,20)}, 0, 0]) circle(r=${nn(P.r,5)}, $fn=${ni(P.fn,64)});`;
+      case 'roundedcube': {
+        const rad = nn(P.rad,3), x = Math.max(0, nn(P.x,24)-2*rad), y = Math.max(0, nn(P.y,24)-2*rad), z = Math.max(0, nn(P.z,24)-2*rad);
+        return `${pad}minkowski() {\n${pad}  cube([${x}, ${y}, ${z}], center=true);\n${pad}  sphere(r=${rad}, $fn=${ni(P.fn,32)});\n${pad}}`;
+      }
+      case 'text3d': return `${pad}linear_extrude(height=${nn(P.h,3)}) text(${sstr(P.str)}, size=${nn(P.size,10)}, halign="center", valign="center", $fn=${ni(P.fn,24)});`;
+      // --- 2D leaves ---
+      case 'circle': return `${pad}circle(r=${nn(P.r,5)}, $fn=${ni(P.fn,48)});`;
+      case 'square': return `${pad}square([${nn(P.x,20)}, ${nn(P.y,20)}], center=${P.center?'true':'false'});`;
+      case 'text2d': return `${pad}text(${sstr(P.str)}, size=${nn(P.size,10)}, halign="center", valign="center");`;
+      // --- booleans / combine ---
+      case 'union': case 'difference': case 'intersection': case 'hull': case 'minkowski':
+        return block(`${pad}${n.type}()`);
+      // --- transforms ---
+      case 'translate': return block(`${pad}translate([${nn(P.x,0)}, ${nn(P.y,0)}, ${nn(P.z,0)}])`);
+      case 'rotate': return block(`${pad}rotate([${nn(P.x,0)}, ${nn(P.y,0)}, ${nn(P.z,0)}])`);
+      case 'scale': return block(`${pad}scale([${nn(P.x,1)}, ${nn(P.y,1)}, ${nn(P.z,1)}])`);
+      case 'mirror': return block(`${pad}mirror([${nn(P.x,1)}, ${nn(P.y,0)}, ${nn(P.z,0)}])`);
+      case 'resize': return block(`${pad}resize([${nn(P.x,20)}, ${nn(P.y,20)}, ${nn(P.z,20)}])`);
+      case 'color': return block(`${pad}color([${nn(P.r,1)}, ${nn(P.g,0.5)}, ${nn(P.b,0.2)}])`);
+      // --- extrusion (2D → 3D) ---
+      case 'linear_extrude': return block(`${pad}linear_extrude(height=${nn(P.h,10)}, twist=${nn(P.twist,0)}, scale=${nn(P.scale,1)}, center=${P.center?'true':'false'}, $fn=${ni(P.fn,48)})`);
+      case 'rotate_extrude': return block(`${pad}rotate_extrude(angle=${nn(P.angle,360)}, $fn=${ni(P.fn,64)})`);
+      case 'offset2d': return block(`${pad}offset(r=${nn(P.r,2)})`);
+      // --- patterns (generative repeaters) ---
+      case 'linear_pattern':
+        return `${pad}for (i = [0 : ${ni(P.n,5) - 1}]) translate([i*${nn(P.dx,15)}, i*${nn(P.dy,0)}, i*${nn(P.dz,0)}]) {\n${emitChildren(n, ind + 1)}\n${pad}}`;
+      case 'circular_pattern': {
+        const cnt = ni(P.n,6);
+        return `${pad}for (i = [0 : ${cnt - 1}]) rotate([0, 0, i*${(360 / cnt)}]) translate([${nn(P.rad,30)}, 0, 0]) {\n${emitChildren(n, ind + 1)}\n${pad}}`;
+      }
+      case 'mirror_copy':
+        return `${pad}union() {\n${emitChildren(n, ind + 1)}\n${pad}  mirror([${nn(P.x,1)}, ${nn(P.y,0)}, ${nn(P.z,0)}]) {\n${emitChildren(n, ind + 2)}\n${pad}  }\n${pad}}`;
+      default: return `${pad}// unknown node ${n.type}`;
+    }
+  }
+  function emitChildren(n, ind) {
+    const kids = (n.children || []);
+    if (!kids.length) return '  '.repeat(ind) + '// (empty)';
+    return kids.map(c => emitNode(c, ind)).join('\n');
+  }
+  function treeToScad() {
+    if (!nodeTree.length) return '$fn = 48;\n// empty design\n';
+    return '$fn = 48;\n' + nodeTree.map(n => emitNode(n, 0)).join('\n') + '\n';
+  }
+  document.getElementById('czNodeApply').addEventListener('click', async () => {
+    if (!activeProject) return;
+    const msg = document.getElementById('czNodeMsg');
+    const btn = document.getElementById('czNodeApply');
+    btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Saving…';
+    const code = treeToScad();
+    const state = { designMode:'nodes', nodes: nodeTree };
+    const d = await post({ action:'write_scad', id: activeProject.id, code, state });
+    if (!d.ok) { msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Failed.'; btn.disabled = false; return; }
+    DESIGN_STATE[activeProject.id] = state; // keep local copy in sync
+    msg.style.color = 'var(--ok)'; msg.textContent = '✓ Applied';
+    btn.disabled = false;
+    reloadAndRender(activeProject.id);
+  });
+
   // Project rail clicks
   document.getElementById('czProjects').addEventListener('click', async (e) => {
     const del = e.target.closest('.cz-proj-del');
@@ -578,7 +965,7 @@ $csrf         = csrf_token();
       return;
     }
     const proj = e.target.closest('.cz-proj');
-    if (proj) openProject(+proj.dataset.id, proj.dataset.mode, proj.dataset.name);
+    if (proj) openProject(+proj.dataset.id, proj.dataset.mode, proj.dataset.name, proj.dataset.design || '');
   });
 
   // Save to library
@@ -609,9 +996,35 @@ $csrf         = csrf_token();
   // ---- Create modal ----
   const modal = document.getElementById('czModal');
   let pickSrc = null;
+  let newMode = 'import';        // 'import' | 'design'
+  let designMode = 'sliders';    // 'sliders' | 'code' | 'nodes'
+  const DESIGN_HINTS = {
+    sliders: 'Start from a parametric template and drive it with sliders.',
+    code: 'Write OpenSCAD directly. Parameters you declare become sliders too.',
+    nodes: 'Snap together primitives and boolean operations — no code required.'
+  };
+  function refreshCreateEnabled() {
+    document.getElementById('czCreateBtn').disabled =
+      (newMode === 'import') ? !pickSrc : false;
+  }
   document.getElementById('czNewBtn').addEventListener('click', () => { modal.hidden = false; });
   document.getElementById('czCancelBtn').addEventListener('click', () => { modal.hidden = true; });
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+
+  document.getElementById('czModeTabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-newmode]'); if (!b) return;
+    newMode = b.dataset.newmode;
+    document.querySelectorAll('#czModeTabs .cz-srcpill').forEach(x => x.classList.toggle('active', x === b));
+    document.getElementById('czImportPick').hidden = (newMode !== 'import');
+    document.getElementById('czDesignPick').hidden = (newMode !== 'design');
+    refreshCreateEnabled();
+  });
+  document.getElementById('czDesignModes').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dmode]'); if (!b) return;
+    designMode = b.dataset.dmode;
+    document.querySelectorAll('#czDesignModes .cz-srcpill').forEach(x => x.classList.toggle('active', x === b));
+    document.getElementById('czDesignHint').textContent = DESIGN_HINTS[designMode] || '';
+  });
 
   document.getElementById('czSrcList').addEventListener('click', (e) => {
     const s = e.target.closest('.cz-src');
@@ -619,7 +1032,7 @@ $csrf         = csrf_token();
     document.querySelectorAll('.cz-src').forEach(x => x.classList.remove('active'));
     s.classList.add('active');
     pickSrc = { src: s.dataset.src, folder: s.dataset.folder };
-    document.getElementById('czCreateBtn').disabled = false;
+    refreshCreateEnabled();
   });
 
   // Search + source-pill filtering of the import list.
@@ -646,13 +1059,41 @@ $csrf         = csrf_token();
     const name = document.getElementById('czNewName').value.trim();
     const msg = document.getElementById('czCreateMsg');
     if (!name) { msg.style.color = 'var(--err)'; msg.textContent = 'Give the project a name.'; return; }
-    if (!pickSrc) { msg.style.color = 'var(--err)'; msg.textContent = 'Pick a model to import.'; return; }
     const btn = document.getElementById('czCreateBtn');
+    if (newMode === 'design') {
+      btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Creating…';
+      const d = await post({ action:'create_design', name, designMode });
+      if (d.ok) { modal.hidden = true; location.href = 'customize.php'; }
+      else { msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Failed.'; btn.disabled = false; }
+      return;
+    }
+    if (!pickSrc) { msg.style.color = 'var(--err)'; msg.textContent = 'Pick a model to import.'; return; }
     btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Creating…';
     const d = await post({ action:'create', name, src:pickSrc.src, folder:pickSrc.folder });
     if (d.ok) { modal.hidden = true; location.href = 'customize.php'; }
     else { msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Failed.'; btn.disabled = false; }
   });
+
+  // Deep link: customize.php?src=<slug>&folder=<folder> opens the New Project
+  // modal with that model preselected (used by the viewer/library "Customize
+  // this" links for .scad-only parametric models).
+  (function () {
+    const p = new URLSearchParams(location.search);
+    const dsrc = p.get('src'), dfolder = p.get('folder');
+    if (!dsrc || !dfolder) return;
+    modal.hidden = false;
+    const sel = '#czSrcList .cz-src[data-src="' + CSS.escape(dsrc) + '"][data-folder="' + CSS.escape(dfolder) + '"]';
+    const row = document.querySelector(sel);
+    if (!row) return;
+    document.querySelectorAll('.cz-src').forEach(x => x.classList.remove('active'));
+    row.classList.add('active');
+    row.style.display = '';
+    pickSrc = { src: row.dataset.src, folder: row.dataset.folder };
+    document.getElementById('czCreateBtn').disabled = false;
+    row.scrollIntoView({ block: 'center' });
+    const nameEl = document.getElementById('czNewName');
+    if (nameEl && !nameEl.value) nameEl.value = (row.dataset.folder || '').replace(/^\d+\s*-\s*/, '').slice(0, 60);
+  })();
   // ===== Unified tool + keyboard system (works for both viewers) =====
   let selectedPart = null, arr_updateCtxPos = null, ctxMode = 'move';
 

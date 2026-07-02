@@ -785,7 +785,7 @@ foreach ($sources as $s) {
         const res = await fetch('model_file.php?src=' + encodeURIComponent(src) + '&model=' + encodeURIComponent(model) + '&list=1');
         const list = await res.json();
         if (!Array.isArray(list) || list.length === 0) {
-          filesEl.innerHTML = '<span class="hint">No STL/3MF files in this model.</span>';
+          filesEl.innerHTML = '<span class="hint">No STL/3MF files to view. If this is a parametric model, <a href="customize.php?src=' + encodeURIComponent(src) + '&folder=' + encodeURIComponent(model) + '" style="color:var(--clay)">open it in Customize →</a></span>';
           return;
         }
         filesEl.innerHTML = '';

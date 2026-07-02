@@ -42,6 +42,25 @@ switch ($action) {
         );
         pj_out($r);
 
+    case 'create_design':
+        $r = project_create_blank(
+            (string) ($in['name'] ?? ''),
+            (string) ($in['designMode'] ?? 'code')
+        );
+        pj_out($r);
+
+    case 'write_scad':
+        $id = (int) ($in['id'] ?? 0);
+        $code = (string) ($in['code'] ?? '');
+        if (!project_get($id)) { pj_out(['ok' => false, 'error' => 'Project not found.']); }
+        if (strlen($code) > 2 * 1024 * 1024) { pj_out(['ok' => false, 'error' => 'Script too large.']); }
+        if (!project_write_scad($id, $code)) { pj_out(['ok' => false, 'error' => 'Could not write script.']); }
+        // Persist node-graph state alongside, when provided.
+        if (isset($in['state']) && is_array($in['state'])) {
+            project_set_state($id, (array) $in['state']);
+        }
+        pj_out(['ok' => true]);
+
     case 'state':
         $id = (int) ($in['id'] ?? 0);
         if (!project_get($id)) { pj_out(['ok' => false, 'error' => 'Project not found.']); }

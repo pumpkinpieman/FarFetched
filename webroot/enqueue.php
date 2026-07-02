@@ -18,6 +18,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/MakerWorldService.php';
 if (!auth_check()) { http_response_code(401); header('Content-Type: application/json'); echo json_encode(['ok'=>false,'error'=>'auth required']); exit; }
 
 header('Content-Type: application/json');
@@ -54,8 +55,9 @@ if (!in_array($fileType, ['STL', '3MF', 'PACK'], true)) {
     $fileType = 'STL';
 }
 
+$ALLOWED_SOURCES = ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality', 'nikko', 'hex3dforum'];
 $source = strtolower(trim((string) ($in['source'] ?? 'printables')));
-if (!in_array($source, ['printables', 'makerworld', 'thingiverse', 'cults3d', 'stlflix', 'creality', 'nikko', 'hex3dforum'], true)) {
+if (!in_array($source, $ALLOWED_SOURCES, true)) {
     $source = 'printables';
 }
 if ($source === 'makerworld') { $fileType = 'PACK'; }
@@ -72,8 +74,8 @@ if (count($models) > $batchCap) {
 
 $pdo = db();
 $stmt = $pdo->prepare(
-    'INSERT OR IGNORE INTO download_jobs (source, model_id, slug, name, creator, file_type, cover_url, status)
-     VALUES (:source, :model_id, :slug, :name, :creator, :file_type, :cover_url, "queued")'
+    'INSERT OR IGNORE INTO download_jobs (source, model_id, slug, name, creator, creator_uid, file_type, cover_url, status)
+     VALUES (:source, :model_id, :slug, :name, :creator, :creator_uid, :file_type, :cover_url, "queued")'
 );
 
 $queued = 0;
@@ -97,18 +99,53 @@ try {
     $queued = 0;
     $skipped = 0;
     foreach ($models as $m) {
-        $id = trim((string) ($m['id'] ?? ''));
+        // Host-authoritative routing: if a raw URL is supplied, parse_model_url
+        // determines the source + id from the host (a pasted crealitycloud.com URL
+        // must queue as Creality even while the Printables tab is active). Falls
+        // back to the batch source + provided id for bare ids / browse selections.
+        $mSource = $source;
+        $mFileType = $fileType;
+        $id   = trim((string) ($m['id'] ?? ''));
+        $mSlug = (string) ($m['slug'] ?? '');
+        $url  = trim((string) ($m['url'] ?? ''));
+        if ($url !== '') {
+            $parsed = parse_model_url($url);
+            if ($parsed !== null && in_array($parsed['source'], $ALLOWED_SOURCES, true)) {
+                $mSource   = $parsed['source'];
+                $id        = (string) $parsed['model_id'];
+                $mSlug     = (string) ($parsed['slug'] ?? '');
+                $mFileType = 'PACK'; // every URL-routable source queues as a pack
+            } elseif ($id === '') {
+                // A URL we can't parse and no fallback id → skip cleanly.
+                $skipped++;
+                continue;
+            }
+        }
         if ($id === '') {
             $skipped++;
             continue;
         }
+        // Author search needs a stable per-source key, captured from the browse
+        // card (data-author-id → creator_id). MakerWorld uses a numeric uid;
+        // Printables uses the handle slug. Fall back to a one-shot MakerWorld API
+        // resolve if the uid is missing so the common path costs no extra request.
+        $creatorUid = trim((string) ($m['creator_id'] ?? ''));
+        if ($mSource === 'makerworld' && ($creatorUid === '' || !ctype_digit($creatorUid))) {
+            static $mwResolver = null;
+            if ($mwResolver === null) {
+                $mwResolver = new MakerWorldService();
+            }
+            $creatorUid = $mwResolver->creatorUidForModel($id);
+        }
+
         $stmt->execute([
-            ':source'    => $source,
+            ':source'    => $mSource,
             ':model_id'  => $id,
-            ':slug'      => substr((string) ($m['slug'] ?? ''), 0, 200),
+            ':slug'      => substr($mSlug, 0, 200),
             ':name'      => substr((string) ($m['name'] ?? ''), 0, 300),
             ':creator'   => substr((string) ($m['creator'] ?? ''), 0, 120),
-            ':file_type' => $fileType,
+            ':creator_uid' => substr($creatorUid, 0, 40),
+            ':file_type' => $mFileType,
             // Cover/thumbnail URL from the browse grid, saved so the worker can
             // store the source's own image when source-thumbnails are enabled.
             ':cover_url'  => substr((string) ($m['thumb'] ?? ($m['cover'] ?? '')), 0, 1000),

@@ -22,6 +22,42 @@ require_once __DIR__ . '/CrealityCloudService.php';
 require_once __DIR__ . '/NikkoService.php';
 require_once __DIR__ . '/Hex3DForumService.php';
 
+// --- Resilience: this endpoint must ALWAYS return JSON ----------------------
+// A PHP fatal/Throwable would otherwise emit an HTML error page under a JSON
+// content-type, surfacing on the Browse page as the opaque
+// "JSON.parse: unexpected character". Buffer output and convert any uncaught
+// Throwable or fatal into a clean JSON error (also logged for the Activity
+// view), discarding any partial output first.
+ini_set('display_errors', '0');
+error_reporting(E_ALL);
+ob_start();
+
+$smEmitError = static function (string $msg): void {
+    if (ob_get_level() > 0) { ob_clean(); }
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json');
+    }
+    echo json_encode(['ok' => false, 'error' => $msg]);
+};
+
+set_exception_handler(static function (\Throwable $e) use ($smEmitError): void {
+    if (function_exists('ff_log')) {
+        ff_log('error', 'search_more: ' . $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine());
+    }
+    $smEmitError('Search failed: ' . $e->getMessage());
+});
+
+register_shutdown_function(static function () use ($smEmitError): void {
+    $e = error_get_last();
+    if ($e !== null && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR], true)) {
+        if (function_exists('ff_log')) {
+            ff_log('error', 'search_more fatal: ' . $e['message'] . ' @ ' . basename($e['file']) . ':' . $e['line']);
+        }
+        $smEmitError('Search failed: ' . $e['message']);
+    }
+});
+
 header('Content-Type: application/json');
 
 $q      = trim((string) ($_GET['q'] ?? ''));
@@ -122,8 +158,10 @@ if ($source === 'creality') {
     $creality = new CrealityCloudService();
     $limit    = 24;
     $crealityCat = trim((string) ($_GET['crealitycat'] ?? ''));
-    // Keyword search takes priority; otherwise browse by category (or trending).
-    if ($q !== '') {
+    // Author search (numeric userId) takes priority, then keyword, then browse.
+    if ($author !== '' && ctype_digit($author)) {
+        $models = $creality->searchByAuthor($author, $limit, $page);
+    } elseif ($q !== '') {
         $models = $creality->search($q, $limit, $page);
     } else {
         $models = $creality->browseCategory($crealityCat, $limit, $page);
