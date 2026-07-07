@@ -425,6 +425,7 @@ $csrf = csrf_token();
       <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
+      <a href="filament.php">My Filament</a>
       <a href="collections_view.php">Collections</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>

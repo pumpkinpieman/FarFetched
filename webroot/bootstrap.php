@@ -53,6 +53,23 @@ define('PATH_STORE',  PRIVATE_DIR . '/download_dir.php');
 define('CONFIG_STORE', PRIVATE_DIR . '/config.php');
 define('THUMBS_DIR',  PRIVATE_DIR . '/thumbs');
 
+// Route ALL PHP sessions to a guaranteed-writable directory. The default (/tmp)
+// can be read-only in hardened/containerized hosts, and — critically — every
+// session consumer (auth guards, csrf_token(), csrf_ok(), and all AJAX
+// endpoints) MUST share one store, or a token minted in one session won't
+// validate in another (symptom: spurious "Session expired" on POST actions).
+// Set here, before any session_start(), since bootstrap is required first.
+(static function (): void {
+    $dir = PRIVATE_DIR . '/sessions';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0700, true);
+    }
+    if (is_dir($dir) && is_writable($dir)) {
+        session_save_path($dir);
+        ini_set('session.gc_maxlifetime', '86400');
+    }
+})();
+
 // Default download dir. In Docker this is set to /downloads (a mounted volume)
 // via the FETCHER_DOWNLOAD_DIR env var; outside Docker it falls back to the
 // Unraid share path. The Settings UI can still override it at runtime.
@@ -891,6 +908,60 @@ function projects_init(): void
     $done = true;
 }
 
+/**
+ * Ensure the filament-inventory tables exist. Two-table model:
+ *   filament_type  — a product the user owns (brand/material/color/attrs/thumb)
+ *   filament_spool — a physical roll of a type (total/remaining grams, status)
+ * Spools may reference a type OR be fully custom (type_id NULL not allowed —
+ * a lightweight type row is always created, but "custom-allowed" means the user
+ * never has to pre-create it; the endpoint upserts a type inline).
+ */
+function filament_init(): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $pdo = db();
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS filament_type (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            brand        TEXT NOT NULL DEFAULT \'\',
+            material     TEXT NOT NULL DEFAULT \'PLA\',
+            color_name   TEXT NOT NULL DEFAULT \'\',
+            color_hex    TEXT NOT NULL DEFAULT \'#cccccc\',
+            diameter_mm  REAL NOT NULL DEFAULT 1.75,
+            density      REAL NOT NULL DEFAULT 1.24,
+            temp_nozzle  INTEGER NOT NULL DEFAULT 0,
+            temp_bed     INTEGER NOT NULL DEFAULT 0,
+            cost         REAL NOT NULL DEFAULT 0,
+            has_thumb    INTEGER NOT NULL DEFAULT 0,
+            notes        TEXT NOT NULL DEFAULT \'\',
+            deleted      INTEGER NOT NULL DEFAULT 0,
+            created_at   TEXT NOT NULL DEFAULT (datetime(\'now\')),
+            updated_at   TEXT NOT NULL DEFAULT (datetime(\'now\'))
+        )'
+    );
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS filament_spool (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            type_id       INTEGER NOT NULL,
+            total_g       REAL NOT NULL DEFAULT 1000,
+            remaining_g   REAL NOT NULL DEFAULT 1000,
+            spool_g       REAL NOT NULL DEFAULT 0,
+            purchase_date TEXT NOT NULL DEFAULT \'\',
+            location      TEXT NOT NULL DEFAULT \'\',
+            status        TEXT NOT NULL DEFAULT \'active\',
+            notes         TEXT NOT NULL DEFAULT \'\',
+            created_at    TEXT NOT NULL DEFAULT (datetime(\'now\')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime(\'now\')),
+            FOREIGN KEY (type_id) REFERENCES filament_type(id)
+        )'
+    );
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_spool_type ON filament_spool(type_id)');
+    $done = true;
+}
+
 /** List all projects (newest first). */
 function projects_list(): array
 {
@@ -1062,7 +1133,7 @@ function project_write_scad(int $id, string $code): bool
     if (@file_put_contents($path, $code) === false) {
         return false;
     }
-    db()->prepare('UPDATE projects SET updated_at = datetime(\'now\') WHERE id = :id')->execute([':id' => $id]);
+    db_exec_retry('UPDATE projects SET updated_at = datetime(\'now\') WHERE id = :id', [':id' => $id]);
     return true;
 }
 
@@ -1070,8 +1141,7 @@ function project_write_scad(int $id, string $code): bool
 function project_set_state(int $id, array $state): void
 {
     projects_init();
-    db()->prepare('UPDATE projects SET state = :s, updated_at = datetime(\'now\') WHERE id = :id')
-        ->execute([':s' => json_encode($state), ':id' => $id]);
+    db_exec_retry('UPDATE projects SET state = :s, updated_at = datetime(\'now\') WHERE id = :id', [':s' => json_encode($state), ':id' => $id]);
 }
 
 /** Delete a project and its working directory. */
@@ -1083,7 +1153,7 @@ function project_delete(int $id): void
         && strncmp($p['work_dir'], projects_root() . '/', strlen(projects_root()) + 1) === 0) {
         ff_rrmdir($p['work_dir']);
     }
-    db()->prepare('DELETE FROM projects WHERE id = :id')->execute([':id' => $id]);
+    db_exec_retry('DELETE FROM projects WHERE id = :id', [':id' => $id]);
 }
 
 /** Rename a project. Trims, caps at 120 chars, no-ops on empty input. */
@@ -1095,8 +1165,8 @@ function project_rename(int $id, string $name): void
         return;
     }
     $name = mb_substr($name, 0, 120);
-    db()->prepare('UPDATE projects SET name = :n, updated_at = datetime(\'now\') WHERE id = :id')
-        ->execute([':n' => $name, ':id' => $id]);
+    db_exec_retry('UPDATE projects SET name = :n, updated_at = datetime(\'now\') WHERE id = :id',
+        [':n' => $name, ':id' => $id]);
 }
 
 /** Recursively remove a directory (used for project cleanup). */

@@ -56,7 +56,18 @@ if ($scadRel === null) {
 
 $values = (array) ($in['values'] ?? []);
 $fmt = ($in['fmt'] ?? 'stl') === '3mf' ? '3mf' : 'stl';
+
+// Per-element render: node designs split each top-level element into its own
+// parts/{eid}.scad so it becomes an individually selectable mesh. eid is
+// alphanumeric only (defence-in-depth against path traversal).
+$part = preg_replace('/[^A-Za-z0-9]/', '', (string) ($in['part'] ?? $_GET['part'] ?? ''));
+if ($part !== '') {
+    $scadRel = 'parts/' . $part . '.scad';
+}
 $scadPath = $work . '/' . $scadRel;
+if (!is_file($scadPath)) {
+    sr_out(['ok' => false, 'error' => $part !== '' ? 'Part not found.' : 'Script missing.']);
+}
 
 // Cache key: script mtime + sorted values + fmt.
 ksort($values);

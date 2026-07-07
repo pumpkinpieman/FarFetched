@@ -70,8 +70,12 @@ $projects     = projects_list();
 $designState  = [];
 foreach ($projects as $pp) {
     $ss = json_decode((string) ($pp['state'] ?? '{}'), true) ?: [];
-    if (!empty($ss['designMode'])) {
-        $designState[(int) $pp['id']] = ['designMode' => $ss['designMode'], 'nodes' => $ss['nodes'] ?? []];
+    if (!empty($ss['designMode']) || !empty($ss['transforms'])) {
+        $designState[(int) $pp['id']] = [
+            'designMode' => $ss['designMode'] ?? null,
+            'nodes'      => $ss['nodes'] ?? [],
+            'transforms' => $ss['transforms'] ?? new stdClass(),
+        ];
     }
 }
 $posesOk      = poses_writable();
@@ -128,6 +132,25 @@ $csrf         = csrf_token();
             border:1px solid var(--line);border-radius:14px;overflow:hidden;
             box-shadow:inset 0 0 60px rgba(0,0,0,.4);}
   .cz-stage canvas{max-width:100%;max-height:100%;display:block;}
+  /* Fullscreen render view */
+  .cz-fs-btn{position:absolute;top:10px;right:10px;z-index:6;width:34px;height:34px;
+             display:flex;align-items:center;justify-content:center;font-size:16px;cursor:pointer;
+             background:rgba(20,23,28,.72);color:var(--ink);border:1px solid var(--line);
+             border-radius:8px;transition:border-color .14s,color .14s;}
+  .cz-fs-btn:hover{border-color:var(--clay);color:var(--clay);}
+  .cz-stage:fullscreen{width:100vw;height:100vh;max-height:none;border-radius:0;background:#1c1b1a;}
+  .cz-stage:fullscreen #czCanvas{width:100%;height:100%;}
+  /* Controls float as a translucent, scrollable panel inside the fullscreen view */
+  .cz-stage:fullscreen #czControls{position:absolute;top:0;right:0;bottom:0;width:360px;max-width:44vw;
+             overflow-y:auto;padding:52px 16px 16px;box-sizing:border-box;z-index:5;
+             background:rgba(14,17,22,.86);backdrop-filter:blur(8px);
+             border-left:1px solid var(--line);}
+  /* Stack each param cleanly in the overlay so labels never collide with inputs. */
+  .cz-stage:fullscreen #czControls .cz-pctl{flex-wrap:wrap;gap:6px 10px;}
+  .cz-stage:fullscreen #czControls .cz-pctl label{flex:1 0 100%;margin-bottom:2px;}
+  .cz-stage:fullscreen #czControls .cz-pctl input[type=range]{flex:1 1 auto;}
+  .cz-stage:fullscreen #czControls::-webkit-scrollbar{width:8px;}
+  .cz-stage:fullscreen #czControls::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px;}
   /* Floating toolbar */
   .cz-toolbar-float{position:absolute;top:12px;left:12px;display:flex;align-items:center;gap:3px;
                     background:rgba(20,19,17,.82);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.08);
@@ -176,7 +199,7 @@ $csrf         = csrf_token();
   .cz-pctl{display:flex;align-items:center;gap:10px;margin-bottom:7px;min-width:0;}
   .cz-pctl label{flex:0 0 140px;font-size:12.5px;color:var(--ink);font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .cz-pctl input[type=range]{flex:1;min-width:0;}
-  .cz-pctl input[type=text],.cz-pctl input[type=number]{flex:1;min-width:0;width:auto;padding:6px 10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;font-size:13px;}
+  .cz-pctl input[type=text],.cz-pctl input[type=number]{flex:1;min-width:0;width:auto;padding:6px 10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;font-size:13px;text-align:center;}
   .cz-pctl select{flex:1;min-width:0;width:auto;padding:6px 10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;font-size:13px;}
   .cz-pval{flex:0 0 40px;text-align:right;font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);}
   .cz-arrange-tools{display:flex;flex-wrap:nowrap;gap:8px;}
@@ -193,6 +216,20 @@ $csrf         = csrf_token();
   .cz-ctx-btn.active{background:var(--clay);color:#fff;}
   .cz-ctx-close{color:#8a8580;}
   .cz-ctx-close:hover{background:rgba(224,92,92,.25);color:#fff;}
+  /* Floating live transform readout (follows the selected part) */
+  .cz-readout{position:absolute;z-index:7;pointer-events:none;
+              background:rgba(20,23,28,.82);border:1px solid var(--line);border-radius:7px;
+              padding:5px 8px;font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#e6e6e6;
+              white-space:pre;backdrop-filter:blur(6px);transform:translate(-50%,-100%);}
+  .cz-readout b{color:var(--clay);font-weight:600;}
+  /* Editable absolute-value transform panel (docked under Arrange parts) */
+  .cz-xform{display:flex;flex-direction:column;gap:6px;margin-top:8px;padding-top:10px;border-top:1px solid var(--line);}
+  .cz-xform-row{display:grid;grid-template-columns:64px repeat(3,1fr);gap:6px;align-items:center;}
+  .cz-xform-row label{font-size:11px;color:var(--muted);}
+  .cz-xform-row input{width:100%;min-width:0;box-sizing:border-box;padding:4px 6px;font-size:12px;
+                      text-align:center;background:#14171c;color:#e6e6e6;border:1px solid #333b45;
+                      border-radius:6px;font-family:ui-monospace,Menlo,Consolas,monospace;}
+  .cz-xform-row input:focus{outline:none;border-color:var(--clay);}
   /* Create modal */
   .cz-modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;}
   .cz-modal[hidden]{display:none;}
@@ -239,6 +276,7 @@ $csrf         = csrf_token();
       <a href="customize.php" class="active">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
+      <a href="filament.php">My Filament</a>
       <a href="collections_view.php">Collections</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
@@ -263,6 +301,7 @@ $csrf         = csrf_token();
       <div>
         <div class="cz-projects" id="czProjects">
           <button class="cz-new" id="czNewBtn">+ New project</button>
+          <button class="cz-new" id="czFontsBtn" style="background:transparent;border:1px solid var(--line);color:var(--muted);">🅰 Manage fonts</button>
           <?php foreach ($projects as $p): ?>
             <?php $pstate = json_decode((string) ($p['state'] ?? '{}'), true) ?: []; $pDesign = (string) ($pstate['designMode'] ?? ''); ?>
             <div class="cz-proj" data-id="<?= (int) $p['id'] ?>"
@@ -296,15 +335,21 @@ $csrf         = csrf_token();
         <div id="czEditor" hidden>
           <div class="cz-stage">
             <div id="czCanvas" style="width:100%;height:100%;max-width:100%;"></div>
+            <button id="czFsBtn" class="cz-fs-btn" type="button" title="Fullscreen (F)" aria-label="Toggle fullscreen">⛶</button>
             <div class="cz-stage-hint" id="czHint">Loading…</div>
 
             <!-- Contextual part toolbar (follows selection) -->
             <div class="cz-ctx-tools" id="czCtxTools" hidden>
               <button class="cz-ctx-btn" id="czCtxMove" title="Move (G)">↔</button>
               <button class="cz-ctx-btn" id="czCtxRot" title="Rotate (R)">⟳</button>
+              <button class="cz-ctx-btn" id="czCtxScale" title="Scale (S)">⤢</button>
+              <button class="cz-ctx-btn" id="czCtxCenter" title="Center on origin (X/Z → 0)">⊕</button>
+              <button class="cz-ctx-btn" id="czCtxDrop" title="Drop to plate (Y = 0)">⤓</button>
+              <button class="cz-ctx-btn" id="czCtxSnap" title="Toggle grid snap">⊞</button>
               <button class="cz-ctx-btn" id="czCtxReset" title="Reset this part (0)">⟲</button>
               <button class="cz-ctx-btn cz-ctx-close" id="czCtxClose" title="Deselect (Esc)">✕</button>
             </div>
+            <div class="cz-readout" id="czReadout" hidden></div>
 
             <!-- Floating toolbar (OpenSCAD-style) -->
             <div class="cz-toolbar-float" id="czToolbar">
@@ -344,7 +389,30 @@ $csrf         = csrf_token();
 
           <div id="czArrange" hidden>
             <strong style="font-size:13px;">Arrange parts</strong>
+            <button class="lib-btn lib-btn-primary" id="czSavePos" type="button"
+                    style="float:right;padding:3px 10px;font-size:12px;">💾 Save positions</button>
+            <span class="cz-proj-meta" id="czPosMsg" style="float:right;margin:5px 8px 0 0;"></span>
             <p class="cz-proj-meta" style="margin:4px 0 8px;">Click a part in the view to select it — move/rotate tools appear right at the part.</p>
+            <div id="czXform" class="cz-xform" hidden>
+              <div class="cz-xform-row">
+                <label>Position</label>
+                <input type="number" step="0.1" id="czPosX" data-ax="px" placeholder="X">
+                <input type="number" step="0.1" id="czPosY" data-ax="py" placeholder="Y">
+                <input type="number" step="0.1" id="czPosZ" data-ax="pz" placeholder="Z">
+              </div>
+              <div class="cz-xform-row">
+                <label>Rotation°</label>
+                <input type="number" step="1" id="czRotX" data-ax="rx" placeholder="X">
+                <input type="number" step="1" id="czRotY" data-ax="ry" placeholder="Y">
+                <input type="number" step="1" id="czRotZ" data-ax="rz" placeholder="Z">
+              </div>
+              <div class="cz-xform-row">
+                <label>Scale</label>
+                <input type="number" step="0.05" id="czSclX" data-ax="sx" placeholder="X">
+                <input type="number" step="0.05" id="czSclY" data-ax="sy" placeholder="Y">
+                <input type="number" step="0.05" id="czSclZ" data-ax="sz" placeholder="Z">
+              </div>
+            </div>
           </div>
 
           <div id="czVariants" hidden>
@@ -372,9 +440,9 @@ $csrf         = csrf_token();
             </div>
           </div>
 
-          <div id="czParam" hidden>
+            <div id="czParam" hidden>
             <div id="czParamControls"></div>
-            <div class="cz-actions" style="margin-top:12px;">
+            <div class="cz-actions" id="czParamActions" style="margin-top:12px;">
               <button class="lib-btn lib-btn-primary" id="czRenderBtn" type="button">⚙ Render</button>
               <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-left:8px;cursor:pointer;">
                 <input type="checkbox" id="czAutoRender"> Auto
@@ -402,6 +470,31 @@ $csrf         = csrf_token();
       </div>
     </div>
   </main>
+
+  <!-- Font manager modal -->
+  <div class="cz-modal" id="czFontModal" hidden>
+    <div class="cz-modal-card" style="max-width:560px;">
+      <h2>Manage fonts</h2>
+      <div class="cz-modal-sub">Install fonts for <code>text</code> nodes. Only <strong>.ttf, .otf, .ttc</strong> work — OpenSCAD can’t use .woff/.woff2.</div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <input type="file" id="czFontFile" accept=".ttf,.otf,.ttc" style="flex:1;min-width:180px;font-size:12px;">
+        <button class="lib-btn lib-btn-primary" id="czFontUpload" type="button">Upload</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+        <input class="cz-input" id="czFontUrl" placeholder="https://…/font.ttf  (direct file link)"
+               style="flex:1;min-width:220px;box-sizing:border-box;">
+        <button class="lib-btn lib-btn-primary" id="czFontFetch" type="button">Import URL</button>
+      </div>
+      <div class="cz-proj-meta" id="czFontMsg" style="min-height:16px;margin:4px 2px 12px;"></div>
+
+      <div id="czFontList" style="border-top:1px solid var(--line);padding-top:10px;max-height:38vh;overflow-y:auto;"></div>
+
+      <div class="cz-actions" style="margin-top:16px;justify-content:flex-end;">
+        <button class="lib-btn" id="czFontClose" type="button">Done</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Create-project modal -->
   <div class="cz-modal" id="czModal" hidden>
@@ -563,7 +656,8 @@ $csrf         = csrf_token();
     document.querySelectorAll('.cz-proj').forEach(el => el.classList.toggle('active', +el.dataset.id === id));
     document.getElementById('czExportName').value = name || '';
     hint.style.display = ''; hint.textContent = 'Loading…';
-    arr = null; selectedPart = null; document.getElementById('czCtxTools').hidden = true; // reset arrange state
+    if (arr) arrangeClearParts(); selectedPart = null; arrFirstRender = true;
+    document.getElementById('czCtxTools').hidden = true; document.getElementById('czReadout').hidden = true; document.getElementById('czXform').hidden = true; // reset arrange state
 
     // Design projects: show the authoring editor for their mode. All modes still
     // render through the parametric param panel below (the .scad is the source).
@@ -575,7 +669,23 @@ $csrf         = csrf_token();
       cz.hidden = (activeProject.design !== 'code');
       nz.hidden = (activeProject.design !== 'nodes');
       if (activeProject.design === 'code') loadScadIntoEditor(id);
-      if (activeProject.design === 'nodes') initNodeEditor(id);
+      if (activeProject.design === 'nodes') {
+        initNodeEditor(id);
+        // Render each element as its own selectable mesh on open (parts are
+        // created if a prior Apply never ran). Guarded against project switch.
+        if (nodeTree.length) {
+          const parts = nodeTree.map(n => ({
+            eid: sanitizeEid(n.eid) || typeLabel(n.type),
+            code: nodeHeaderFor(n) + emitNode(n, 0) + '\n'
+          }));
+          post({ action: 'write_parts', id, parts }).then(res => {
+            if (res && res.ok && activeProject && activeProject.id === id) {
+              const saved = DESIGN_STATE[id] && DESIGN_STATE[id].transforms;
+              renderNodeParts(id, document.getElementById('czNodeMsg'), saved);
+            }
+          });
+        }
+      }
     } else {
       dz.hidden = true; cz.hidden = true; nz.hidden = true;
     }
@@ -627,9 +737,17 @@ $csrf         = csrf_token();
     }
     document.getElementById('czRenderBtn').disabled = false;
     paramDefs = d.params || [];
+    const actions = document.getElementById('czParamActions');
+    // In a design mode (nodes/code), "Apply & Render" already renders; the
+    // parametric render bar is only meaningful when the script exposes params.
+    const inDesign = !document.getElementById('czDesign').hidden;
     if (!paramDefs.length) {
-      controls.innerHTML = '<p class="cz-proj-meta">No adjustable parameters found in this script.</p>';
+      controls.innerHTML = inDesign
+        ? ''
+        : '<p class="cz-proj-meta">No adjustable parameters found in this script.</p>';
+      if (actions) actions.style.display = inDesign ? 'none' : '';
     } else {
+      if (actions) actions.style.display = '';
       controls.innerHTML = '';
       paramDefs.forEach(p => controls.appendChild(buildControl(p)));
     }
@@ -642,7 +760,7 @@ $csrf         = csrf_token();
     const label = document.createElement('label');
     label.textContent = p.name;
     row.appendChild(label);
-    const NUM_CSS = 'flex:0 0 auto;width:66px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:6px;padding:3px 6px;font-size:12px;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;';
+    const NUM_CSS = 'flex:0 0 auto;width:66px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:6px;padding:3px 6px;font-size:12px;text-align:center;font-family:ui-monospace,Menlo,Consolas,monospace;';
     let input;
     if (p.type === 'select') {
       input = document.createElement('select');
@@ -712,22 +830,48 @@ $csrf         = csrf_token();
   // pending and fire once the current one settles (coalescing rapid edits).
   let renderInFlight = false, renderPending = false, autoTimer = null;
 
+  // Where render status should also appear when the parametric action bar is
+  // hidden (design modes). Returns the visible message el for the active mode.
+  function designMsgEl() {
+    const nodes = document.getElementById('czNodes');
+    const code  = document.getElementById('czCode');
+    if (nodes && !nodes.hidden) return document.getElementById('czNodeMsg');
+    if (code  && !code.hidden)  return document.getElementById('czCodeMsg');
+    return null;
+  }
+
   async function renderNow() {
     if (!activeProject) return;
     if (renderInFlight) { renderPending = true; return; }
     renderInFlight = true;
     const btn = document.getElementById('czRenderBtn');
     const msg = document.getElementById('czRenderMsg');
-    btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Rendering…';
+    const dmsg = designMsgEl(); // visible mirror in node/code mode (may be null)
+    const setMsg = (color, text) => {
+      msg.style.color = color; msg.textContent = text;
+      if (dmsg) { dmsg.style.color = color; dmsg.textContent = text; }
+    };
+    btn.disabled = true; setMsg('var(--muted)', 'Rendering…');
     const fmt = (document.querySelector('input[name="czFmt"]:checked') || {}).value || 'stl';
     const d = await post2('scad_render.php', { id: activeProject.id, values: collectValues(), fmt });
     if (d.ok) {
-      renderedFile = d.file; activeFile = d.file;
+      renderedFile = d.file;
       hint.style.display = 'none';
-      ensureViewer().loadFile(projFileUrl(activeProject.id, d.file), fmt);
-      msg.style.color = 'var(--ok)'; msg.textContent = d.cached ? '✓ (cached)' : '✓ Rendered';
+      if ((fmt || 'stl') === 'stl') {
+        // Route through the arrange renderer so the move/rotate/scale tools work
+        // on node/param/single-mesh projects too, and Save bakes the transform.
+        // Frame on first render; preserve the pose on subsequent re-renders.
+        activeFile = '__arrange__';
+        arrangeSetParts(activeProject.id, [{ file: d.file, label: activeProject.name }],
+          { reframe: arrFirstRender, keepTransforms: !arrFirstRender });
+        arrFirstRender = false;
+      } else {
+        activeFile = d.file;
+        ensureViewer().loadFile(projFileUrl(activeProject.id, d.file), fmt);
+      }
+      setMsg('var(--ok)', d.cached ? '✓ (cached)' : '✓ Rendered');
     } else {
-      msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Render failed.';
+      setMsg('var(--err)', d.error || 'Render failed.');
     }
     btn.disabled = false;
     renderInFlight = false;
@@ -753,10 +897,16 @@ $csrf         = csrf_token();
   }
 
   function loadFile(file) {
-    activeFile = file;
     hint.style.display = 'none';
     const ext = file.split('.').pop().toLowerCase();
-    ensureViewer().loadFile(projFileUrl(activeProject.id, file), ext);
+    if (ext === 'stl') {
+      activeFile = '__arrange__';   // enables selection/tools + transform-baked Save
+      arrangeSetParts(activeProject.id, [{ file, label: activeProject.name }], { reframe: true });
+      arrFirstRender = false;
+    } else {
+      activeFile = file;
+      ensureViewer().loadFile(projFileUrl(activeProject.id, file), ext);
+    }
   }
 
   // ---------------- Design authoring (code + nodes) ----------------
@@ -795,7 +945,7 @@ $csrf         = csrf_token();
   // Leaf primitives (3D + 2D) and container operators. Everything serializes to
   // a CSG tree: leaves emit a solid; ops emit `op(){ children }`.
   const BOSL2_OK = <?= bosl2_available() ? 'true' : 'false' ?>;
-  const NODE_FONTS = <?= json_encode(openscad_fonts(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '[]' ?>;
+  let NODE_FONTS = <?= json_encode(openscad_fonts(), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '[]' ?>;
   // BOSL2-backed leaves (only offered when the library is installed) + a
   // dependency-free knurl that works on any OpenSCAD.
   const NODE_BOSL2 = ['cuboid_round', 'cuboid_chamfer', 'threaded_rod', 'spur_gear'];
@@ -876,7 +1026,39 @@ $csrf         = csrf_token();
   const isOp = t => NODE_OPS.includes(t);
   let nodeTree = [];      // array of top-level nodes
   let nodeSeq = 1;
-  const newNode = (type) => ({ id: nodeSeq++, type, params: Object.assign({}, NODE_DEFAULTS[type] || {}), children: isOp(type) ? [] : undefined });
+
+  // --- Element IDs (human-facing names: Cube1, Sphere2, LinearExtrude1) --------
+  // Alphanumeric only (no spaces/symbols); numbers allowed anywhere.
+  function sanitizeEid(s) { return String(s == null ? '' : s).replace(/[^A-Za-z0-9]/g, '').slice(0, 40); }
+  function typeLabel(type) {
+    return String(type).split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+  }
+  function collectEids(arr, set) {
+    (arr || []).forEach(n => { if (n && n.eid) set.add(n.eid); if (n && n.children) collectEids(n.children, set); });
+    return set;
+  }
+  // First free "{TypeLabel}{n}" not already taken.
+  function genEid(type, taken) {
+    const base = typeLabel(type); let i = 1, cand = base + i;
+    while (taken.has(cand)) { i++; cand = base + i; }
+    return cand;
+  }
+  // Make an arbitrary (sanitized) name unique by bumping a trailing number.
+  function uniqueEid(name, taken) {
+    if (!taken.has(name)) return name;
+    const m = name.match(/^(.*?)(\d+)$/);
+    let stem = m ? m[1] : name, num = m ? parseInt(m[2], 10) : 1, cand;
+    do { num++; cand = stem + num; } while (taken.has(cand));
+    return cand;
+  }
+
+  const newNode = (type) => ({
+    id: nodeSeq++,
+    eid: genEid(type, collectEids(nodeTree, new Set())),
+    type,
+    params: Object.assign({}, NODE_DEFAULTS[type] || {}),
+    children: isOp(type) ? [] : undefined
+  });
 
   function initNodeEditor(id) {
     const saved = (DESIGN_STATE[id] && DESIGN_STATE[id].nodes) || [];
@@ -887,11 +1069,19 @@ $csrf         = csrf_token();
     buildPalette(); renderTree();
   }
   function normalizeTree(a) {
-    return (a || []).map(n => ({
-      id: n.id || nodeSeq++, type: n.type,
-      params: Object.assign({}, NODE_DEFAULTS[n.type] || {}, n.params || {}),
-      children: isOp(n.type) ? normalizeTree(n.children || []) : undefined
-    }));
+    // Assign/repair element IDs on load (older projects have none), keeping them
+    // unique across the whole tree.
+    const taken = new Set();
+    const walk = (arr) => (arr || []).map(n => {
+      let eid = sanitizeEid(n.eid) || (typeLabel(n.type) + '1');
+      eid = uniqueEid(eid, taken); taken.add(eid);
+      return {
+        id: n.id || nodeSeq++, eid, type: n.type,
+        params: Object.assign({}, NODE_DEFAULTS[n.type] || {}, n.params || {}),
+        children: isOp(n.type) ? walk(n.children || []) : undefined
+      };
+    });
+    return walk(a);
   }
   function buildPalette() {
     const pal = document.getElementById('czNodePalette');
@@ -931,10 +1121,28 @@ $csrf         = csrf_token();
     wrap.style.cssText = 'margin:4px 0 4px ' + (depth * 16) + 'px;border-left:2px solid #2a313b;padding-left:8px;';
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;';
-    const tag = document.createElement('strong');
+    // Editable element ID (rename) + a muted type badge beside it.
+    const nameInp = document.createElement('input');
+    nameInp.type = 'text';
+    nameInp.value = n.eid || '';
+    nameInp.title = 'Element ID (letters and numbers only)';
+    nameInp.style.cssText = 'width:96px;background:#14171c;color:' + (isOp(n.type) ? 'var(--clay)' : '#e6e6e6')
+      + ';border:1px solid #333b45;border-radius:5px;padding:2px 6px;font-size:12px;font-weight:600;';
+    nameInp.addEventListener('input', () => {          // strip invalid chars, keep caret
+      const p = nameInp.selectionStart, clean = sanitizeEid(nameInp.value);
+      if (clean !== nameInp.value) { nameInp.value = clean; nameInp.setSelectionRange(Math.max(0, p - 1), Math.max(0, p - 1)); }
+    });
+    nameInp.addEventListener('change', () => {          // commit: non-empty + tree-unique
+      let clean = sanitizeEid(nameInp.value);
+      if (!clean) { nameInp.value = n.eid; return; }
+      const taken = collectEids(nodeTree, new Set()); taken.delete(n.eid);
+      if (taken.has(clean)) clean = uniqueEid(clean, taken);
+      n.eid = clean; nameInp.value = clean;
+    });
+    const tag = document.createElement('span');
     tag.textContent = (isOp(n.type) ? '▸ ' : '') + n.type;
-    tag.style.cssText = 'color:' + (isOp(n.type) ? 'var(--clay)' : '#e6e6e6') + ';font-size:12.5px;';
-    head.appendChild(tag);
+    tag.style.cssText = 'font-size:11px;color:var(--muted);';
+    head.append(nameInp, tag);
     (NODE_FIELDS[n.type] || []).forEach(([key, lbl, kind]) => {
       const w = document.createElement('label');
       w.style.cssText = 'font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;';
@@ -963,7 +1171,7 @@ $csrf         = csrf_token();
         w.append(lbl, sel);
       } else {
         const inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any';
-        inp.value = n.params[key]; inp.style.cssText = 'width:56px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;padding:2px 4px;font-size:11px;';
+        inp.value = n.params[key]; inp.style.cssText = 'width:56px;background:#14171c;color:#e6e6e6;border:1px solid #333b45;border-radius:5px;padding:2px 4px;font-size:11px;text-align:center;';
         inp.addEventListener('input', () => { n.params[key] = parseFloat(inp.value); });
         w.append(lbl, inp);
       }
@@ -990,7 +1198,14 @@ $csrf         = csrf_token();
   function nn(v, d) { const f = parseFloat(v); return isFinite(f) ? f : d; }
   function ni(v, d) { return Math.max(1, Math.round(nn(v, d))); }        // positive integer (loop counts)
   function sstr(v) { return '"' + String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ') + '"'; }
+  // Prefix every emitted node with its element ID as a SCAD comment — makes the
+  // generated script self-documenting and anchors export/part naming (Stage 3).
   function emitNode(n, ind) {
+    const pad0 = '  '.repeat(ind);
+    const eid = sanitizeEid(n && n.eid) || typeLabel(n ? n.type : 'node');
+    return pad0 + '// ' + eid + '\n' + emitNodeBody(n, ind);
+  }
+  function emitNodeBody(n, ind) {
     const pad = '  '.repeat(ind), P = n.params || {};
     const block = (inner) => `${inner} {\n${emitChildren(n, ind + 1)}\n${pad}}`;
     switch (n.type) {
@@ -1080,19 +1295,121 @@ $csrf         = csrf_token();
     }
     return header + nodeTree.map(n => emitNode(n, 0)).join('\n') + '\n';
   }
+  // Header (with only the BOSL2 includes a given element actually needs).
+  function nodeHeaderFor(node) {
+    const libs = collectBosl2Libs([node], new Set());
+    let h = '$fn = 48;\n';
+    if (libs.has('std'))       h += 'include <BOSL2/std.scad>\n';
+    if (libs.has('threading')) h += 'include <BOSL2/threading.scad>\n';
+    if (libs.has('gears'))     h += 'include <BOSL2/gears.scad>\n';
+    return h;
+  }
+
+  // Render each TOP-LEVEL element as its own STL so it becomes an individually
+  // selectable/movable mesh; merge happens on export. Poses are preserved per
+  // element (by element ID) across re-renders.
+  // Capture current per-element transforms as a plain, serialisable map.
+  function collectPartTransforms() {
+    const t = {};
+    if (arr && arr.parts) {
+      for (const m of arr.parts) {
+        if (m.userData && m.userData.label) {
+          t[m.userData.label] = {
+            pos: [m.position.x, m.position.y, m.position.z],
+            rot: [m.rotation.x, m.rotation.y, m.rotation.z],
+            scale: [m.scale.x, m.scale.y, m.scale.z]
+          };
+        }
+      }
+    }
+    return t;
+  }
+  // Convert a saved transform map into the {Vector3,Euler,Vector3} form the
+  // arrange loader re-applies by label.
+  function transformsToPrior(map) {
+    const out = {};
+    if (!map) return out;
+    for (const k in map) {
+      const v = map[k] || {};
+      out[k] = {
+        pos: new THREE.Vector3().fromArray(v.pos || [0, 0, 0]),
+        rot: new THREE.Euler().fromArray((v.rot || [0, 0, 0]).slice(0, 3)),
+        scale: new THREE.Vector3().fromArray(v.scale || [1, 1, 1])
+      };
+    }
+    return out;
+  }
+
+  async function renderNodeParts(id, nmsg, initialTransforms) {
+    // Prefer live poses (in-session re-render); fall back to persisted transforms
+    // (fresh open) so offsets survive reloads.
+    const prior = {};
+    if (arr && arr.parts && arr.parts.length) {
+      for (const m of arr.parts) {
+        if (m.userData && m.userData.label) {
+          prior[m.userData.label] = { pos: m.position.clone(), rot: m.rotation.clone(), scale: m.scale.clone() };
+        }
+      }
+    } else if (initialTransforms) {
+      Object.assign(prior, transformsToPrior(initialTransforms));
+    }
+    const eids = nodeTree.map(n => sanitizeEid(n.eid) || typeLabel(n.type));
+    const files = [];
+    for (const eid of eids) {
+      const r = await post2('scad_render.php', { id, part: eid, values: {}, fmt: 'stl' });
+      if (r && r.ok) files.push({ file: r.file, label: eid });
+      else console.warn('Node part render failed:', eid, r && r.error);
+    }
+    if (!files.length) {
+      if (nmsg) { nmsg.style.color = 'var(--err)'; nmsg.textContent = 'Render failed (no elements produced geometry).'; }
+      return;
+    }
+    activeFile = '__arrange__'; // per-part tools + transform-baked Save
+    arrangeSetParts(id, files, { reframe: arrFirstRender, priorByLabel: prior });
+    arrFirstRender = false;
+    if (nmsg) { nmsg.style.color = 'var(--ok)'; nmsg.textContent = '✓ Rendered ' + files.length + ' element' + (files.length > 1 ? 's' : ''); }
+  }
+
   document.getElementById('czNodeApply').addEventListener('click', async () => {
     if (!activeProject) return;
     const msg = document.getElementById('czNodeMsg');
     const btn = document.getElementById('czNodeApply');
     btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Saving…';
-    const code = treeToScad();
-    const state = { designMode:'nodes', nodes: nodeTree };
-    const d = await post({ action:'write_scad', id: activeProject.id, code, state });
+    const id = activeProject.id;
+    const state = { designMode: 'nodes', nodes: nodeTree, transforms: collectPartTransforms() };
+
+    // Merged script keeps design.scad valid (param panel / fallback).
+    let d = await post({ action: 'write_scad', id, code: treeToScad(), state });
     if (!d.ok) { msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Failed.'; btn.disabled = false; return; }
-    DESIGN_STATE[activeProject.id] = state; // keep local copy in sync
-    msg.style.color = 'var(--ok)'; msg.textContent = '✓ Applied';
+
+    // Per-element scripts for individually selectable meshes.
+    const parts = nodeTree.map(n => ({
+      eid: sanitizeEid(n.eid) || typeLabel(n.type),
+      code: nodeHeaderFor(n) + emitNode(n, 0) + '\n'
+    }));
+    d = await post({ action: 'write_parts', id, parts, state });
+    if (!d.ok) { msg.style.color = 'var(--err)'; msg.textContent = d.error || 'Failed.'; btn.disabled = false; return; }
+
+    DESIGN_STATE[id] = state;
+    msg.style.color = 'var(--muted)'; msg.textContent = 'Rendering…';
+    await renderNodeParts(id, msg);
     btn.disabled = false;
-    reloadAndRender(activeProject.id);
+  });
+
+  // Save the current element positions into the project (persists across reloads)
+  // without re-rendering geometry.
+  document.getElementById('czSavePos').addEventListener('click', async () => {
+    if (!activeProject) return;
+    const m = document.getElementById('czPosMsg');
+    const b = document.getElementById('czSavePos');
+    b.disabled = true; if (m) { m.style.color = 'var(--muted)'; m.textContent = 'Saving positions…'; }
+    const state = (activeProject.design === 'nodes')
+      ? { designMode: 'nodes', nodes: nodeTree, transforms: collectPartTransforms() }
+      : Object.assign({}, DESIGN_STATE[activeProject.id] || {}, { transforms: collectPartTransforms() });
+    const d = await post({ action: 'state', id: activeProject.id, state });
+    if (d && d.ok) { DESIGN_STATE[activeProject.id] = state; if (m) { m.style.color = 'var(--ok)'; m.textContent = '✓ Positions saved'; } }
+    else if (m) { m.style.color = 'var(--err)'; m.textContent = (d && d.error) || 'Save failed.'; }
+    b.disabled = false;
   });
 
   // Project rail clicks
@@ -1101,18 +1418,49 @@ $csrf         = csrf_token();
     if (del) {
       e.stopPropagation();
       if (!confirm('Delete this project? (Exports already in your library stay.)')) return;
-      const d = await post({ action:'delete', id:+del.dataset.id });
-      if (d.ok) location.reload();
+      const card = del.closest('.cz-proj');
+      const id = +del.dataset.id;
+      // Optimistic: remove immediately, persist in the background, restore on failure.
+      const anchor = card ? card.nextElementSibling : null;
+      const parent = card ? card.parentNode : null;
+      if (card) card.remove();
+      post({ action:'delete', id }).then(d => {
+        if (!d || !d.ok) {
+          if (parent && card) parent.insertBefore(card, anchor);
+          alert('Delete failed: ' + ((d && d.error) || 'unknown') + ' — restored.');
+        }
+      }).catch(() => {
+        if (parent && card) parent.insertBefore(card, anchor);
+        alert('Delete failed (network) — restored.');
+      });
       return;
     }
     const edit = e.target.closest('.cz-proj-edit');
     if (edit) {
       e.stopPropagation();
-      const next = (prompt('Rename project:', edit.dataset.name || '') || '').trim();
-      if (!next || next === edit.dataset.name) return;
-      const d = await post({ action:'rename', id:+edit.dataset.id, name: next });
-      if (d.ok) location.reload();
-      else alert('Rename failed: ' + (d.error || 'unknown'));
+      const prev = edit.dataset.name || '';
+      const next = (prompt('Rename project:', prev) || '').trim();
+      if (!next || next === prev) return;
+      const card = edit.closest('.cz-proj');
+      const nameEl = card ? card.querySelector('.cz-proj-name') : null;
+      const id = +edit.dataset.id;
+      // Optimistic: update label + datasets now, persist in the background.
+      edit.dataset.name = next;
+      if (nameEl) nameEl.textContent = next;
+      if (card) card.dataset.name = next;
+      post({ action:'rename', id, name: next }).then(d => {
+        if (!d || !d.ok) {
+          edit.dataset.name = prev;
+          if (nameEl) nameEl.textContent = prev;
+          if (card) card.dataset.name = prev;
+          alert('Rename failed: ' + ((d && d.error) || 'unknown') + ' — reverted.');
+        }
+      }).catch(() => {
+        edit.dataset.name = prev;
+        if (nameEl) nameEl.textContent = prev;
+        if (card) card.dataset.name = prev;
+        alert('Rename failed (network) — reverted.');
+      });
       return;
     }
     const proj = e.target.closest('.cz-proj');
@@ -1128,15 +1476,25 @@ $csrf         = csrf_token();
     btn.disabled = true; msg.style.color = 'var(--muted)'; msg.textContent = 'Saving…';
     let d;
     if (activeFile === '__arrange__') {
-      const stl = exportArrange();
-      if (!stl) { msg.style.color = 'var(--err)'; msg.textContent = 'Nothing to export.'; btn.disabled = false; return; }
-      d = await post({ action:'export_raw', id:activeProject.id, name, stl });
+      const buf = exportArrangeBinary();
+      if (!buf) { msg.style.color = 'var(--err)'; msg.textContent = 'Nothing to export.'; btn.disabled = false; return; }
+      // Small meshes: one base64 JSON body. Large meshes: chunked upload buffered
+      // to PRIVATE_DIR — avoids both post_max_size and a writable upload_tmp_dir.
+      d = buf.byteLength <= 4 * 1024 * 1024
+        ? await post({ action: 'export_raw', id: activeProject.id, name, stl_b64: abToB64(buf) })
+        : await saveArrangeChunked(activeProject.id, name, buf);
     } else {
       d = await post({ action:'export', id:activeProject.id, file:activeFile, name });
     }
     if (d.ok) {
       msg.style.color = 'var(--ok)';
       msg.innerHTML = '✓ Saved to library as <strong>' + d.folder + '</strong> — find it under the <em>poses</em> source in My Library.';
+      // Best-effort: capture a thumbnail from the current view so the new pose
+      // shows a preview in the library (never blocks or fails the save).
+      if (activeFile === '__arrange__' && d.folder) {
+        const png = arrangeCapturePNG();
+        if (png) { post2('save_thumb.php', { src: 'poses', model: d.folder, png }).catch(() => {}); }
+      }
     } else {
       msg.style.color = 'var(--err)';
       msg.textContent = d.error || 'Export failed.';
@@ -1159,6 +1517,93 @@ $csrf         = csrf_token();
       (newMode === 'import') ? !pickSrc : false;
   }
   document.getElementById('czNewBtn').addEventListener('click', () => { modal.hidden = false; });
+
+  // ---- Font manager -------------------------------------------------------
+  (function initFontManager(){
+    const fm    = document.getElementById('czFontModal');
+    const btn   = document.getElementById('czFontsBtn');
+    const msgEl = document.getElementById('czFontMsg');
+    const listEl= document.getElementById('czFontList');
+    if (!fm || !btn) return;
+
+    const setMsg = (color, text) => { msgEl.style.color = color; msgEl.textContent = text; };
+    const fmt = n => n >= 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+
+    async function fapi(fd){
+      const r = await fetch('font_upload.php', { method:'POST', body: fd });
+      if (r.status === 403) { location.reload(); return { ok:false, error:'session' }; }
+      return r.json();
+    }
+    function form(obj){
+      const fd = new FormData();
+      fd.append('csrf', CSRF);
+      Object.entries(obj).forEach(([k,v]) => fd.append(k, v));
+      return fd;
+    }
+
+    async function refreshFamilies(){
+      try {
+        const d = await fapi(form({ action:'families' }));
+        if (d && d.ok && Array.isArray(d.families)) NODE_FONTS = d.families;
+      } catch (_) {}
+    }
+
+    async function loadList(){
+      listEl.innerHTML = '<div class="cz-proj-meta">Loading…</div>';
+      const d = await fapi(form({ action:'list' }));
+      if (!d || !d.ok) { listEl.innerHTML = '<div class="cz-proj-meta">Could not load fonts.</div>'; return; }
+      if (!d.fonts.length) { listEl.innerHTML = '<div class="cz-proj-meta">No user fonts installed yet.</div>'; return; }
+      listEl.innerHTML = '';
+      d.fonts.forEach(f => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);';
+        const nm = document.createElement('span');
+        nm.style.cssText = 'font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        nm.textContent = f.name;
+        const meta = document.createElement('span');
+        meta.className = 'cz-proj-meta'; meta.style.cssText = 'flex:0 0 auto;';
+        meta.textContent = fmt(f.size);
+        const del = document.createElement('button');
+        del.className = 'lib-btn'; del.textContent = '✕'; del.title = 'Remove';
+        del.style.cssText = 'flex:0 0 auto;padding:2px 8px;';
+        del.addEventListener('click', async () => {
+          if (!confirm('Remove ' + f.name + '?')) return;
+          const r = await fapi(form({ action:'delete', name: f.name }));
+          if (r && r.ok) { setMsg('var(--ok)','Removed ' + r.removed); await refreshFamilies(); loadList(); }
+          else if (r) setMsg('var(--err)', r.error || 'Delete failed.');
+        });
+        const left = document.createElement('div');
+        left.style.cssText = 'display:flex;gap:10px;align-items:center;min-width:0;flex:1;';
+        left.append(nm, meta);
+        row.append(left, del);
+        listEl.appendChild(row);
+      });
+    }
+
+    btn.addEventListener('click', () => { fm.hidden = false; setMsg('var(--muted)',''); loadList(); });
+    document.getElementById('czFontClose').addEventListener('click', () => { fm.hidden = true; });
+    fm.addEventListener('click', e => { if (e.target === fm) fm.hidden = true; });
+
+    document.getElementById('czFontUpload').addEventListener('click', async () => {
+      const inp = document.getElementById('czFontFile');
+      if (!inp.files || !inp.files[0]) { setMsg('var(--err)','Choose a .ttf/.otf/.ttc file first.'); return; }
+      const fd = form({ action:'upload' });
+      fd.append('font', inp.files[0]);
+      setMsg('var(--muted)','Installing…');
+      const d = await fapi(fd);
+      if (d && d.ok) { setMsg('var(--ok)','Installed ' + d.installed); inp.value=''; await refreshFamilies(); loadList(); }
+      else if (d) setMsg('var(--err)', d.error || 'Upload failed.');
+    });
+
+    document.getElementById('czFontFetch').addEventListener('click', async () => {
+      const url = (document.getElementById('czFontUrl').value || '').trim();
+      if (!url) { setMsg('var(--err)','Paste a direct https link to a .ttf/.otf/.ttc file.'); return; }
+      setMsg('var(--muted)','Downloading…');
+      const d = await fapi(form({ action:'url', url }));
+      if (d && d.ok) { setMsg('var(--ok)','Installed ' + d.installed); document.getElementById('czFontUrl').value=''; await refreshFamilies(); loadList(); }
+      else if (d) setMsg('var(--err)', d.error || 'Import failed.');
+    });
+  })();
   document.getElementById('czCancelBtn').addEventListener('click', () => { modal.hidden = true; });
   modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
 
@@ -1261,35 +1706,116 @@ $csrf         = csrf_token();
 
   function showCtxTools() {
     document.getElementById('czCtxTools').hidden = false;
+    document.getElementById('czXform').hidden = false;
     setCtxMode(ctxMode);
   }
   function hideCtxTools() {
     document.getElementById('czCtxTools').hidden = true;
+    document.getElementById('czReadout').hidden = true;
+    document.getElementById('czXform').hidden = true;
     selectedPart = null;
     if (arr && arr.tcontrols) arr.tcontrols.detach();
   }
+  let arrSnap = false;
+  const SNAP_TRANSLATE = 1;                 // mm grid
+  const SNAP_ROTATE = Math.PI / 12;         // 15°
+
   function setCtxMode(mode) {
     ctxMode = mode;
-    if (arr && arr.tcontrols) arr.tcontrols.setMode(mode === 'rotate' ? 'rotate' : 'translate');
-    const mv = document.getElementById('czCtxMove'), rt = document.getElementById('czCtxRot');
-    if (mv) mv.classList.toggle('active', mode === 'move');
-    if (rt) rt.classList.toggle('active', mode === 'rotate');
+    if (arr && arr.tcontrols) {
+      arr.tcontrols.setMode(mode === 'rotate' ? 'rotate' : (mode === 'scale' ? 'scale' : 'translate'));
+    }
+    const map = { move:'czCtxMove', rotate:'czCtxRot', scale:'czCtxScale' };
+    ['czCtxMove','czCtxRot','czCtxScale'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('active', map[mode] === id);
+    });
   }
   function resetSelectedPart() {
     if (selectedPart && selectedPart.userData.home) {
       selectedPart.position.copy(selectedPart.userData.home.pos);
       selectedPart.rotation.copy(selectedPart.userData.home.rot);
+      if (selectedPart.userData.home.scale) selectedPart.scale.copy(selectedPart.userData.home.scale);
+      else selectedPart.scale.set(1, 1, 1);
     }
+  }
+  // Center the selected part over the origin on the build plane (X/Z → 0).
+  function centerSelectedPart() {
+    if (!selectedPart) return;
+    const c = new THREE.Box3().setFromObject(selectedPart).getCenter(new THREE.Vector3());
+    selectedPart.position.x -= c.x;
+    selectedPart.position.z -= c.z;
+  }
+  // Drop the selected part so its lowest point rests on the plate (Y = 0).
+  function dropSelectedPart() {
+    if (!selectedPart) return;
+    const minY = new THREE.Box3().setFromObject(selectedPart).min.y;
+    selectedPart.position.y -= minY;
+  }
+  function toggleSnap() {
+    arrSnap = !arrSnap;
+    if (arr && arr.tcontrols) {
+      arr.tcontrols.setTranslationSnap(arrSnap ? SNAP_TRANSLATE : null);
+      arr.tcontrols.setRotationSnap(arrSnap ? SNAP_ROTATE : null);
+      arr.tcontrols.setScaleSnap(arrSnap ? 0.1 : null);
+    }
+    const el = document.getElementById('czCtxSnap');
+    if (el) el.classList.toggle('active', arrSnap);
   }
 
   // Contextual toolbar buttons
   document.getElementById('czCtxMove').addEventListener('click', () => setCtxMode('move'));
   document.getElementById('czCtxRot').addEventListener('click', () => setCtxMode('rotate'));
+  document.getElementById('czCtxScale').addEventListener('click', () => setCtxMode('scale'));
+  document.getElementById('czCtxCenter').addEventListener('click', centerSelectedPart);
+  document.getElementById('czCtxDrop').addEventListener('click', dropSelectedPart);
+  document.getElementById('czCtxSnap').addEventListener('click', toggleSnap);
   document.getElementById('czCtxReset').addEventListener('click', resetSelectedPart);
   document.getElementById('czCtxClose').addEventListener('click', hideCtxTools);
 
+  // --- Absolute-value transform fields (two-way bound to the selected part) ---
+  const XF = {};
+  ['czPosX','czPosY','czPosZ','czRotX','czRotY','czRotZ','czSclX','czSclY','czSclZ']
+    .forEach(id => { XF[id] = document.getElementById(id); });
+  const _rad = d => d * Math.PI / 180, _deg = r => r * 180 / Math.PI;
+
+  // Object -> fields, every frame. Never overwrite a field being typed in
+  // (focus guard) — that would stomp keystrokes mid-edit.
+  function syncXformFields() {
+    if (!selectedPart) return;
+    const p = selectedPart.position, r = selectedPart.rotation, s = selectedPart.scale;
+    const set = (el, v) => { if (el && document.activeElement !== el) el.value = String(+v.toFixed(3)); };
+    set(XF.czPosX, p.x); set(XF.czPosY, p.y); set(XF.czPosZ, p.z);
+    set(XF.czRotX, _deg(r.x)); set(XF.czRotY, _deg(r.y)); set(XF.czRotZ, _deg(r.z));
+    set(XF.czSclX, s.x); set(XF.czSclY, s.y); set(XF.czSclZ, s.z);
+  }
+  // Fields -> object, on commit. Absolute values, with defensive parsing:
+  // non-finite input falls back to the current value (never writes NaN into a
+  // transform — that corrupts exported STL vertices), and scale is floored to
+  // avoid a degenerate zero-scale mesh that breaks normal computation on bake.
+  function commitXformFields() {
+    if (!selectedPart) return;
+    const p = selectedPart.position, r = selectedPart.rotation, s = selectedPart.scale;
+    const num = (el, fb) => { const v = parseFloat(el.value); return Number.isFinite(v) ? v : fb; };
+    p.set(num(XF.czPosX, p.x), num(XF.czPosY, p.y), num(XF.czPosZ, p.z));
+    r.set(_rad(num(XF.czRotX, _deg(r.x))), _rad(num(XF.czRotY, _deg(r.y))), _rad(num(XF.czRotZ, _deg(r.z))));
+    // Scale must stay positive and sane: negative scale flips triangle winding
+    // (inverted normals → non-manifold export), and near-zero collapses the mesh.
+    const sc = (el, cur) => {
+      const v = num(el, cur);
+      if (!Number.isFinite(v)) return cur;
+      return Math.min(1000, Math.max(0.01, Math.abs(v)));
+    };
+    s.set(sc(XF.czSclX, s.x), sc(XF.czSclY, s.y), sc(XF.czSclZ, s.z));
+  }
+  Object.values(XF).forEach(el => {
+    if (!el) return;
+    el.addEventListener('change', commitXformFields);
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') { commitXformFields(); el.blur(); } });
+  });
+
   function setTool(tool) {
-    if (tool === 'move' || tool === 'rotate') setCtxMode(tool);
+    if (tool === 'move' || tool === 'rotate' || tool === 'scale') setCtxMode(tool);
   }
   function setView(which) {
     // Works on whichever scene is live (arrange = arr, else viewer-core orbit).
@@ -1304,7 +1830,7 @@ $csrf         = csrf_token();
     cam.lookAt(t); orbit.update();
   }
   function doFrame() {
-    if (arr && arr.frameAll) arr.frameAll();
+    if (arr && arr.parts && arr.parts.length) arrangeFrameAll();
     else if (viewer && viewer.frameAll) viewer.frameAll();
   }
   function resetArrange() {
@@ -1326,8 +1852,10 @@ $csrf         = csrf_token();
     if (editor.hidden) return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
     const k = e.key.toLowerCase();
+    if (k === 'f' && e.shiftKey) { const fb = document.getElementById('czFsBtn'); if (fb) fb.click(); return; }
     if (k === 'g') setTool('move');
     else if (k === 'r') setTool('rotate');
+    else if (k === 's' && !e.ctrlKey && !e.metaKey) setTool('scale');
     else if (k === '0') resetArrange();
     else if (k === 'f') doFrame();
     else if (k === '1') setView('front');
@@ -1343,72 +1871,117 @@ $csrf         = csrf_token();
     const p = document.getElementById('czHelpPop'); p.hidden = !p.hidden;
   });
 
+  // --- Fullscreen render view: canvas fills the screen, controls float inside ---
+  (function initFullscreenView(){
+    const stageEl = document.querySelector('#czEditor .cz-stage');
+    const fsBtn   = document.getElementById('czFsBtn');
+    if (!stageEl || !fsBtn) return;
+
+    // Wrap the control panels once so they move as a single unit. appendChild
+    // relocates the live nodes (event listeners ride along — no re-binding).
+    let ctrls = document.getElementById('czControls');
+    if (!ctrls) {
+      ctrls = document.createElement('div');
+      ctrls.id = 'czControls';
+      const anchor = stageEl.nextSibling;
+      ['czArrange','czVariants','czDesign','czParam'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) ctrls.appendChild(el);
+      });
+      stageEl.parentNode.insertBefore(ctrls, anchor);
+    }
+    const ctrlsHome   = ctrls.parentNode;    // #czEditor — restore target
+    const ctrlsAnchor = ctrls.nextSibling;   // exact restore position
+
+    // Re-sync both renderers to the (now different) container size. The main
+    // viewer also has a ResizeObserver, but we nudge it so the frame is correct
+    // immediately on enter/exit rather than a frame late.
+    function syncRenderers(){
+      requestAnimationFrame(() => {
+        if (viewer && viewer.resize) viewer.resize();
+        if (arr && arr.renderer && arr.camera){
+          const host = arr.renderer.domElement.parentNode;
+          if (host){
+            const w = host.clientWidth || 600, h = host.clientHeight || 440;
+            arr.camera.aspect = w / h; arr.camera.updateProjectionMatrix();
+            arr.renderer.setSize(w, h, false);
+          }
+        }
+      });
+    }
+
+    fsBtn.addEventListener('click', () => {
+      if (document.fullscreenElement) {
+        if (document.exitFullscreen) document.exitFullscreen();
+      } else if (stageEl.requestFullscreen) {
+        stageEl.requestFullscreen().catch(() => {});
+      }
+    });
+
+    document.addEventListener('fullscreenchange', () => {
+      const on = document.fullscreenElement === stageEl;
+      if (on) {
+        stageEl.appendChild(ctrls);                 // controls float over the view
+      } else if (ctrlsHome) {
+        ctrlsHome.insertBefore(ctrls, ctrlsAnchor); // restore to original layout
+      }
+      fsBtn.textContent = on ? '✕' : '⛶';
+      fsBtn.title = on ? 'Exit fullscreen (Shift+F)' : 'Fullscreen (Shift+F)';
+      syncRenderers();
+    });
+
+    // Keep the renderer matched to the window while fullscreen (debounced).
+    let rt = null;
+    window.addEventListener('resize', () => {
+      if (!document.fullscreenElement) return;
+      clearTimeout(rt); rt = setTimeout(syncRenderers, 120);
+    });
+  })();
+
 
   let arr = null; // {scene,camera,renderer,orbit,tcontrols,parts:[],raycaster}
+  let arrFirstRender = true; // frame on first render of a project, preserve pose after
   function arrangeAvailable(meta) {
     // Multi-part = variants mode with 2+ STL meshes we can load as movable parts.
     return meta.mode === 'variants' && (meta.variants || []).length >= 2;
   }
 
-  function startArrange(id, variants) {
-    document.getElementById('czArrange').hidden = false;
+  // Persistent arrange renderer: created ONCE and reused across renders/projects
+  // so we never leak GPU contexts, RAF loops, or stacked canvases. Parts are
+  // (re)loaded via arrangeSetParts(), which disposes prior geometry/materials.
+  function ensureArrange() {
     const host = document.getElementById('czCanvas');
+    if (arr && arr.host === host && arr.renderer) return arr;
+
     host.innerHTML = '';
     const w = host.clientWidth || 600, h = host.clientHeight || 440;
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 5000);
     camera.position.set(150, 150, 150);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setSize(w, h); renderer.setClearColor(0x1c1b1a);
     host.appendChild(renderer.domElement);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.1));
     const dl = new THREE.DirectionalLight(0xffffff, 0.8); dl.position.set(1, 1, 1); scene.add(dl);
-    const grid = new THREE.GridHelper(300, 30, 0x444444, 0x2a2a2a); scene.add(grid);
+    scene.add(new THREE.GridHelper(300, 30, 0x444444, 0x2a2a2a));
     const orbit = new OrbitControls(camera, renderer.domElement);
     const tcontrols = new TransformControls(camera, renderer.domElement);
     tcontrols.addEventListener('dragging-changed', e => orbit.enabled = !e.value);
-    // three r160+: TransformControls is no longer an Object3D — its visual gizmo
-    // must be added to the scene via getHelper(). Using scene.add(tcontrols)
-    // (pre-r160 style) silently fails, so the gizmo never appears and parts
-    // can't be moved/selected. getHelper() restores the gizmo.
     scene.add(typeof tcontrols.getHelper === 'function' ? tcontrols.getHelper() : tcontrols);
     const raycaster = new THREE.Raycaster(), mouse = new THREE.Vector2();
     const parts = [];
-    const loader = new STLLoader();
 
-    let loaded = 0;
-    variants.forEach((v, i) => {
-      loader.load(projFileUrl(id, v.file), geo => {
-        geo.computeVertexNormals();
-        // Center the geometry on its own bounding-box center, then push the mesh
-        // back out by that offset. The part stays exactly where it was visually,
-        // but its ORIGIN is now its center — so TransformControls puts the gizmo
-        // at the middle of each part instead of all at the shared world origin.
-        geo.computeBoundingBox();
-        const center = new THREE.Vector3();
-        geo.boundingBox.getCenter(center);
-        geo.translate(-center.x, -center.y, -center.z);
-        const mat = new THREE.MeshStandardMaterial({ color: 0xd0883f, metalness: .1, roughness: .7 });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(center.x, center.y, center.z);
-        mesh.userData = { file: v.file, label: v.label, home: null };
-        scene.add(mesh); parts.push(mesh);
-        loaded++;
-        if (loaded === variants.length) frameAll();
-      });
-    });
-
-    function frameAll() {
-      const box = new THREE.Box3();
-      parts.forEach(p => box.expandByObject(p));
-      const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
-      const d = Math.max(s.x, s.y, s.z) || 100;
-      orbit.target.copy(c);
-      camera.position.set(c.x + d, c.y + d, c.z + d);
-      camera.near = d / 100; camera.far = d * 100; camera.updateProjectionMatrix();
-      orbit.update();
-      parts.forEach(p => p.userData.home = { pos: p.position.clone(), rot: p.rotation.clone() });
-      document.getElementById('czHint').style.display = 'none';
+    // Adaptive clip planes (reused scratch objects -> no per-frame allocation).
+    const _clipBox = new THREE.Box3(), _clipSize = new THREE.Vector3();
+    function adaptClip() {
+      if (!parts.length) return;
+      _clipBox.makeEmpty();
+      for (const p of parts) _clipBox.expandByObject(p);
+      const radius = 0.5 * _clipBox.getSize(_clipSize).length() || 100;
+      const dist = camera.position.distanceTo(orbit.target);
+      camera.near = Math.max(0.05, (dist - radius) * 0.2);
+      camera.far = (dist + radius) * 2 + radius * 10;
+      camera.updateProjectionMatrix();
     }
 
     renderer.domElement.addEventListener('pointerdown', e => {
@@ -1418,31 +1991,45 @@ $csrf         = csrf_token();
       mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
       const hit = raycaster.intersectObjects(parts, false)[0];
-      // Only (re)select when a part is actually clicked. Clicking empty space
-      // keeps the current selection — deselect is via the ✕ button or Esc.
       if (hit) { tcontrols.attach(hit.object); selectedPart = hit.object; showCtxTools(); }
     });
 
-    // Position the contextual toolbar under the selected part each frame.
     function updateCtxPos() {
       if (!selectedPart) return;
       const box = new THREE.Box3().setFromObject(selectedPart);
       const c = box.getCenter(new THREE.Vector3());
-      c.y = box.min.y; // bottom of the part
-      const v = c.clone().project(camera);
-      const host = renderer.domElement;
-      const x = (v.x * 0.5 + 0.5) * host.clientWidth;
-      const y = (-v.y * 0.5 + 0.5) * host.clientHeight;
+      const host2 = renderer.domElement;
+      const bottom = c.clone(); bottom.y = box.min.y;
+      const vb = bottom.clone().project(camera);
       const tb = document.getElementById('czCtxTools');
-      tb.style.left = x + 'px';
-      tb.style.top = Math.min(y + 14, host.clientHeight - 46) + 'px';
+      tb.style.left = ((vb.x * 0.5 + 0.5) * host2.clientWidth) + 'px';
+      tb.style.top = Math.min((-vb.y * 0.5 + 0.5) * host2.clientHeight + 14, host2.clientHeight - 46) + 'px';
+      const top = c.clone(); top.y = box.max.y;
+      const vt = top.clone().project(camera);
+      const ro = document.getElementById('czReadout');
+      const p = selectedPart.position, r = selectedPart.rotation, sScl = selectedPart.scale;
+      const deg = v => (v * 180 / Math.PI);
+      const f = n => (Math.abs(n) < 0.05 ? '0' : n.toFixed(1));
+      ro.hidden = false;
+      ro.innerHTML =
+        '<b>pos</b>  ' + f(p.x) + ', ' + f(p.y) + ', ' + f(p.z) + '\n' +
+        '<b>rot</b>  ' + f(deg(r.x)) + '°, ' + f(deg(r.y)) + '°, ' + f(deg(r.z)) + '°\n' +
+        '<b>scale</b> ' + sScl.x.toFixed(2) + ', ' + sScl.y.toFixed(2) + ', ' + sScl.z.toFixed(2);
+      ro.style.left = ((vt.x * 0.5 + 0.5) * host2.clientWidth) + 'px';
+      ro.style.top = Math.max((-vt.y * 0.5 + 0.5) * host2.clientHeight - 8, 8) + 'px';
+      syncXformFields();
     }
     arr_updateCtxPos = updateCtxPos;
 
-    (function loop() { requestAnimationFrame(loop); orbit.update(); if (arr_updateCtxPos) arr_updateCtxPos(); renderer.render(scene, camera); })();
-    arr = { scene, camera, renderer, orbit, tcontrols, parts, frameAll };
+    const runState = { running: true };
+    (function loop() {
+      if (!runState.running) return;
+      requestAnimationFrame(loop);
+      orbit.update(); adaptClip();
+      if (arr_updateCtxPos) arr_updateCtxPos();
+      renderer.render(scene, camera);
+    })();
 
-    // Keep the arrange renderer matched to its container.
     const arrResize = () => {
       const nw = host.clientWidth, nh = host.clientHeight;
       if (nw && nh) { renderer.setSize(nw, nh); camera.aspect = nw / nh; camera.updateProjectionMatrix(); }
@@ -1450,31 +2037,176 @@ $csrf         = csrf_token();
     window.addEventListener('resize', arrResize);
     if (window.ResizeObserver) { new ResizeObserver(arrResize).observe(host); }
     requestAnimationFrame(arrResize);
+
+    arr = { host, scene, camera, renderer, orbit, tcontrols, parts, raycaster, adaptClip, runState };
+    return arr;
   }
 
-  function exportArrange() {
-    // Merge all parts (with current transforms) into one STL string.
-    if (!arr) return null;
-    let out = 'solid farfetched\n';
-    const v = new THREE.Vector3();
-    arr.parts.forEach(mesh => {
-      mesh.updateMatrixWorld(true);
-      const geo = mesh.geometry, pos = geo.attributes.position;
-      const idx = geo.index;
-      const tri = (a, b, c) => {
-        const pa = v.clone().fromBufferAttribute(pos, a).applyMatrix4(mesh.matrixWorld);
-        const pb = new THREE.Vector3().fromBufferAttribute(pos, b).applyMatrix4(mesh.matrixWorld);
-        const pc = new THREE.Vector3().fromBufferAttribute(pos, c).applyMatrix4(mesh.matrixWorld);
-        const n = pb.clone().sub(pa).cross(pc.clone().sub(pa)).normalize();
-        out += `facet normal ${n.x} ${n.y} ${n.z}\nouter loop\n`;
-        out += `vertex ${pa.x} ${pa.y} ${pa.z}\nvertex ${pb.x} ${pb.y} ${pb.z}\nvertex ${pc.x} ${pc.y} ${pc.z}\n`;
-        out += 'endloop\nendfacet\n';
-      };
-      if (idx) for (let i = 0; i < idx.count; i += 3) tri(idx.getX(i), idx.getX(i + 1), idx.getX(i + 2));
-      else for (let i = 0; i < pos.count; i += 3) tri(i, i + 1, i + 2);
+  // Remove + dispose all current parts (frees GPU memory; no leak on reload).
+  function arrangeClearParts() {
+    if (!arr) return;
+    if (arr.tcontrols) arr.tcontrols.detach();
+    selectedPart = null;
+    for (const pMesh of arr.parts) {
+      arr.scene.remove(pMesh);
+      if (pMesh.geometry) pMesh.geometry.dispose();
+      if (pMesh.material) pMesh.material.dispose();
+    }
+    arr.parts.length = 0;
+    hideCtxTools();
+  }
+
+  function arrangeFrameAll() {
+    const a = arr, hintEl = document.getElementById('czHint');
+    if (!a || !a.parts.length) { if (hintEl) hintEl.textContent = 'Could not load any parts for this project.'; return; }
+    const box = new THREE.Box3();
+    a.parts.forEach(pMesh => box.expandByObject(pMesh));
+    const c = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
+    const d = Math.max(sz.x, sz.y, sz.z) || 100;
+    a.orbit.target.copy(c);
+    a.camera.position.set(c.x + d, c.y + d, c.z + d);
+    a.orbit.minDistance = Math.max(0.1, d * 0.02);
+    a.orbit.maxDistance = d * 200;
+    a.adaptClip();
+    a.orbit.update();
+    a.parts.forEach(pMesh => pMesh.userData.home = { pos: pMesh.position.clone(), rot: pMesh.rotation.clone(), scale: pMesh.scale.clone() });
+    if (hintEl) hintEl.style.display = 'none';
+  }
+
+  // (Re)load a list of { file, label } parts into the persistent arrange scene.
+  // opts.reframe (default true) frames the view; opts.keepTransforms re-applies
+  // the single prior part's transform (so a pose survives a param re-render).
+  function arrangeSetParts(id, files, opts) {
+    opts = opts || {};
+    const a = ensureArrange();
+    let prior = null;
+    if (opts.keepTransforms && a.parts.length === 1) {
+      const p0 = a.parts[0];
+      prior = { pos: p0.position.clone(), rot: p0.rotation.clone(), scale: p0.scale.clone() };
+    }
+    arrangeClearParts();
+    document.getElementById('czArrange').hidden = false;
+
+    const total = files.length;
+    const hintEl = document.getElementById('czHint');
+    if (!total) { if (hintEl) hintEl.style.display = 'none'; return; }
+
+    const loader = new STLLoader();
+    let settled = 0;
+    const settle = () => {
+      if (++settled !== total) return;
+      if (opts.reframe !== false) arrangeFrameAll();
+      else if (hintEl) hintEl.style.display = 'none';
+    };
+
+    files.forEach(v => {
+      loader.load(projFileUrl(id, v.file), geo => {
+        geo.computeVertexNormals();
+        geo.computeBoundingBox();
+        const center = new THREE.Vector3(); geo.boundingBox.getCenter(center);
+        geo.translate(-center.x, -center.y, -center.z);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xd0883f, metalness: .1, roughness: .7 });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(center.x, center.y, center.z);
+        if (prior && total === 1) { mesh.position.copy(prior.pos); mesh.rotation.copy(prior.rot); mesh.scale.copy(prior.scale); }
+        else if (opts.priorByLabel && v.label && opts.priorByLabel[v.label]) {
+          const pr = opts.priorByLabel[v.label];
+          mesh.position.copy(pr.pos); mesh.rotation.copy(pr.rot); mesh.scale.copy(pr.scale);
+        }
+        mesh.userData = { file: v.file, label: v.label, home: null };
+        a.scene.add(mesh); a.parts.push(mesh);
+        settle();
+      }, undefined, err => { console.warn('Arrange: failed to load part', v.file, err); settle(); });
     });
-    out += 'endsolid farfetched\n';
-    return out;
+  }
+
+  function startArrange(id, variants) {
+    const saved = DESIGN_STATE[id] && DESIGN_STATE[id].transforms;
+    arrangeSetParts(id, variants, { reframe: true, priorByLabel: transformsToPrior(saved) });
+  }
+
+  // Merge all parts (with current transforms) into a single binary-STL buffer.
+  // Binary avoids the ~7x size + string-allocation overflow of ASCII, and reused
+  // scratch vectors mean zero per-triangle allocation (no GC thrash on big meshes).
+  // Capture the current arrange view as a PNG data URL for a library thumbnail.
+  // The transform gizmo is hidden for the shot, then restored.
+  function arrangeCapturePNG() {
+    if (!arr || !arr.parts.length) return null;
+    const helper = arr.tcontrols && (arr.tcontrols.getHelper ? arr.tcontrols.getHelper() : arr.tcontrols);
+    const wasVisible = helper ? helper.visible : false;
+    if (helper) helper.visible = false;
+    let url = null;
+    try { arr.renderer.render(arr.scene, arr.camera); url = arr.renderer.domElement.toDataURL('image/png'); }
+    catch (e) { url = null; }
+    if (helper) { helper.visible = wasVisible; arr.renderer.render(arr.scene, arr.camera); }
+    return url;
+  }
+
+  // Chunked save for large meshes: ~512 KB raw per chunk (~683 KB base64, well
+  // under a default 8 MB post_max_size). Chunks are sent in order and appended
+  // server-side, then assembled + validated on finalize.
+  async function saveArrangeChunked(id, name, buf) {
+    const bytes = new Uint8Array(buf);
+    const uploadId = 'up' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const CHUNK = 512 * 1024;
+    const total = Math.ceil(bytes.length / CHUNK) || 1;
+    for (let seq = 0; seq < total; seq++) {
+      const slice = bytes.slice(seq * CHUNK, (seq + 1) * CHUNK); // copy -> own buffer
+      const r = await post({ action: 'export_chunk', uploadId, seq, total, data: abToB64(slice.buffer) });
+      if (!r || !r.ok) return r || { ok: false, error: 'Chunk upload failed.' };
+    }
+    return post({ action: 'export_finalize', id, name, uploadId, total });
+  }
+
+  // ArrayBuffer -> base64, chunked so large meshes don't blow the call stack.
+  function abToB64(buf) {
+    const bytes = new Uint8Array(buf);
+    const CHUNK = 0x8000;
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+  }
+
+  function exportArrangeBinary() {
+    if (!arr || !arr.parts.length) return null;
+    let triCount = 0;
+    for (const mesh of arr.parts) {
+      const geo = mesh.geometry;
+      if (!geo || !geo.attributes.position) continue;
+      triCount += geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3;
+    }
+    triCount = Math.floor(triCount);
+    if (triCount < 1) return null;
+
+    const dv = new DataView(new ArrayBuffer(84 + triCount * 50));
+    dv.setUint32(80, triCount, true);
+    let off = 84;
+
+    const pa = new THREE.Vector3(), pb = new THREE.Vector3(), pc = new THREE.Vector3();
+    const cb = new THREE.Vector3(), ab = new THREE.Vector3(), n = new THREE.Vector3();
+    for (const mesh of arr.parts) {
+      const geo = mesh.geometry;
+      if (!geo || !geo.attributes.position) continue;
+      mesh.updateMatrixWorld(true);
+      const pos = geo.attributes.position, idx = geo.index, m = mesh.matrixWorld;
+      const emit = (a, b, c) => {
+        pa.fromBufferAttribute(pos, a).applyMatrix4(m);
+        pb.fromBufferAttribute(pos, b).applyMatrix4(m);
+        pc.fromBufferAttribute(pos, c).applyMatrix4(m);
+        cb.subVectors(pc, pb); ab.subVectors(pa, pb); n.crossVectors(cb, ab).normalize();
+        dv.setFloat32(off,      n.x,  true); dv.setFloat32(off + 4,  n.y,  true); dv.setFloat32(off + 8,  n.z,  true);
+        dv.setFloat32(off + 12, pa.x, true); dv.setFloat32(off + 16, pa.y, true); dv.setFloat32(off + 20, pa.z, true);
+        dv.setFloat32(off + 24, pb.x, true); dv.setFloat32(off + 28, pb.y, true); dv.setFloat32(off + 32, pb.z, true);
+        dv.setFloat32(off + 36, pc.x, true); dv.setFloat32(off + 40, pc.y, true); dv.setFloat32(off + 44, pc.z, true);
+        dv.setUint16(off + 48, 0, true);
+        off += 50;
+      };
+      if (idx) for (let i = 0; i < idx.count; i += 3) emit(idx.getX(i), idx.getX(i + 1), idx.getX(i + 2));
+      else     for (let i = 0; i < pos.count; i += 3) emit(i, i + 1, i + 2);
+    }
+    return dv.buffer;
   }
 
 </script>

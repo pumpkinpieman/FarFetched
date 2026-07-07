@@ -80,6 +80,7 @@ $badge = static function (string $s): string {
       <a href="customize.php">Customize</a>
       <a href="insights.php">Insights</a>
       <a href="printers.php">My Printers</a>
+      <a href="filament.php">My Filament</a>
       <a href="collections_view.php">Collections</a>
       <a href="favorites.php">Favorites</a>
       <a href="settings.php">Settings</a>
@@ -424,8 +425,14 @@ $badge = static function (string $s): string {
         fd.append('id', id);
         fd.append('csrf', CSRF);
         const r = await fetch('job_action.php', { method: 'POST', body: fd });
+        // A genuinely expired session (403) can't be fixed by the stale in-page
+        // token — reload once to mint a fresh one instead of dead-ending.
+        if (r.status === 403) { location.reload(); return; }
         const j = await r.json();
-        if (!j.ok) alert(j.msg || 'Action failed.');
+        if (!j.ok) {
+          if (/session expired/i.test(j.msg || '')) { location.reload(); return; }
+          alert(j.msg || 'Action failed.');
+        }
       } catch (e) {
         alert('Action failed — reload and try again.');
       }

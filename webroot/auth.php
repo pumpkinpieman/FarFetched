@@ -52,9 +52,24 @@ function auth_is_enabled(): bool
 /** Begin the session if not already started. */
 function auth_session(): void
 {
-    if (session_status() !== PHP_SESSION_ACTIVE) {
-        session_start();
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        return;
     }
+    // PHP's default session dir (/tmp) may be read-only (e.g. a hardened or
+    // tmpfs-less container). Store sessions in the app's private dir, which is
+    // always writable, so session_start() can't fail and emit header-breaking
+    // warnings. Must be set BEFORE session_start().
+    if (!headers_sent()) {
+        $dir = PRIVATE_DIR . '/sessions';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0700, true);
+        }
+        if (is_dir($dir) && is_writable($dir)) {
+            session_save_path($dir);
+            ini_set('session.gc_maxlifetime', '86400');
+        }
+    }
+    session_start();
 }
 
 /** True if the current visitor is authenticated (or auth is disabled). */
