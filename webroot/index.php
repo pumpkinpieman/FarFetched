@@ -904,6 +904,9 @@ $csrf = csrf_token();
   let mode = 'browse';
   let searchQuery = '';
   let searchNext = null;   // next offset to fetch, or null when exhausted
+  let emptyStreak = 0;     // consecutive auto-loads that appended no new cards
+  const MAX_EMPTY_STREAK = 8; // stop auto-loading after this many no-progress pages
+  const seenIds = new Set(); // model keys already rendered (dedup across pages)
   const MW_CAT = <?= json_encode($mwCat) ?>;
   const MW_BROWSE = <?= json_encode($mwBrowse) ?>;
   const TV_CAT    = <?= json_encode($tvCat) ?>;
@@ -979,7 +982,24 @@ $csrf = csrf_token();
       return;
     }
 
-    for (const m of data.models) grid.appendChild(makeCard(m));
+    // Dedup on append: some source APIs (e.g. Creality browse) clamp an
+    // out-of-range offset and re-return the LAST page, which would pile up
+    // duplicate cards forever. Skip models already shown and count how many were
+    // genuinely new this page.
+    let newThisPage = 0;
+    for (const m of data.models) {
+      const key = String(m.id || m.slug || m.url || '');
+      if (key && seenIds.has(key)) continue;
+      if (key) seenIds.add(key);
+      grid.appendChild(makeCard(m));
+      newThisPage++;
+    }
+
+    // "No progress" = a page that added zero NEW cards, whether it came back
+    // empty (MakerWorld filtered-out pages) or full of duplicates (Creality
+    // re-returning the tail). Either way, stop auto-advancing after a bounded
+    // streak so we never spin.
+    emptyStreak = (newThisPage === 0) ? emptyStreak + 1 : 0;
 
     if (mode === 'search') {
       searchNext = data.nextOffset ?? null;
@@ -991,9 +1011,17 @@ $csrf = csrf_token();
       nextCursor = (data.cursor && data.models.length) ? data.cursor : null;
     }
 
-    if (hasMore()) {
+    // Stop auto-advancing after too many consecutive empty pages; the user can
+    // still click "Load more" to push past a long filtered stretch.
+    const stalled = emptyStreak >= MAX_EMPTY_STREAK;
+
+    if (hasMore() && !stalled) {
       if (loadMoreBtn) loadMoreBtn.disabled = false;
       loadStatus.textContent = '';
+    } else if (hasMore() && stalled) {
+      if (loadMoreBtn) { loadMoreBtn.style.display = ''; loadMoreBtn.disabled = false; }
+      loadStatus.textContent = 'Paused - many filtered results. Click \u201CLoad more\u201D to continue.';
+      emptyStreak = 0;
     } else {
       if (loadMoreBtn) loadMoreBtn.style.display = 'none';
       loadStatus.textContent = (mode === 'search')
@@ -1003,8 +1031,11 @@ $csrf = csrf_token();
 
     loading = false;
 
-    if (hasMore() && sentinelInView() && data.models.length > 0) {
-      requestAnimationFrame(loadMore);
+    // Continue only when there is more AND we haven't stalled. A short timeout
+    // (not requestAnimationFrame) yields the main thread so the UI stays
+    // responsive and we don't hammer the API in a tight frame loop.
+    if (hasMore() && !stalled && sentinelInView()) {
+      setTimeout(loadMore, newThisPage === 0 ? 150 : 0);
     }
   }
 
@@ -1071,6 +1102,8 @@ $csrf = csrf_token();
     searchQuery = realAuthor ? '' : label;
     searchNext = 0;
     nextCursor = null;
+    emptyStreak = 0;
+    seenIds.clear();
     grid.innerHTML = '';
     if (loadMoreBtn) loadMoreBtn.style.display = 'none';
     if (pageTitle) pageTitle.textContent = (realAuthor ? 'Models by ' : 'Search: ') + label;
@@ -1150,6 +1183,9 @@ $csrf = csrf_token();
 
   // Infinite scroll: auto-load when the sentinel near the page bottom appears.
   const sentinel = document.getElementById('scrollSentinel');
+  // Seed the dedup set with the server-rendered first page so a page-2 model
+  // that repeats a page-1 card is caught too.
+  grid.querySelectorAll('.card[data-id]').forEach(c => { if (c.dataset.id) seenIds.add(String(c.dataset.id)); });
   let observer = null;
   if ('IntersectionObserver' in window && sentinel) {
     observer = new IntersectionObserver((entries) => {
