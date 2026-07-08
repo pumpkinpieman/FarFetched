@@ -87,6 +87,13 @@ $rowNum = 1; // header was row 1
 
 ff_log('info', '[import] CSV import started.');
 
+// Wrap the whole insert loop in a single transaction: turns N per-row implicit
+// commits (an fsync each) into one, cutting bulk-import time dramatically, and
+// makes the import atomic (all-or-nothing on a fatal error). Per-row validation
+// errors are still collected and skipped without aborting the batch.
+$importDb = db();
+$importDb->beginTransaction();
+
 while (($row = fgetcsv($fh)) !== false) {
     $rowNum++;
     // Skip fully blank lines.
@@ -157,6 +164,7 @@ while (($row = fgetcsv($fh)) !== false) {
         if (is_array($st) && empty($st[$source])) { $st[$source] = true; cfg_save(['source_thumbs' => $st]); }
     }
 }
+$importDb->commit();
 fclose($fh);
 
 ff_log('info', "[import] CSV import finished — queued $queued, skipped $skipped, favorites $favs, errors " . count($errors) . '.');

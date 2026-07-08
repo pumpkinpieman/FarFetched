@@ -2476,11 +2476,102 @@ function db_disconnect(): void
     $GLOBALS['__ff_pdo'] = null;
 }
 
+/**
+ * Read-only database health + data-quality report. Runs SQLite's own integrity
+ * checks plus app-level orphan detection. Safe to call anytime (no writes).
+ */
+function db_health(): array
+{
+    $pdo = db();
+    $out = ['ok' => true, 'checks' => [], 'orphans' => [], 'counts' => []];
+
+    // Structural integrity (quick_check is far cheaper than integrity_check on
+    // large DBs and catches the same class of corruption).
+    try {
+        $ic = (string) $pdo->query('PRAGMA quick_check')->fetchColumn();
+        $out['checks']['quick_check'] = $ic;
+        if (strtolower($ic) !== 'ok') { $out['ok'] = false; }
+    } catch (\Throwable $e) {
+        $out['checks']['quick_check'] = 'error: ' . $e->getMessage();
+        $out['ok'] = false;
+    }
+
+    // Referential integrity — any row returned is an FK violation.
+    try {
+        $fk = $pdo->query('PRAGMA foreign_key_check')->fetchAll(PDO::FETCH_ASSOC);
+        $out['checks']['foreign_key_violations'] = count($fk);
+        if ($fk) { $out['ok'] = false; }
+    } catch (\Throwable $e) {
+        $out['checks']['foreign_key_violations'] = 'error';
+    }
+
+    // App-level orphans (rows whose logical parent is gone). Cheap anti-joins.
+    $orphanQueries = [
+        'collection_items_no_collection' =>
+            'SELECT COUNT(*) FROM collection_items ci
+              LEFT JOIN collections c ON c.id = ci.collection_id
+              WHERE c.id IS NULL',
+        'filament_spool_no_type' =>
+            'SELECT COUNT(*) FROM filament_spool s
+              LEFT JOIN filament_type t ON t.id = s.type_id
+              WHERE t.id IS NULL',
+    ];
+    foreach ($orphanQueries as $label => $sql) {
+        try {
+            $n = (int) $pdo->query($sql)->fetchColumn();
+            $out['orphans'][$label] = $n;
+            if ($n > 0) { $out['ok'] = false; }
+        } catch (\Throwable $e) {
+            $out['orphans'][$label] = 'error';
+        }
+    }
+
+    // Row counts for the core tables (context + growth monitoring).
+    foreach (['download_jobs', 'library_index', 'favorites', 'collections',
+              'collection_items', 'projects', 'filament_type', 'filament_spool',
+              'hex3d_topics'] as $t) {
+        try {
+            $out['counts'][$t] = (int) $pdo->query('SELECT COUNT(*) FROM ' . $t)->fetchColumn();
+        } catch (\Throwable $e) {
+            $out['counts'][$t] = null; // table may not exist on this install
+        }
+    }
+
+    return $out;
+}
+
 function db(): PDO
 {
     if (isset($GLOBALS['__ff_pdo']) && $GLOBALS['__ff_pdo'] instanceof PDO) {
         return $GLOBALS['__ff_pdo'];
     }
+
+    // Driver seam: default SQLite (single-file, zero-ops). Set DB_DRIVER=pgsql
+    // (+ DB_HOST/PORT/NAME/USER/PASS) to target Postgres. The rest of the app is
+    // being made dialect-agnostic; until the DDL/call-site port lands, pgsql is
+    // opt-in and SQLite stays the tested path.
+    if (strtolower((string) getenv('DB_DRIVER')) === 'pgsql') {
+        $host = getenv('DB_HOST') ?: 'farfetched-pg';
+        $port = (int) (getenv('DB_PORT') ?: 5432);
+        $name = getenv('DB_NAME') ?: 'farfetched';
+        $user = getenv('DB_USER') ?: 'farfetched';
+        $pass = (string) getenv('DB_PASS');
+        // sslmode=prefer: encrypt if the server offers it, don't hard-fail if not
+        // (same private docker network); tighten to 'require' if PG enforces TLS.
+        $dsn = sprintf('pgsql:host=%s;port=%d;dbname=%s;sslmode=prefer', $host, $port, $name);
+        $pdo = new PDO($dsn, $user, $pass, [
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES   => false,
+            PDO::ATTR_PERSISTENT         => false,
+        ]);
+        // Fail fast rather than hang if the server is slow/unreachable.
+        $pdo->setAttribute(PDO::ATTR_TIMEOUT, 10);
+        $pdo->exec("SET statement_timeout = '30s'");
+        $GLOBALS['__ff_pdo'] = $pdo;
+        return $pdo;
+    }
+
     $GLOBALS['__ff_pdo'] = null;
     $fresh = !is_file(DB_PATH);
 
@@ -2541,6 +2632,9 @@ function db(): PDO
     // the journal-mode change WAIT for the lock instead of crashing — this is the
     // fix for two workers (cron + manual) connecting in the same instant.
     $pdo->exec('PRAGMA busy_timeout = 30000;');
+    // Bound how much PRAGMA optimize scans per run so it stays cheap on large
+    // tables (SQLite-recommended). optimize itself runs on shutdown (below).
+    $pdo->exec('PRAGMA analysis_limit = 400;');
 
     // Only change journal_mode when it's not already what we want — the change is
     // a write, so skipping it on already-correct DBs avoids needless lock risk on
@@ -2610,6 +2704,37 @@ function db(): PDO
             $GLOBALS['__ff_migrated'] = false; // allow a later retry
             if (function_exists('logln')) { @logln('migration error: ' . $e->getMessage()); }
         }
+    }
+
+    // Ensure indices for hot filter/sort paths that the base schema didn't
+    // cover. CREATE INDEX IF NOT EXISTS is idempotent + cheap, so running it once
+    // per process keeps existing installs covered without a migration step.
+    if (empty($GLOBALS['__ff_indexed'])) {
+        $GLOBALS['__ff_indexed'] = true;
+        try {
+            // Crawler: WHERE detail_done = 0 ORDER BY first_seen — composite covers
+            // both the filter and the sort (the single-column index did not).
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_hex3d_pending ON hex3d_topics(detail_done, first_seen)');
+            // Frequent "newest first" listings.
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at)');
+            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_fav_created ON favorites(created_at)');
+        } catch (\Throwable $e) {
+            $GLOBALS['__ff_indexed'] = false;
+        }
+    }
+
+    // Run PRAGMA optimize once at process shutdown. This refreshes the query
+    // planner's statistics for tables that changed materially since the last
+    // run (bounded by analysis_limit), so index selection stays good as data
+    // grows — the biggest, lowest-risk latency lever for a long-lived SQLite DB.
+    if (empty($GLOBALS['__ff_optimize_hooked'])) {
+        $GLOBALS['__ff_optimize_hooked'] = true;
+        register_shutdown_function(static function (): void {
+            $pdo = $GLOBALS['__ff_pdo'] ?? null;
+            if ($pdo instanceof PDO) {
+                try { $pdo->exec('PRAGMA optimize'); } catch (\Throwable $e) { /* best effort */ }
+            }
+        });
     }
 
     $GLOBALS['__ff_pdo'] = $pdo;
@@ -2766,6 +2891,10 @@ function init_schema(PDO $pdo): void
     // Composite index for the live-queue snapshot query (jobs_status.php),
     // which filters/sorts by status then updated_at on every poll.
     $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_status_updated ON download_jobs(status, updated_at);');
+    // Serves the worker's hot claim query: WHERE status='queued' ORDER BY id ASC
+    // LIMIT 1 — the (status, id) order lets SQLite walk matching rows already
+    // sorted and stop at the first hit instead of sorting the whole status band.
+    $pdo->exec('CREATE INDEX IF NOT EXISTS idx_jobs_claim ON download_jobs(status, id);');
 
     // Favorites: starred models, server-side so they persist across devices.
     $pdo->exec(<<<'SQL'
